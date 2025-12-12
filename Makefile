@@ -45,4 +45,34 @@ pg-load:
 	$(PSQL) $(PG_CONN) -v ON_ERROR_STOP=1 -v edges_csv=$(EDGES_CSV) -f $(PG_DIR)/load_edges_$(PG_PROFILE).sql
 
 pg-queries:
-	$(PSQL) $(PG_CONN) -v ON_ERROR_STOP=1 -f $(PG_DIR)/queries_$(PG_PROFILE).sql
+        $(PSQL) $(PG_CONN) -v ON_ERROR_STOP=1 -f $(PG_DIR)/queries_$(PG_PROFILE).sql
+
+mg-up:
+        docker compose up -d memgraph
+
+mg-load:
+        python loaders/memgraph/load.py --uri bolt://localhost:7688 --nodes-file dataset_gen/out/nodes.json --edges-file dataset_gen/out/edges.json
+
+mg-q1:
+        @echo "Exemple: docker compose exec -T memgraph mgconsole --file queries/cypher/Q1_energy_chain.cypher"
+
+mg-q2:
+        @echo "Exemple: docker compose exec -T memgraph mgconsole --file queries/cypher/Q2_functional_impact.cypher"
+
+mg-q3:
+        @echo "Exemple: docker compose exec -T memgraph mgconsole --file queries/cypher/Q3_space_services.cypher"
+
+mg-q4:
+        @echo "Exemple: docker compose exec -T memgraph mgconsole --file queries/cypher/Q4_inventory_floor_temp_points.cypher"
+
+mg-q5:
+        @echo "Exemple: docker compose exec -T memgraph mgconsole --file queries/cypher/Q5_orphans.cypher"
+
+mg-q6:
+        @echo "Not applicable dans Memgraph: utiliser TimescaleDB pour l'agrégation horaire"
+
+mg-q7:
+        @echo "Not applicable dans Memgraph: utiliser TimescaleDB pour la détection de dérive"
+
+mg-q8:
+        @echo "Exemple: docker compose exec -T memgraph mgconsole --file queries/cypher/Q8_tenant_served_energy.cypher"

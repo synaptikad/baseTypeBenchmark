@@ -46,3 +46,9 @@ Ce benchmark ne vise pas à disqualifier le paradigme graphe. Il cherche à clar
 
 ## 10. Licence et réutilisation
 Le dépôt est sous licence open source (voir LICENSE). Toute personne est invitée à reproduire, critiquer et étendre le protocole en conservant les contraintes de reproductibilité et en publiant les paramètres utilisés.
+
+## 11. Services docker-compose et ports exposés
+- TimescaleDB/PostgreSQL: port 5432
+- Neo4j: ports 7474 (HTTP) et 7687 (Bolt)
+- Memgraph: port 7688 (Bolt exposé, 7687 interne)
+- Jena Fuseki: port 3030
