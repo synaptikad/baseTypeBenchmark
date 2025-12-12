@@ -51,8 +51,22 @@ services:
       timeout: 5s
       retries: 5
 
+  memgraph:
+    image: memgraph/memgraph:latest
+    container_name: btb_memgraph
+    ports:
+      - "7688:7687"
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/7687'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   timescaledb_data:
   neo4j_data:
   neo4j_logs:
   fuseki_data:
+  memgraph_data:
