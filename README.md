@@ -1,24 +1,48 @@
 # Base Type Benchmark
 
-## Objectif du projet
-Ce dépôt prépare un banc de test reproductible pour comparer trois paradigmes de gestion de données autour d'un même jeu de données bâtimentaire : PostgreSQL + TimescaleDB, un graphe de propriétés (Neo4j) et un triple store RDF/JSON-LD (Apache Jena Fuseki). L'ambition est de mesurer de façon méthodique l'impact du modèle de données et des moteurs pour des cas d'usage mêlant graphes bornés et séries temporelles.
+## 1. Contexte et motivation
+La transformation numérique des bâtiments impose une consolidation progressive des données issues de la gestion technique, de l'énergie et de l'occupation. La généralisation des jumeaux numériques et des graphes de connaissances conduit à des architectures orientées graphe, souvent maintenues intégralement en mémoire pour maximiser la réactivité. Cette approche accroît cependant les coûts d'infrastructure lorsque le volume de points et d'événements croît. Les avancées récentes des bases relationnelles et des moteurs de séries temporelles invitent à réévaluer la pertinence d'une stratégie tout graphe tout en mémoire pour les systèmes d'information du bâtiment.
 
-## Hypothèse testée
-Pour des traversées bornées (≤ 10 sauts) combinées à une composante importante de séries temporelles, PostgreSQL/TimescaleDB devrait offrir un meilleur compromis coût total de possession et empreinte mémoire tout en restant compétitif en performance face aux moteurs graphe ou RDF.
+## 2. Question de recherche
+Dans un bâtiment conséquent, où les chaînes fonctionnelles et énergétiques sont de profondeur limitée (typiquement inférieure à 10 relations), et où la majorité des données sont des séries temporelles, un paradigme graphe in-memory apporte-t-il un avantage mesurable par rapport à une base relationnelle moderne bien conçue ?
 
-## Principes généraux
-- Mêmes données, mêmes questions, mêmes métriques entre les moteurs
-- Données générées avec un seed explicite et des modes de volumétrie comparables (laptop vs server)
-- Scripts reproductibles, sans configuration manuelle cachée
-- Résultats versionnés et documentés
+## 3. Hypothèses
+- H0 (hypothèse nulle) : à volumétrie et requêtes équivalentes, le recours à un graphe en mémoire n'apporte pas de gain significatif de performance ou de consommation de ressources face à une base relationnelle optimisée avec extension time-series.
+- H1 (hypothèse alternative) : à volumétrie et requêtes équivalentes, un graphe en mémoire présente un avantage mesurable en latence ou en consommation de ressources par rapport à une base relationnelle optimisée avec extension time-series.
 
-## Quickstart (bientôt)
-1. Copier le fichier `.env.example` vers `.env` et ajuster les secrets.
-2. Lancer les services avec `make up` puis vérifier l'état avec `make ps`.
-3. Générer les données (`make gen`), charger (`make load`) puis lancer le benchmark (`make bench`).
-4. Récupérer les résultats dans `results/` et `out/` (à créer lors de l'exécution).
+## 4. Périmètre de l'étude
+- Échelle : bâtiment tertiaire conséquent, avec plusieurs milliers d'espaces et équipements.
+- Typologies de données : espaces, équipements, points, relations fonctionnelles, énergétiques et chaînes de commande, séries temporelles issues des capteurs et compteurs.
+- Inspirations sémantiques : Haystack v4, Brick Schema, RealEstateCore pour la structuration des entités et des relations.
+- Exclusions : graphes sociaux, traversées non bornées, algorithmes de graphe avancés ou de recommandation, cas nécessitant des parcours de profondeur arbitraire.
 
-Les étapes 3 et 4 sont des placeholders et seront implémentées dans les prochaines itérations.
+## 5. Technologies comparées
+- PostgreSQL combiné à TimescaleDB, représentatif d'un socle relationnel moderne avec support natif des séries temporelles et une maturité opérationnelle élevée.
+- Memgraph, moteur de graphe de propriétés en mémoire mettant en avant la performance temps réel et l'intégration Cypher, représentant les architectures graphe modernes.
+- Oxigraph, implémentation RDF/SPARQL récente et performante, adaptée aux modèles sémantiques et à la compatibilité avec les standards du web de données.
 
-## Licence et contributions
-Le projet est sous licence MIT (voir LICENSE). Les contributions sont bienvenues dès que la méthodologie et les scripts seront stabilisés. Merci d'ouvrir des issues pour proposer des améliorations ou signaler des problèmes.
+## 6. Méthodologie
+- Same data, same questions, same metrics : un jeu de données unique sert aux trois moteurs, avec des requêtes fonctionnelles identiques et des métriques communes.
+- Dataset synthétique mais réaliste : génération paramétrable reflétant un bâtiment tertiaire, incluant des séquences de séries temporelles cohérentes.
+- Génération déterministe : utilisation d'un seed pour garantir la reproductibilité et la comparaison des runs.
+- Séparation ingestion et requêtes : phases distinctes pour charger les données puis exécuter les requêtes de benchmark.
+- Mesures : latence p50 et p95 des requêtes, consommation RAM, occupation disque, temps d'ingestion complet.
+
+## 7. Reproductibilité
+- Dépôt public contenant scripts et définitions d'infrastructure.
+- Orchestration via Docker Compose pour aligner les environnements.
+- Modes laptop et server pour ajuster la volumétrie et observer les effets d'échelle.
+- Résultats exportables en CSV et JSON pour partage et analyses externes.
+- Versions des outils et paramètres loggés pour chaque campagne d'exécution.
+
+## 8. Positionnement et limites
+Ce benchmark ne vise pas à disqualifier le paradigme graphe. Il cherche à clarifier son domaine de validité face à des alternatives relationnelles et time-series récentes. Les graphes restent pertinents pour des traversées complexes, des dépendances non bornées, l'alignement sémantique interdomaines ou des traitements nécessitant des algorithmes de graphe spécialisés.
+
+## 9. Public cible
+- Ingénieurs smart building et exploitation.
+- Architectes data et responsables d'infrastructure.
+- Intégrateurs GTB et SGTB.
+- Chercheurs appliqués en systèmes d'information du bâtiment.
+
+## 10. Licence et réutilisation
+Le dépôt est sous licence open source (voir LICENSE). Toute personne est invitée à reproduire, critiquer et étendre le protocole en conservant les contraintes de reproductibilité et en publiant les paramètres utilisés.
