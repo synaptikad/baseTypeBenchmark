@@ -31,7 +31,26 @@ load:
 	@echo "Not implemented yet" && exit 1
 
 bench:
-	@echo "Not implemented yet" && exit 1
+	python -m bench.runner pg_rel
+
+bench-all:
+	python -m bench.runner pg_rel
+	python -m bench.runner pg_jsonb
+	python -m bench.runner memgraph
+	python -m bench.runner oxigraph
+
+bench-pg:
+	python -m bench.runner pg_rel
+	python -m bench.runner pg_jsonb
+
+bench-mg:
+	python -m bench.runner memgraph
+
+bench-ox:
+	python -m bench.runner oxigraph
+
+bench-clean:
+	rm -f bench/results/*.json bench/results/*.csv
 
 pg-init:
 	$(PSQL) $(PG_CONN) -v ON_ERROR_STOP=1 -f $(PG_DIR)/schema_$(PG_PROFILE).sql

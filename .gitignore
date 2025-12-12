@@ -12,6 +12,8 @@ volumes/
 # Bench outputs
 out/
 results/
+!bench/results/
+!bench/results/.gitkeep
 *.log
 *.csv
 *.json
