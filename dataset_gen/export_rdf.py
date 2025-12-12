@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 
 from .generator import Dataset
-from .model import RelationType
+from .model import NodeType, RelationType
 
+
+_NODE_TYPE_IRIS = {node_type.value: f"http://example.org/type/{node_type.value}" for node_type in NodeType}
 
 _CONTEXT = {
+    "@base": "http://example.org/id/",
     "id": "@id",
     "type": "@type",
     "name": "http://example.org/name",
@@ -21,6 +24,7 @@ _CONTEXT = {
     "feeds": "http://example.org/FEEDS",
     "serves": "http://example.org/SERVES",
     "occupies": "http://example.org/OCCUPIES",
+    **_NODE_TYPE_IRIS,
 }
 
 

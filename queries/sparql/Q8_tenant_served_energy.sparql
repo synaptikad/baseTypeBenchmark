@@ -1,0 +1,19 @@
+PREFIX ex: <http://example.org/>
+PREFIX ext: <http://example.org/type/>
+BASE <http://example.org/id/>
+
+# Points de puissance pour les espaces occupés par un locataire
+# Remplacer <tenant-1> par l'IRI du locataire ciblé
+SELECT DISTINCT ?point_id
+WHERE {
+  VALUES ?tenant { <tenant-1> }
+  ?tenant a ext:Tenant ; ex:OCCUPIES ?space .
+  ?space a ext:Space .
+  ?equipment a ext:Equipment ; ex:SERVES ?space .
+  ?equipment ex:HAS_PART{0,5} ?candidate .
+  ?candidate a ext:Equipment .
+  ?candidate ex:HAS_POINT ?pt .
+  ?pt a ext:Point ; ex:MEASURES "power" .
+  BIND(STR(?pt) AS ?point_id)
+}
+ORDER BY ?point_id
