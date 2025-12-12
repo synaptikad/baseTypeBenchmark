@@ -1,0 +1,24 @@
+PREFIX ex: <http://example.org/>
+PREFIX ext: <http://example.org/type/>
+BASE <http://example.org/id/>
+
+# Chaîne énergétique à partir d'un compteur (remplacer <meter-1> par l'IRI ciblé)
+SELECT DISTINCT ?equipment_id ?equipment_name ?point_id ?point_name
+WHERE {
+  VALUES ?meter { <meter-1> }
+  ?meter a ext:Meter .
+  OPTIONAL {
+    ?meter ex:FEEDS{1,10} ?eq .
+    ?eq a ?eqType .
+    FILTER(?eqType IN (ext:Equipment, ext:Meter))
+    OPTIONAL { ?eq ex:name ?equipment_name }
+    BIND(STR(?eq) AS ?equipment_id)
+    OPTIONAL {
+      ?eq ex:HAS_POINT ?pt .
+      ?pt a ext:Point .
+      BIND(STR(?pt) AS ?point_id)
+      OPTIONAL { ?pt ex:name ?point_name }
+    }
+  }
+}
+ORDER BY ?equipment_id ?point_id

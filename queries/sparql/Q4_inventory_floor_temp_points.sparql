@@ -1,0 +1,26 @@
+PREFIX ex: <http://example.org/>
+PREFIX ext: <http://example.org/type/>
+BASE <http://example.org/id/>
+
+# Inventaire des points de température sur un étage
+# Remplacer <floor-1> par l'IRI de l'étage ciblé
+SELECT DISTINCT ?space_id ?space_name ?equipment_id ?equipment_name ?point_id ?point_name
+WHERE {
+  VALUES ?floor { <floor-1> }
+  ?floor a ext:Floor ; ex:CONTAINS ?space .
+  ?space a ext:Space .
+  OPTIONAL {
+    ?eq a ext:Equipment ; ex:LOCATED_IN ?space .
+    BIND(STR(?eq) AS ?equipment_id)
+    OPTIONAL { ?eq ex:name ?equipment_name }
+    OPTIONAL {
+      ?eq ex:HAS_POINT ?pt .
+      ?pt a ext:Point ; ex:MEASURES "temperature" .
+      BIND(STR(?space) AS ?space_id)
+      OPTIONAL { ?space ex:name ?space_name }
+      BIND(STR(?pt) AS ?point_id)
+      OPTIONAL { ?pt ex:name ?point_name }
+    }
+  }
+}
+ORDER BY ?space_id ?equipment_id ?point_id
