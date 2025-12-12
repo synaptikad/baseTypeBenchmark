@@ -38,6 +38,26 @@ Dans un bâtiment conséquent, où les chaînes fonctionnelles et énergétiques
 ## 8. Positionnement et limites
 Ce benchmark ne vise pas à disqualifier le paradigme graphe. Il cherche à clarifier son domaine de validité face à des alternatives relationnelles et time-series récentes. Les graphes restent pertinents pour des traversées complexes, des dépendances non bornées, l'alignement sémantique interdomaines ou des traitements nécessitant des algorithmes de graphe spécialisés.
 
+## Gestion des séries temporelles et architectures hybrides
+
+### Constat de terrain
+Dans de nombreuses plateformes bâtimentaires, les séries temporelles représentent la majorité du volume de données. Certaines architectures choisissent de conserver une fenêtre temporelle courte en mémoire pour des usages temps réel ou quasi temps réel.
+
+### Architecture hybride couramment rencontrée
+Un graphe in-memory est alors mobilisé pour la structure, les relations, l'état courant et un historique court (jours ou semaines). Une base spécialisée externe sert à l'archivage long terme, aux analyses historiques et au reporting énergétique.
+
+### Position méthodologique de cette étude
+Ce choix hybride peut avoir une justification fonctionnelle, et le benchmark présenté ici ne nie pas cette possibilité. La question scientifique formulée est la suivante : même lorsqu'on limite la conservation en mémoire des séries temporelles à une courte période, le stockage de mesures dans un graphe in-memory généraliste apporte-t-il un avantage mesurable par rapport à une base time-series spécialisée ?
+
+### Analyse qualitative
+Les accès structurels (navigation des relations) et les accès temporels (agrégation, lissage, comparaison) relèvent de profils d'optimisation fondamentalement différents. Les représentations objet graphe induisent un overhead structurel, y compris sur des fenêtres temporelles courtes, qui peut affecter l'efficacité des traitements temporels.
+
+### Choix expérimental du benchmark
+La structure est évaluée via des moteurs graphe et relationnel, tandis que les séries temporelles sont évaluées via une base spécialisée (TimescaleDB). Ce choix vise à éviter un biais volumétrique et à comparer chaque paradigme sur ce pour quoi il est conçu.
+
+### Limite assumée
+L'étude ne couvre pas l'évaluation complète d'un graphe in-memory intégrant des séries temporelles courtes ; cette évaluation constituerait un travail complémentaire distinct.
+
 ## 9. Public cible
 - Ingénieurs smart building et exploitation.
 - Architectes data et responsables d'infrastructure.
