@@ -1,12 +1,72 @@
 # Méthodologie
 
-Le benchmark suivra le principe « same data, same queries » : le jeu de données sera identique pour les trois moteurs, et les requêtes poseront les mêmes questions métier.
+## Principes fondamentaux
 
-Chaque campagne comprendra un warmup, puis plusieurs répétitions contrôlées pour mesurer p50 et p95. Les temps d'ingestion seront mesurés séparément des temps de requête.
+Le benchmark suit le principe **same data, same questions, same metrics** : le jeu de données est identique pour les trois moteurs, les requêtes posent les mêmes questions métier, et les métriques sont communes.
 
-Deux profils de volumétrie (small et large) permettent d'observer les effets d'échelle en ne faisant varier que la taille du dataset et la charge associée. Les exécutions de référence s'appuient sur une infrastructure contrôlée (VPS) afin de limiter les biais matériels.
+## Protocole expérimental
 
-La consommation mémoire conteneur (RSS) et l'espace disque des volumes seront relevés. Les versions exactes des images Docker utilisées seront notées dans les résultats pour assurer la traçabilité.
+Chaque campagne comprend :
 
-### Séries temporelles et séparation des responsabilités
-Le principe retenu distingue clairement la structure (entités, relations, navigation) de l'historique temporel (mesures, agrégations, séries longues). D'un point de vue scientifique, cette séparation permet de comparer chaque paradigme sur son domaine d'optimisation principal et d'éviter les biais liés au volume massif des séries temporelles. Elle reflète également les pratiques industrielles observées où une base time-series coexiste avec un graphe ou un relationnel pour la structure. La décision vise la comparabilité expérimentale et ne constitue pas une disqualification d'un paradigme donné.
+1. Vérification de la disponibilité des services via leur healthcheck Docker
+2. Ingestion des données (mesurée séparément)
+3. Warmup systématique (N répétitions) pour évacuer les effets de cache froid
+4. Exécution des requêtes (N répétitions) avec chronométrage individuel
+5. Collecte des métriques système pendant l'exécution
+6. Export des résultats structurés
+
+## Métriques collectées
+
+### Performance
+
+| Métrique | Description |
+|----------|-------------|
+| Latence p50 | Médiane des temps de réponse |
+| Latence p95 | 95e percentile des temps de réponse |
+| Temps d'ingestion | Durée totale du chargement des données |
+
+### Ressources
+
+| Métrique | Description |
+|----------|-------------|
+| RAM steady-state | Consommation mémoire en régime nominal |
+| RAM peak | Consommation mémoire maximale (ingestion, recalculs) |
+| CPU moyen | Utilisation CPU pendant l'exécution |
+| Disque | Occupation du volume Docker |
+
+## Séparation structure / temporel
+
+Le principe retenu distingue clairement :
+
+- **Structure** : entités, relations, navigation contextuelle
+- **Temporel** : mesures, agrégations, séries longues
+
+Cette séparation permet de comparer chaque paradigme sur son domaine d'optimisation principal et d'éviter les biais liés au volume massif des séries temporelles. Elle reflète également les pratiques industrielles observées où une base time-series coexiste avec un graphe ou un relationnel pour la structure.
+
+### Justification
+
+Les accès structurels (navigation des relations) et les accès temporels (agrégation, lissage, comparaison) relèvent de profils d'optimisation fondamentalement différents :
+
+- Les traversées de graphe bénéficient de la localité des données en mémoire
+- Les agrégations temporelles bénéficient de la compression, du stockage colonne et des index temporels
+
+Évaluer les deux dans un même moteur généraliste masque ces différences fondamentales.
+
+### Requête Q8 comme cas hybride
+
+La requête Q8 illustre une architecture hybride : sélection des points via le graphe (tenant → espaces → équipements → points de puissance), puis agrégation des consommations dans TimescaleDB. Cette séparation exploite chaque paradigme sur son domaine d'optimisation.
+
+## Reproductibilité
+
+- Dépôt public contenant scripts et définitions d'infrastructure
+- Orchestration via Docker Compose pour aligner les environnements
+- Génération déterministe du dataset (seed configurable)
+- Résultats exportables en CSV et JSON
+- Versions des outils et paramètres loggés pour chaque campagne
+
+## Limites assumées
+
+- Le tuning est volontairement limité et documenté (pas d'optimisation opportuniste)
+- L'effet cache est atténué par le warmup mais pas totalement éliminé
+- Les représentations alternatives (autres modélisations possibles) ne sont pas évaluées
+- L'environnement d'exécution (Docker) introduit un overhead constant mais comparable

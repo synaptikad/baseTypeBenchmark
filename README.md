@@ -1,123 +1,28 @@
-# Base Type Benchmark
-
 ## 1. Contexte et motivation
-La transformation numérique des bâtiments impose une consolidation progressive des données issues de la gestion technique, de l'énergie et de l'occupation. La généralisation des jumeaux numériques et des graphes de connaissances conduit à des architectures orientées graphe, souvent maintenues intégralement en mémoire pour maximiser la réactivité. Cette approche accroît cependant les coûts d'infrastructure lorsque le volume de points et d'événements croît. Les avancées récentes des bases relationnelles et des moteurs de séries temporelles invitent à réévaluer la pertinence d'une stratégie tout graphe tout en mémoire pour les systèmes d'information du bâtiment.
 
-## 2. Question de recherche
-Dans un bâtiment conséquent, où les chaînes fonctionnelles et énergétiques sont de profondeur limitée (typiquement inférieure à 10 relations), et où la majorité des données sont des séries temporelles, un paradigme graphe in-memory apporte-t-il un avantage mesurable par rapport à une base relationnelle moderne bien conçue ?
+La transformation numérique des bâtiments impose une consolidation progressive des données issues de la gestion technique, de l'énergie et de l'occupation. La généralisation des jumeaux numériques et des graphes de connaissances conduit à des architectures orientées graphe, souvent maintenues intégralement en mémoire pour maximiser la réactivité. Cette approche accroît cependant les coûts d'infrastructure lorsque le volume de points et d'événements croît.
 
-## 3. Hypothèses
-- H0 (hypothèse nulle) : à volumétrie et requêtes équivalentes, le recours à un graphe en mémoire n'apporte pas de gain significatif de performance ou de consommation de ressources face à une base relationnelle optimisée avec extension time-series.
-- H1 (hypothèse alternative) : à volumétrie et requêtes équivalentes, un graphe en mémoire présente un avantage mesurable en latence ou en consommation de ressources par rapport à une base relationnelle optimisée avec extension time-series.
+### Contexte économique 2024-2025
 
-## 4. Périmètre de l'étude
-- Échelle : bâtiment tertiaire conséquent, avec plusieurs milliers d'espaces et équipements.
-- Typologies de données : espaces, équipements, points, relations fonctionnelles, énergétiques et chaînes de commande, séries temporelles issues des capteurs et compteurs.
-- Inspirations sémantiques : Haystack v4, Brick Schema, RealEstateCore pour la structuration des entités et des relations.
-- Exclusions : graphes sociaux, traversées non bornées, algorithmes de graphe avancés ou de recommandation, cas nécessitant des parcours de profondeur arbitraire.
+Le marché de la mémoire vive connaît une tension structurelle sans précédent :
 
-## 5. Technologies comparées
-- PostgreSQL combiné à TimescaleDB, représentatif d'un socle relationnel moderne avec support natif des séries temporelles et une maturité opérationnelle élevée.
-- Memgraph, moteur de graphe de propriétés en mémoire mettant en avant la performance temps réel et l'intégration Cypher, représentant les architectures graphe modernes.
-- Oxigraph, implémentation RDF/SPARQL récente et performante, adaptée aux modèles sémantiques et à la compatibilité avec les standards du web de données.
+- Les prix contractuels DRAM ont augmenté de plus de 170 % en glissement annuel au T3 2025 (TrendForce).
+- Les modules DDR5 64 Go RDIMM, standard dans les datacenters, pourraient coûter deux fois plus cher fin 2026 qu'au début 2025 (Counterpoint Research).
+- Samsung, SK Hynix et Micron ont réorienté leur production vers la mémoire haute bande passante (HBM) pour les accélérateurs IA, créant une pénurie sur les gammes conventionnelles.
+- Les nouvelles capacités de production n'entreront en service qu'entre 2027 et 2028.
 
-## 6. Méthodologie
-- Same data, same questions, same metrics : un jeu de données unique sert aux trois moteurs, avec des requêtes fonctionnelles identiques et des métriques communes.
-- Dataset synthétique mais réaliste : génération paramétrable reflétant un bâtiment tertiaire, incluant des séquences de séries temporelles cohérentes.
-- Génération déterministe : utilisation d'un seed pour garantir la reproductibilité et la comparaison des runs.
-- Séparation ingestion et requêtes : phases distinctes pour charger les données puis exécuter les requêtes de benchmark.
-- Mesures : latence p50 et p95 des requêtes, consommation RAM, occupation disque, temps d'ingestion complet.
+Cette pression économique rend d'autant plus critique l'évaluation du rapport coût/bénéfice des architectures in-memory.
 
-## Hypothèses d’optimisation et bornes de comparaison
-Les moteurs évalués (PostgreSQL, TimescaleDB, Memgraph, Oxigraph) sont des solutions reconnues et matures. Les modèles de données mobilisés restent compacts et réalistes afin d'éviter toute pénalisation artificielle. L'étude cherche à établir des bornes basses réalistes de coût pour chaque paradigme et examine le rapport coût / bénéfice dans un contexte smart building, sans conclure sur une faisabilité théorique absolue.
+### Contexte énergétique
 
-### Menaces à la validité
-- Effet cache.
-- Tuning volontairement limité et documenté.
-- Représentations alternatives non évaluées.
-- Environnement d'exécution.
+La mémoire vive consomme de l'énergie en permanence, indépendamment de la charge :
 
-## Modélisation des séries temporelles dans un graphe in-memory
-Les séries temporelles ne sont pas représentées sous la forme caricaturale d'un nœud par mesure. Les moteurs graphe sont évalués avec des structures compactes (blocs, tableaux ou fenêtres) pour stocker des segments contigus de mesures. Ce choix reflète une borne inférieure réaliste de consommation mémoire pour un graphe in-memory, tout en restant fidèle aux patterns industriels observés.
+- Un module DIMM DDR4/DDR5 consomme typiquement 3 à 5 W en continu (rafraîchissement des cellules).
+- Un serveur équipé de 256 Go de RAM consomme 25 à 40 W uniquement pour maintenir sa mémoire active, soit 220 à 350 kWh par an.
+- Les datacenters représentaient 4,4 % de la consommation électrique américaine en 2023, avec une projection entre 6,7 % et 12 % d'ici 2028 (Berkeley Lab, décembre 2024).
 
-Même dans cette configuration optimisée, la volumétrie demeure structurante : le nombre de points et la profondeur historique des mesures influencent fortement l'empreinte mémoire et le coût des traversées. La démarche vise à éviter les modèles simplistes qui surestimeraient l'overhead graphe et à comparer les paradigmes dans des conditions équitables, en évaluant leurs forces respectives dans un cadre réaliste.
+À titre de comparaison, un SSD NVMe consomme principalement lors des opérations d'I/O et reste quasi passif au repos. Les moteurs de bases de données spécialisés exploitent cette asymétrie.
 
-## 7. Reproductibilité
-- Dépôt public contenant scripts et définitions d'infrastructure.
-- Orchestration via Docker Compose pour aligner les environnements.
-- Profils de volumétrie small et large pour ajuster le dataset et observer les effets d'échelle.
-- Exécution de référence sur une infrastructure contrôlée (VPS) pour isoler la variable volumétrie.
-- Les profils décrivent uniquement la taille du dataset et la charge appliquée, indépendamment du matériel local.
-- Résultats exportables en CSV et JSON pour partage et analyses externes.
-- Versions des outils et paramètres loggés pour chaque campagne d'exécution.
+### Motivation du benchmark
 
-## Scénarios de volumétrie et réalisme opérationnel
-Les profils small et large restent cohérents avec des usages bâtimentaires courants. Ils se déclinent selon trois paramètres explicitement définis :
-- **P** : nombre de points (capteurs/mesures) instrumentant le bâtiment.
-- **Δt** : pas de temps moyen entre deux mesures d'un même point.
-- **Horizon temporel** : durée de conservation et d'analyse continue des séries.
-
-Deux régimes réalistes structurent les scénarios évalués :
-- **Supervision énergétique standard** : Δt de 10 à 15 minutes pour l'ensemble des points utiles au pilotage énergétique et au reporting multi-sites, avec un horizon temporel pluriannuel. Le profil small représente un échantillon réduit mais complet de ce contexte ; le profil large en applique l'ordre de grandeur d'un bâtiment tertiaire conséquent.
-- **Régulation plus fine** : Δt de 1 à 5 minutes sur un sous-ensemble ciblé (boucles critiques, zones sensibles ou suivi confort) avec un horizon opérationnel de quelques semaines à quelques mois, compatible avec les fenêtres courtes d'optimisation.
-
-Dans ces deux contextes, une latence de l'ordre de la seconde reste généralement acceptable pour les tableaux de bord, alertes et boucles de réglage. La recherche de la milliseconde n'est pas un critère central : les profils small et large privilégient un réalisme opérationnel plutôt qu'une course au temps de réponse absolu.
-
-## 8. Positionnement et limites
-Ce benchmark ne vise pas à disqualifier le paradigme graphe. Il cherche à clarifier son domaine de validité face à des alternatives relationnelles et time-series récentes. Les graphes restent pertinents pour des traversées complexes, des dépendances non bornées, l'alignement sémantique interdomaines ou des traitements nécessitant des algorithmes de graphe spécialisés.
-
-## À propos des graphes et des usages IA
-Les modèles d'IA modernes s'appuient principalement sur des représentations denses : matrices pour les poids et activations, tenseurs pour les données multimodales et embeddings pour les projections sémantiques. Les graphes apportent de la valeur en amont, par exemple pour préparer les données (contexte relationnel, voisinage, contraintes) ou enrichir la sémantique (alignement d'ontologies, liens métier). Ces apports ne suffisent pas, en eux-mêmes, à justifier un moteur graphe in-memory comme socle central de stockage opérationnel ; ils s'intègrent plutôt dans une chaîne où le graphe est mobilisé quand il apporte un gain spécifique.
-
-## Gestion des séries temporelles et architectures hybrides
-
-### Constat de terrain
-Dans de nombreuses plateformes bâtimentaires, les séries temporelles représentent la majorité du volume de données. Certaines architectures choisissent de conserver une fenêtre temporelle courte en mémoire pour des usages temps réel ou quasi temps réel.
-
-### Architecture hybride couramment rencontrée
-Un graphe in-memory est alors mobilisé pour la structure, les relations, l'état courant et un historique court (jours ou semaines). Une base spécialisée externe sert à l'archivage long terme, aux analyses historiques et au reporting énergétique.
-
-### Position méthodologique de cette étude
-Ce choix hybride peut avoir une justification fonctionnelle, et le benchmark présenté ici ne nie pas cette possibilité. La question scientifique formulée est la suivante : même lorsqu'on limite la conservation en mémoire des séries temporelles à une courte période, le stockage de mesures dans un graphe in-memory généraliste apporte-t-il un avantage mesurable par rapport à une base time-series spécialisée ?
-
-### Analyse qualitative
-Les accès structurels (navigation des relations) et les accès temporels (agrégation, lissage, comparaison) relèvent de profils d'optimisation fondamentalement différents. Les représentations objet graphe induisent un overhead structurel, y compris sur des fenêtres temporelles courtes, qui peut affecter l'efficacité des traitements temporels.
-
-### Choix expérimental du benchmark
-La structure est évaluée via des moteurs graphe et relationnel, tandis que les séries temporelles sont évaluées via une base spécialisée (TimescaleDB). Ce choix vise à éviter un biais volumétrique et à comparer chaque paradigme sur ce pour quoi il est conçu.
-
-### Limite assumée
-L'étude ne couvre pas l'évaluation complète d'un graphe in-memory intégrant des séries temporelles courtes ; cette évaluation constituerait un travail complémentaire distinct.
-
-## Patterns observés dans les plateformes de jumeaux numériques
-
-### Graphe comme socle structurel
-Les plateformes industrielles s'appuient généralement sur un graphe pour porter la structure des entités, exprimer leurs relations fonctionnelles ou spatiales et contextualiser les chaînes de dépendances. Le graphe sert d'index sémantique central capable de soutenir la navigation par voisinage, les typologies hiérarchiques et les requêtes de contexte localisé.
-
-### Séries temporelles associées aux entités
-Les séries temporelles restent attachées aux entités décrites dans le graphe (espaces, équipements, points de mesure) mais sont exposées sous forme de blocs ou de fenêtres temporelles, plutôt que comme des échantillons unitaires de premier rang. Cette organisation préserve la cohérence des accès par période, facilite les agrégations et limite l'impact des très grands volumes d'événements individuels sur la partie structurelle.
-
-### Séparation implicite des parcours
-Deux plans de navigation coexistent implicitement : la navigation structurelle dans le graphe (identification d'un équipement, de ses composants ou de son contexte) et l'accès temporel (fenêtrage, agrégation, alignement de séries). Les plateformes privilégient ainsi un découplage entre traversées relationnelles et traitements temporels, même lorsque les deux dimensions sont exposées dans une API unifiée.
-
-### Conséquences méthodologiques pour le benchmark
-Le protocole retient ces patterns en évaluant séparément :
-- le graphe et le modèle relationnel pour la structure et les requêtes contextuelles ;
-- une base time-series pour les séries temporelles, manipulées par fenêtre ou agrégation.
-
-Cette séparation respecte l'usage industriel où le graphe fournit le contexte et l'orchestration des relations, tandis que les moteurs time-series servent les flux volumétriques et les analyses temporelles. Elle garantit que chaque paradigme est testé sur le volet où il est le plus pertinent, tout en reflétant les architectures hybrides courantes des jumeaux numériques.
-
-## 9. Public cible
-- Ingénieurs smart building et exploitation.
-- Architectes data et responsables d'infrastructure.
-- Intégrateurs GTB et SGTB.
-- Chercheurs appliqués en systèmes d'information du bâtiment.
-
-## 10. Licence et réutilisation
-Le dépôt est sous licence open source (voir LICENSE). Toute personne est invitée à reproduire, critiquer et étendre le protocole en conservant les contraintes de reproductibilité et en publiant les paramètres utilisés.
-
-## 11. Services docker-compose et ports exposés
-- TimescaleDB/PostgreSQL: port 5432
-- Neo4j: ports 7474 (HTTP) et 7687 (Bolt)
-- Memgraph: port 7688 (Bolt exposé, 7687 interne)
-- Jena Fuseki: port 3030
+Les avancées récentes des bases relationnelles et des moteurs de séries temporelles invitent à réévaluer la pertinence d'une stratégie tout-graphe tout-en-mémoire pour les systèmes d'information du bâtiment. Ce benchmark vise à fournir des mesures empiriques pour éclairer ce choix architectural.
