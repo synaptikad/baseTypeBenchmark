@@ -28,6 +28,15 @@ Dans un bâtiment conséquent, où les chaînes fonctionnelles et énergétiques
 - Séparation ingestion et requêtes : phases distinctes pour charger les données puis exécuter les requêtes de benchmark.
 - Mesures : latence p50 et p95 des requêtes, consommation RAM, occupation disque, temps d'ingestion complet.
 
+## Hypothèses d’optimisation et bornes de comparaison
+Les moteurs évalués (PostgreSQL, TimescaleDB, Memgraph, Oxigraph) sont des solutions reconnues et matures. Les modèles de données mobilisés restent compacts et réalistes afin d'éviter toute pénalisation artificielle. L'étude cherche à établir des bornes basses réalistes de coût pour chaque paradigme et examine le rapport coût / bénéfice dans un contexte smart building, sans conclure sur une faisabilité théorique absolue.
+
+### Menaces à la validité
+- Effet cache.
+- Tuning volontairement limité et documenté.
+- Représentations alternatives non évaluées.
+- Environnement d'exécution.
+
 ## 7. Reproductibilité
 - Dépôt public contenant scripts et définitions d'infrastructure.
 - Orchestration via Docker Compose pour aligner les environnements.
