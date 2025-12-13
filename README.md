@@ -46,6 +46,18 @@ Les moteurs évalués (PostgreSQL, TimescaleDB, Memgraph, Oxigraph) sont des sol
 - Résultats exportables en CSV et JSON pour partage et analyses externes.
 - Versions des outils et paramètres loggés pour chaque campagne d'exécution.
 
+## Scénarios de volumétrie et réalisme opérationnel
+Les profils small et large restent cohérents avec des usages bâtimentaires courants. Ils se déclinent selon trois paramètres explicitement définis :
+- **P** : nombre de points (capteurs/mesures) instrumentant le bâtiment.
+- **Δt** : pas de temps moyen entre deux mesures d'un même point.
+- **Horizon temporel** : durée de conservation et d'analyse continue des séries.
+
+Deux régimes réalistes structurent les scénarios évalués :
+- **Supervision énergétique standard** : Δt de 10 à 15 minutes pour l'ensemble des points utiles au pilotage énergétique et au reporting multi-sites, avec un horizon temporel pluriannuel. Le profil small représente un échantillon réduit mais complet de ce contexte ; le profil large en applique l'ordre de grandeur d'un bâtiment tertiaire conséquent.
+- **Régulation plus fine** : Δt de 1 à 5 minutes sur un sous-ensemble ciblé (boucles critiques, zones sensibles ou suivi confort) avec un horizon opérationnel de quelques semaines à quelques mois, compatible avec les fenêtres courtes d'optimisation.
+
+Dans ces deux contextes, une latence de l'ordre de la seconde reste généralement acceptable pour les tableaux de bord, alertes et boucles de réglage. La recherche de la milliseconde n'est pas un critère central : les profils small et large privilégient un réalisme opérationnel plutôt qu'une course au temps de réponse absolu.
+
 ## 8. Positionnement et limites
 Ce benchmark ne vise pas à disqualifier le paradigme graphe. Il cherche à clarifier son domaine de validité face à des alternatives relationnelles et time-series récentes. Les graphes restent pertinents pour des traversées complexes, des dépendances non bornées, l'alignement sémantique interdomaines ou des traitements nécessitant des algorithmes de graphe spécialisés.
 
