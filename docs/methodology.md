@@ -4,6 +4,8 @@ Le benchmark suivra le principe « same data, same queries » : le jeu de donné
 
 Chaque campagne comprendra un warmup, puis plusieurs répétitions contrôlées pour mesurer p50 et p95. Les temps d'ingestion seront mesurés séparément des temps de requête.
 
+Deux profils de volumétrie (small et large) permettent d'observer les effets d'échelle en ne faisant varier que la taille du dataset et la charge associée. Les exécutions de référence s'appuient sur une infrastructure contrôlée (VPS) afin de limiter les biais matériels.
+
 La consommation mémoire conteneur (RSS) et l'espace disque des volumes seront relevés. Les versions exactes des images Docker utilisées seront notées dans les résultats pour assurer la traçabilité.
 
 ### Séries temporelles et séparation des responsabilités

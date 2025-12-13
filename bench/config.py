@@ -23,7 +23,17 @@ def _get_env_int(name: str, default: int) -> int:
 SEED = _get_env_int("BENCH_SEED", 42)
 random.seed(SEED)
 
-SCALE_MODE = os.getenv("BENCH_SCALE_MODE", "laptop")
+SCALE_ALIASES = {"laptop": "small", "server": "large"}
+_raw_scale_mode = os.getenv("BENCH_SCALE_MODE", "small")
+SCALE_MODE = SCALE_ALIASES.get(_raw_scale_mode.lower(), _raw_scale_mode.lower())
+ALLOWED_SCALES = {"small", "large"}
+
+if SCALE_MODE not in ALLOWED_SCALES:
+    allowed = ", ".join(sorted(ALLOWED_SCALES))
+    aliases = ", ".join(f"{src}->{dst}" for src, dst in sorted(SCALE_ALIASES.items()))
+    raise ValueError(
+        f"Mode de volumétrie inconnu: {_raw_scale_mode}. Profils attendus: {allowed}. Alias acceptés: {aliases}."
+    )
 N_RUNS = _get_env_int("BENCH_N_RUNS", 10)
 N_WARMUP = _get_env_int("BENCH_N_WARMUP", 3)
 TIMEOUT_S = float(os.getenv("BENCH_TIMEOUT_S", "30"))

@@ -19,8 +19,10 @@ Le modèle s’inspire des structures courantes des standards Haystack, Brick et
 
 Deux profils contrôlent la taille du dataset via la variable d’environnement `SCALE_MODE`:
 
-- `laptop`: ~10 étages, ~800 espaces, ~3 000 équipements, ~15 000 points, ~200 compteurs.
-- `server`: ~20 étages, ~2 000 espaces, ~8 000 équipements, ~50 000 points, ~500 compteurs.
+- `small`: ~10 étages, ~800 espaces, ~3 000 équipements, ~15 000 points, ~200 compteurs.
+- `large`: ~20 étages, ~2 000 espaces, ~8 000 équipements, ~50 000 points, ~500 compteurs.
+
+Les alias historiques `laptop` (small) et `server` (large) restent acceptés pour faciliter les scripts existants.
 
 Les profondeurs sont bornées pour rester représentatives d’un bâtiment conséquent: chaînes FEEDS ≤ 8, chaînes fonctionnelles (HAS_PART/SERVES) ≤ 6, traversée globale ≤ 10.
 
@@ -29,7 +31,7 @@ Les profondeurs sont bornées pour rester représentatives d’un bâtiment cons
 La génération est déterministe: la graine peut être fournie via la variable `SEED` (valeur par défaut `42`). Un lancement typique se fait avec:
 
 ```
-python -m dataset_gen.run  # ou SEED=123 SCALE_MODE=server python -m dataset_gen.run
+python -m dataset_gen.run  # ou SEED=123 SCALE_MODE=large python -m dataset_gen.run
 ```
 
 Les exports sont produits dans `dataset_gen/out/` au format CSV pour PostgreSQL/TimescaleDB, JSON pour Memgraph et JSON-LD pour RDF/SPARQL.
