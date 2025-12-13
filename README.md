@@ -81,6 +81,24 @@ La structure est évaluée via des moteurs graphe et relationnel, tandis que les
 ### Limite assumée
 L'étude ne couvre pas l'évaluation complète d'un graphe in-memory intégrant des séries temporelles courtes ; cette évaluation constituerait un travail complémentaire distinct.
 
+## Patterns observés dans les plateformes de jumeaux numériques
+
+### Graphe comme socle structurel
+Les plateformes industrielles s'appuient généralement sur un graphe pour porter la structure des entités, exprimer leurs relations fonctionnelles ou spatiales et contextualiser les chaînes de dépendances. Le graphe sert d'index sémantique central capable de soutenir la navigation par voisinage, les typologies hiérarchiques et les requêtes de contexte localisé.
+
+### Séries temporelles associées aux entités
+Les séries temporelles restent attachées aux entités décrites dans le graphe (espaces, équipements, points de mesure) mais sont exposées sous forme de blocs ou de fenêtres temporelles, plutôt que comme des échantillons unitaires de premier rang. Cette organisation préserve la cohérence des accès par période, facilite les agrégations et limite l'impact des très grands volumes d'événements individuels sur la partie structurelle.
+
+### Séparation implicite des parcours
+Deux plans de navigation coexistent implicitement : la navigation structurelle dans le graphe (identification d'un équipement, de ses composants ou de son contexte) et l'accès temporel (fenêtrage, agrégation, alignement de séries). Les plateformes privilégient ainsi un découplage entre traversées relationnelles et traitements temporels, même lorsque les deux dimensions sont exposées dans une API unifiée.
+
+### Conséquences méthodologiques pour le benchmark
+Le protocole retient ces patterns en évaluant séparément :
+- le graphe et le modèle relationnel pour la structure et les requêtes contextuelles ;
+- une base time-series pour les séries temporelles, manipulées par fenêtre ou agrégation.
+
+Cette séparation respecte l'usage industriel où le graphe fournit le contexte et l'orchestration des relations, tandis que les moteurs time-series servent les flux volumétriques et les analyses temporelles. Elle garantit que chaque paradigme est testé sur le volet où il est le plus pertinent, tout en reflétant les architectures hybrides courantes des jumeaux numériques.
+
 ## 9. Public cible
 - Ingénieurs smart building et exploitation.
 - Architectes data et responsables d'infrastructure.
