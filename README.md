@@ -37,6 +37,11 @@ Les moteurs évalués (PostgreSQL, TimescaleDB, Memgraph, Oxigraph) sont des sol
 - Représentations alternatives non évaluées.
 - Environnement d'exécution.
 
+## Modélisation des séries temporelles dans un graphe in-memory
+Les séries temporelles ne sont pas représentées sous la forme caricaturale d'un nœud par mesure. Les moteurs graphe sont évalués avec des structures compactes (blocs, tableaux ou fenêtres) pour stocker des segments contigus de mesures. Ce choix reflète une borne inférieure réaliste de consommation mémoire pour un graphe in-memory, tout en restant fidèle aux patterns industriels observés.
+
+Même dans cette configuration optimisée, la volumétrie demeure structurante : le nombre de points et la profondeur historique des mesures influencent fortement l'empreinte mémoire et le coût des traversées. La démarche vise à éviter les modèles simplistes qui surestimeraient l'overhead graphe et à comparer les paradigmes dans des conditions équitables, en évaluant leurs forces respectives dans un cadre réaliste.
+
 ## 7. Reproductibilité
 - Dépôt public contenant scripts et définitions d'infrastructure.
 - Orchestration via Docker Compose pour aligner les environnements.
