@@ -17,14 +17,14 @@ class ScaleProfile:
 
 
 PROFILES: Dict[str, ScaleProfile] = {
-    "laptop": ScaleProfile(
+    "small": ScaleProfile(
         floors=10,
         spaces=800,
         equipments=3000,
         points=15000,
         meters=200,
     ),
-    "server": ScaleProfile(
+    "large": ScaleProfile(
         floors=20,
         spaces=2000,
         equipments=8000,
@@ -32,6 +32,9 @@ PROFILES: Dict[str, ScaleProfile] = {
         meters=500,
     ),
 }
+
+ALIASES = {"laptop": "small", "server": "large"}
+"""Alias historiques conservés pour rétrocompatibilité."""
 
 
 DEFAULT_SEED = 42
@@ -41,7 +44,13 @@ DEFAULT_SEED = 42
 def get_profile(mode: str) -> ScaleProfile:
     """Retourne le profil associé au mode ou déclenche une erreur claire."""
 
+    normalized = ALIASES.get(mode.lower(), mode.lower())
+
     try:
-        return PROFILES[mode]
+        return PROFILES[normalized]
     except KeyError as exc:
-        raise ValueError(f"Mode de scale inconnu: {mode}") from exc
+        allowed = ", ".join(sorted(PROFILES))
+        aliases = ", ".join(f"{src}->{dst}" for src, dst in sorted(ALIASES.items()))
+        raise ValueError(
+            f"Mode de volumétrie inconnu: {mode}. Profils attendus: {allowed}. Alias: {aliases}."
+        ) from exc

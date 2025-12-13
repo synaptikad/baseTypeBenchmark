@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dataset_gen.config import DEFAULT_SEED, get_profile
+from dataset_gen.config import ALIASES, DEFAULT_SEED, get_profile
 from dataset_gen.export_graph import export_property_graph
 from dataset_gen.export_pg import export_postgres
 from dataset_gen.export_rdf import export_rdf
@@ -12,10 +12,11 @@ from dataset_gen.generator import generate_dataset
 
 
 def main() -> None:
-    mode = os.environ.get("SCALE_MODE", "laptop")
+    mode = os.environ.get("SCALE_MODE", "small")
     seed = int(os.environ.get("SEED", DEFAULT_SEED))
 
     profile = get_profile(mode)
+    normalized_mode = ALIASES.get(mode.lower(), mode.lower())
     dataset, summary = generate_dataset(profile, seed)
 
     out_dir = Path(__file__).parent / "out"
@@ -24,7 +25,11 @@ def main() -> None:
     export_rdf(dataset, out_dir)
 
     print("Dataset généré avec succès")
-    print(f"Mode: {mode} | Seed: {seed}")
+    print(
+        "Profil de volumétrie: "
+        f"{normalized_mode} (SCALE_MODE={mode}, alias acceptés: {', '.join(ALIASES)})"
+    )
+    print(f"Seed: {seed}")
     print(f"Nœuds: {summary.node_count}")
     for rel, count in sorted(summary.relation_counts.items(), key=lambda x: x[0].value):
         print(f"{rel.value}: {count}")

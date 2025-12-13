@@ -28,7 +28,7 @@ Le warmup n'est jamais inclus dans les métriques. Les itérations de warmup ser
 ## Limites connues
 
 - Les commandes d'exécution supposent la présence des conteneurs déclarés dans `docker-compose.yml`
-- Les scripts d'ingestion et de requêtes peuvent nécessiter des ajustements selon l'environnement matériel (mode laptop ou server)
+- Les scripts d'ingestion et de requêtes peuvent nécessiter des ajustements selon l'environnement matériel ; la volumétrie est contrôlée par les profils `small` et `large` (alias historiques `laptop`/`server`).
 - Si Docker n'est pas disponible, les métriques de ressources seront nulles et le runner échouera sur les étapes dépendantes des conteneurs
 
 ## Reproduire un bench complet

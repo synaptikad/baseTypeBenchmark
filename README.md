@@ -31,7 +31,9 @@ Dans un bâtiment conséquent, où les chaînes fonctionnelles et énergétiques
 ## 7. Reproductibilité
 - Dépôt public contenant scripts et définitions d'infrastructure.
 - Orchestration via Docker Compose pour aligner les environnements.
-- Modes laptop et server pour ajuster la volumétrie et observer les effets d'échelle.
+- Profils de volumétrie small et large pour ajuster le dataset et observer les effets d'échelle.
+- Exécution de référence sur une infrastructure contrôlée (VPS) pour isoler la variable volumétrie.
+- Les profils décrivent uniquement la taille du dataset et la charge appliquée, indépendamment du matériel local.
 - Résultats exportables en CSV et JSON pour partage et analyses externes.
 - Versions des outils et paramètres loggés pour chaque campagne d'exécution.
 
