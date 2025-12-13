@@ -31,9 +31,16 @@ PROFILES: Dict[str, ScaleProfile] = {
         points=50000,
         meters=500,
     ),
+    "enterprise": ScaleProfile(
+        floors=500,           # 50 bâtiments × 10 étages
+        spaces=20_000,        # 400 espaces/bâtiment
+        equipments=100_000,   # 2000 équipements/bâtiment
+        points=500_000,       # 5 points/équipement moyen
+        meters=5_000,         # 100 compteurs/bâtiment
+    ),
 }
 
-ALIASES = {"laptop": "small", "server": "large"}
+ALIASES = {"laptop": "small", "server": "large", "prod": "enterprise", "worst": "enterprise"}
 """Alias historiques conservés pour rétrocompatibilité."""
 
 

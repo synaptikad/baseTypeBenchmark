@@ -1,7 +1,14 @@
 #!/bin/bash
 # =============================================================================
 # Script principal pour lancer le benchmark complet
-# Usage: ./run-benchmark.sh [small|medium|large]
+# Usage: ./run-benchmark.sh [small|large|enterprise]
+#
+# Profils disponibles:
+#   small      - 15k points, 3k équipements   (RAM: 4 Go min)
+#   large      - 50k points, 8k équipements   (RAM: 8 Go min)
+#   enterprise - 500k points, 100k équipements (RAM: 32 Go min)
+#
+# Alias: laptop=small, server=large, prod=enterprise, worst=enterprise
 # =============================================================================
 
 set -e
@@ -13,6 +20,20 @@ cd "$PROJECT_DIR"
 # Profil par défaut
 SCALE_MODE="${1:-small}"
 SEED="${2:-42}"
+
+# Vérification RAM pour enterprise
+if [ "$SCALE_MODE" = "enterprise" ] || [ "$SCALE_MODE" = "prod" ] || [ "$SCALE_MODE" = "worst" ]; then
+    TOTAL_RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
+    if [ "$TOTAL_RAM_GB" -lt 24 ]; then
+        echo "ATTENTION: Profil enterprise requiert 32 Go RAM minimum"
+        echo "RAM détectée: ${TOTAL_RAM_GB} Go"
+        echo "Continuer quand même ? (y/N)"
+        read -r confirm
+        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+            exit 1
+        fi
+    fi
+fi
 
 # Couleurs
 RED='\033[0;31m'

@@ -23,10 +23,10 @@ def _get_env_int(name: str, default: int) -> int:
 SEED = _get_env_int("BENCH_SEED", 42)
 random.seed(SEED)
 
-SCALE_ALIASES = {"laptop": "small", "server": "large"}
+SCALE_ALIASES = {"laptop": "small", "server": "large", "prod": "enterprise", "worst": "enterprise"}
 _raw_scale_mode = os.getenv("BENCH_SCALE_MODE", "small")
 SCALE_MODE = SCALE_ALIASES.get(_raw_scale_mode.lower(), _raw_scale_mode.lower())
-ALLOWED_SCALES = {"small", "large"}
+ALLOWED_SCALES = {"small", "large", "enterprise"}
 
 if SCALE_MODE not in ALLOWED_SCALES:
     allowed = ", ".join(sorted(ALLOWED_SCALES))
