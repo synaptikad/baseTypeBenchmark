@@ -66,6 +66,9 @@ Dans ces deux contextes, une latence de l'ordre de la seconde reste généraleme
 ## 8. Positionnement et limites
 Ce benchmark ne vise pas à disqualifier le paradigme graphe. Il cherche à clarifier son domaine de validité face à des alternatives relationnelles et time-series récentes. Les graphes restent pertinents pour des traversées complexes, des dépendances non bornées, l'alignement sémantique interdomaines ou des traitements nécessitant des algorithmes de graphe spécialisés.
 
+## À propos des graphes et des usages IA
+Les modèles d'IA modernes s'appuient principalement sur des représentations denses : matrices pour les poids et activations, tenseurs pour les données multimodales et embeddings pour les projections sémantiques. Les graphes apportent de la valeur en amont, par exemple pour préparer les données (contexte relationnel, voisinage, contraintes) ou enrichir la sémantique (alignement d'ontologies, liens métier). Ces apports ne suffisent pas, en eux-mêmes, à justifier un moteur graphe in-memory comme socle central de stockage opérationnel ; ils s'intègrent plutôt dans une chaîne où le graphe est mobilisé quand il apporte un gain spécifique.
+
 ## Gestion des séries temporelles et architectures hybrides
 
 ### Constat de terrain
