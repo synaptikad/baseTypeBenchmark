@@ -116,10 +116,146 @@ Chaque sample TS devient un nœud:
 - RAM nécessaire ≈ 350B × 200 bytes = 70 Po (pétaoctets)
 
 → IMPOSSIBLE en in-memory
-→ C'est pourquoi l'architecture hybride est obligatoire
+→ C'est pourquoi l'architecture hybride avec CHUNKING est obligatoire
 ```
 
-### Architecture hybride recommandée
+---
+
+## Stratégie Hybride avec Chunking
+
+### Principe : Ne jamais charger tout le graphe
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                         APPLICATION                                 │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│   ┌─────────────────────────────────────────────────────────────┐  │
+│   │              GRAPHE CHUNKÉ (topologie)                      │  │
+│   │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐           │  │
+│   │  │ Bât. A  │ │ Bât. B  │ │ Bât. C  │ │   ...   │  ON-DISK  │  │
+│   │  │  chunk  │ │  chunk  │ │  chunk  │ │         │           │  │
+│   │  └────┬────┘ └─────────┘ └─────────┘ └─────────┘           │  │
+│   │       │                                                     │  │
+│   │       ▼ LOAD ON DEMAND                                      │  │
+│   │  ┌─────────────────────┐                                    │  │
+│   │  │   CACHE LRU RAM     │  ← Seulement 1-3 bâtiments actifs  │  │
+│   │  │   (hot chunks)      │    en mémoire à la fois            │  │
+│   │  └─────────────────────┘                                    │  │
+│   └─────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│   ┌─────────────────────────────────────────────────────────────┐  │
+│   │              TIME-SERIES CHUNKÉ (mesures)                   │  │
+│   │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐           │  │
+│   │  │ 2024-Q1 │ │ 2024-Q2 │ │ 2024-Q3 │ │ 2024-Q4 │  CHUNKS   │  │
+│   │  │ compres.│ │ compres.│ │ compres.│ │  actif  │  TEMPORELS│  │
+│   │  └─────────┘ └─────────┘ └─────────┘ └────┬────┘           │  │
+│   │       ↑ TIERED STORAGE                    │                 │  │
+│   │  ┌─────────────────────┐      ┌───────────▼─────────────┐  │  │
+│   │  │   COLD (S3/HDD)     │      │   HOT (SSD + RAM cache) │  │  │
+│   │  │   Archive 90 jours+ │      │   Derniers 90 jours     │  │  │
+│   │  └─────────────────────┘      └─────────────────────────┘  │  │
+│   └─────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Stratégies de partitionnement du graphe
+
+| Stratégie | Clé de partition | Cas d'usage | RAM par chunk |
+|-----------|------------------|-------------|---------------|
+| **Par bâtiment** | `building_id` | Multi-sites | 50-200 Mo |
+| **Par système** | `system_type` (CVC, élec) | Maintenance | 100-500 Mo |
+| **Par étage** | `floor_id` | Navigation UI | 10-50 Mo |
+| **Par locataire** | `tenant_id` | Facturation | 20-100 Mo |
+
+### Calcul RAM avec chunking (parc 200 bâtiments)
+
+```
+SANS CHUNKING:
+- Graphe complet en RAM: 8-12 Go
+- Tous les bâtiments chargés = gaspillage
+
+AVEC CHUNKING PAR BÂTIMENT:
+- 1 chunk = 1 bâtiment ≈ 50 Mo
+- Cache LRU = 5 bâtiments actifs max
+- RAM graphe = 5 × 50 Mo = 250 Mo  ← 40x moins !
+
+- Reste de la RAM pour:
+  - TimescaleDB shared_buffers: 4-8 Go
+  - Cache TS hot data: 2-4 Go
+  - OS + overhead: 2 Go
+```
+
+### Implémentation PostgreSQL (table partitionnée)
+
+```sql
+-- Table des nœuds partitionnée par bâtiment
+CREATE TABLE nodes (
+    id UUID PRIMARY KEY,
+    building_id UUID NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT,
+    properties JSONB
+) PARTITION BY HASH (building_id);
+
+-- Créer 32 partitions (pour 200 bâtiments, ~6 bât/partition)
+CREATE TABLE nodes_p0 PARTITION OF nodes FOR VALUES WITH (MODULUS 32, REMAINDER 0);
+CREATE TABLE nodes_p1 PARTITION OF nodes FOR VALUES WITH (MODULUS 32, REMAINDER 1);
+-- ... jusqu'à p31
+
+-- Index par partition (automatiquement local)
+CREATE INDEX ON nodes (building_id, type);
+
+-- Requête = scan d'une seule partition
+EXPLAIN ANALYZE
+SELECT * FROM nodes WHERE building_id = 'xxx' AND type = 'Equipment';
+-- → Scanne seulement nodes_p[hash(xxx) % 32]
+```
+
+### Implémentation TimescaleDB (hypertables + tiered storage)
+
+```sql
+-- Hypertable avec chunks de 1 semaine
+CREATE TABLE measurements (
+    time        TIMESTAMPTZ NOT NULL,
+    point_id    UUID NOT NULL,
+    value       DOUBLE PRECISION
+);
+
+SELECT create_hypertable('measurements', 'time',
+    chunk_time_interval => INTERVAL '7 days');
+
+-- Compression automatique après 7 jours
+ALTER TABLE measurements SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'point_id'
+);
+
+SELECT add_compression_policy('measurements', INTERVAL '7 days');
+
+-- Tiered storage: archiver les chunks > 90 jours vers S3
+SELECT add_tiering_policy('measurements', INTERVAL '90 days');
+```
+
+### Impact sur le dimensionnement
+
+| Scénario | Sans chunking | Avec chunking | Économie |
+|----------|---------------|---------------|----------|
+| Parc 50 bât | 16 Go RAM | **4 Go RAM** | 75% |
+| Parc 200 bât | 64 Go RAM | **8 Go RAM** | 87% |
+| Smart district | 128 Go RAM | **16 Go RAM** | 87% |
+
+### Nouvelle recommandation VPS avec chunking
+
+| Cas | RAM (chunké) | Disque | Coût OVH |
+|-----|--------------|--------|----------|
+| Campus 50 bât | **8 Go** | 100 Go NVMe | ~12€/mois |
+| Tertiaire 200 bât | **16 Go** | 250 Go NVMe | ~25€/mois |
+| Smart district | **32 Go** | 500 Go NVMe | ~50€/mois |
+
+---
+
+### Architecture hybride recommandée (avec chunking)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -127,12 +263,15 @@ Chaque sample TS devient un nœud:
 ├─────────────────────────────────────────────────────────┤
 │  Graphe (topologie, relations)  │  Time-series (mesures)│
 │  ─────────────────────────────  │  ────────────────────│
-│  PostgreSQL JSONB/rel           │  TimescaleDB          │
-│  OU Memgraph (si budget RAM)    │  (même instance PG)   │
+│  PostgreSQL + JSONB             │  TimescaleDB          │
+│  Partitionné par building_id    │  Hypertables chunked  │
 │                                 │                       │
-│  RAM: 2-8 Go                    │  RAM: 8-32 Go         │
-│  Disk: 10-50 Go                 │  Disk: 100-500 Go     │
+│  RAM: 2-4 Go (cache chunks)     │  RAM: 4-8 Go          │
+│  Disk: 20-100 Go                │  Disk: 100-500 Go     │
+│                                 │  + S3 tiered (archive)│
 └─────────────────────────────────────────────────────────┘
+
+Total RAM: 8-16 Go pour un parc de 200 bâtiments !
 ```
 
 ## Nouveau profil proposé : "enterprise"
