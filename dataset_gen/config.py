@@ -16,31 +16,34 @@ class ScaleProfile:
     meters: int
 
 
+# Volumétries Smart Building réalistes
+# Les vendors BOS mettent TOUT en RAM (graphe + time-series)
+# Ce benchmark démontre qu'une architecture hybride fait pareil avec 8x moins de RAM
 PROFILES: Dict[str, ScaleProfile] = {
     "small": ScaleProfile(
-        floors=10,
-        spaces=800,
-        equipments=3000,
-        points=15000,
-        meters=200,
-    ),
-    "large": ScaleProfile(
         floors=20,
-        spaces=2000,
-        equipments=8000,
-        points=50000,
+        spaces=4_000,
+        equipments=10_000,
+        points=50_000,        # Petit smart building
         meters=500,
     ),
-    "enterprise": ScaleProfile(
-        floors=500,           # 50 bâtiments × 10 étages
-        spaces=20_000,        # 400 espaces/bâtiment
-        equipments=100_000,   # 2000 équipements/bâtiment
-        points=500_000,       # 5 points/équipement moyen
-        meters=5_000,         # 100 compteurs/bâtiment
+    "large": ScaleProfile(
+        floors=40,
+        spaces=8_000,
+        equipments=20_000,
+        points=100_000,       # Smart building standard
+        meters=1_000,
+    ),
+    "xl": ScaleProfile(
+        floors=100,
+        spaces=20_000,
+        equipments=100_000,
+        points=500_000,       # Grand smart building
+        meters=5_000,
     ),
 }
 
-ALIASES = {"laptop": "small", "server": "large", "prod": "enterprise", "worst": "enterprise"}
+ALIASES = {"laptop": "small", "server": "large", "enterprise": "xl", "prod": "xl"}
 """Alias historiques conservés pour rétrocompatibilité."""
 
 
