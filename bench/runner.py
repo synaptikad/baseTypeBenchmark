@@ -5,6 +5,7 @@ Les étapes suivent le protocole académique : vérification des services, inges
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import time
 from datetime import datetime
@@ -12,6 +13,11 @@ from pathlib import Path
 from typing import Dict, List
 
 import yaml
+
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from bench.config import (
     ACTIVE_QUERIES,
@@ -82,7 +88,38 @@ def run_command(command: List[str], timeout: float) -> subprocess.CompletedProce
 
 
 def format_command(template: List[str], context: Dict[str, str]) -> List[str]:
-    return [part.format(**context) for part in template]
+    import re
+    full_context = {**os.environ, **context}
+    
+    def expand_var(match):
+        var = match.group(1)
+        if ':-' in var:
+            var_name, default = var.split(':-', 1)
+            return full_context.get(var_name, default)
+        else:
+            return full_context.get(var, '')
+    
+    result = []
+    for part in template:
+        # Replace ${VAR} or ${VAR:-default}
+        part = re.sub(r'\$\{([^}]+)\}', expand_var, part)
+        result.append(part)
+    return result
+
+
+def count_items(profile: Profile) -> int:
+    """Count the number of items to be ingested based on profile type."""
+    data_dir = Path("dataset_gen/out")
+    if profile.type in ["pg", "memgraph"]:
+        nodes_file = data_dir / "nodes.csv" if profile.type == "pg" else data_dir / "nodes.json"
+        edges_file = data_dir / "edges.csv" if profile.type == "pg" else data_dir / "edges.json"
+        nodes_count = sum(1 for _ in open(nodes_file)) - 1 if nodes_file.exists() else 0  # -1 for header
+        edges_count = sum(1 for _ in open(edges_file)) - 1 if edges_file.exists() else 0  # -1 for header
+        return nodes_count + edges_count
+    elif profile.type == "oxigraph":
+        # For oxigraph, count triples in jsonld or something, but for now approximate
+        return 0  # TODO
+    return 0
 
 
 def run_ingestion(profile: Profile) -> Dict[str, float | int | None]:
@@ -92,7 +129,8 @@ def run_ingestion(profile: Profile) -> Dict[str, float | int | None]:
     t0 = time.perf_counter()
     run_command(command, timeout=profile.ingestion.get("timeout_s", TIMEOUT_S))
     elapsed = time.perf_counter() - t0
-    return {"time_s": round(elapsed, 3), "items": profile.ingestion.get("items")}
+    items = count_items(profile)
+    return {"time_s": round(elapsed, 3), "items": items}
 
 
 def _execute_query(command: List[str]) -> float:
