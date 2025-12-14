@@ -107,30 +107,76 @@ def format_command(template: List[str], context: Dict[str, str]) -> List[str]:
     return result
 
 
-def count_items(profile: Profile) -> int:
-    """Count the number of items to be ingested based on profile type."""
+def _count_lines(path: Path, has_header: bool = False) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as handle:
+        total = sum(1 for _ in handle)
+        return max(total - 1, 0) if has_header else total
+
+
+def _count_triples(jsonld_path: Path) -> int | None:
+    if not jsonld_path.exists():
+        return None
+    try:
+        data = yaml.safe_load(jsonld_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+    graph = data.get("@graph") or []
+    triples = 0
+    for node in graph:
+        for key, value in node.items():
+            if key in {"id", "@id"}:
+                continue
+            if isinstance(value, list):
+                triples += len(value)
+            else:
+                triples += 1
+    return triples
+
+
+def dataset_element_counts() -> Dict[str, int | None]:
     data_dir = Path("dataset_gen/out")
-    if profile.type in ["pg", "memgraph"]:
-        nodes_file = data_dir / "nodes.csv" if profile.type == "pg" else data_dir / "nodes.json"
-        edges_file = data_dir / "edges.csv" if profile.type == "pg" else data_dir / "edges.json"
-        nodes_count = sum(1 for _ in open(nodes_file)) - 1 if nodes_file.exists() else 0  # -1 for header
-        edges_count = sum(1 for _ in open(edges_file)) - 1 if edges_file.exists() else 0  # -1 for header
-        return nodes_count + edges_count
-    elif profile.type == "oxigraph":
-        # For oxigraph, count triples in jsonld or something, but for now approximate
-        return 0  # TODO
-    return 0
+    counts: Dict[str, int | None] = {"nodes": None, "edges": None, "triples": None}
+    nodes_csv = data_dir / "nodes.csv"
+    edges_csv = data_dir / "edges.csv"
+    nodes_json = data_dir / "nodes.json"
+    edges_json = data_dir / "edges.json"
+    jsonld_path = data_dir / "graph.jsonld"
+
+    if nodes_csv.exists():
+        counts["nodes"] = _count_lines(nodes_csv, has_header=True)
+    elif nodes_json.exists():
+        counts["nodes"] = _count_lines(nodes_json)
+
+    if edges_csv.exists():
+        counts["edges"] = _count_lines(edges_csv, has_header=True)
+    elif edges_json.exists():
+        counts["edges"] = _count_lines(edges_json)
+
+    counts["triples"] = _count_triples(jsonld_path)
+    return counts
+
+
+def count_items(profile: Profile) -> Dict[str, int | None]:
+    counts = dataset_element_counts()
+    total_items = None
+    if counts["nodes"] is not None and counts["edges"] is not None:
+        total_items = counts["nodes"] + counts["edges"]
+    if profile.type == "oxigraph" and counts.get("triples") is not None:
+        return {"items": counts["triples"], "nodes": counts["nodes"], "edges": counts["edges"], "triples": counts["triples"]}
+    return {"items": total_items, "nodes": counts["nodes"], "edges": counts["edges"], "triples": counts["triples"]}
 
 
 def run_ingestion(profile: Profile) -> Dict[str, float | int | None]:
     if not profile.ingestion:
-        return {"time_s": 0.0, "items": None}
+        return {"time_s": 0.0, "items": None, "nodes": None, "edges": None, "triples": None}
     command = format_command(profile.ingestion.get("command", []), {"endpoint": profile.endpoint})
     t0 = time.perf_counter()
     run_command(command, timeout=profile.ingestion.get("timeout_s", TIMEOUT_S))
     elapsed = time.perf_counter() - t0
     items = count_items(profile)
-    return {"time_s": round(elapsed, 3), "items": items}
+    return {"time_s": round(elapsed, 3), **items}
 
 
 def _execute_query(command: List[str]) -> float:
@@ -197,8 +243,17 @@ def summarize(results: dict) -> str:
     lines = [
         f"Profil: {results['profile']} ({results['engine']})",
         f"Mode: {results['scale_mode']} - seed={results['seed']}",
-        f"Ingestion: {results['ingestion'].get('time_s')}s pour {results['ingestion'].get('items')} éléments",
     ]
+    ingestion = results["ingestion"]
+    ingest_line = f"Ingestion: {ingestion.get('time_s')}s"
+    dataset_items = [ingestion.get("nodes"), ingestion.get("edges")]
+    if all(v is not None for v in dataset_items):
+        ingest_line += f" pour {ingestion.get('nodes')} nœuds + {ingestion.get('edges')} relations"
+    if ingestion.get("items") is not None:
+        ingest_line += f" (compteur principal={ingestion.get('items')})"
+    if ingestion.get("triples") is not None:
+        ingest_line += f" ; RDF≈{ingestion.get('triples')} triplets"
+    lines.append(ingest_line)
     lines.append("Requêtes:")
     for q in results["queries"]:
         if q["stats"]:
@@ -247,6 +302,18 @@ def save_results(payload: dict, engine: str, profile: str) -> None:
 
 def run_profile(profile_name: str) -> dict:
     profile = load_profile(profile_name)
+    dataset_counts = dataset_element_counts()
+    print(
+        f"[contexte] scénario={SCALE_MODE} seed={SEED} profil={profile.name} moteur={profile.engine}"
+    )
+    if dataset_counts["nodes"] is not None and dataset_counts["edges"] is not None:
+        print(
+            f"[cohérence] données attendues: {dataset_counts['nodes']} nœuds + {dataset_counts['edges']} relations"
+        )
+    if dataset_counts.get("triples") is not None:
+        print(
+            f"[cohérence] export RDF anticipé: ≈{dataset_counts['triples']} triplets (compte structurel conservé pour comparaison)"
+        )
     wait_for_health(profile.container)
     monitor = ResourceMonitor(profile.container)
     monitor.start()

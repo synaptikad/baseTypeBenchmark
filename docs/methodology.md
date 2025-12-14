@@ -64,6 +64,10 @@ La requête Q8 illustre une architecture hybride : sélection des points via le 
 - Résultats exportables en CSV et JSON
 - Versions des outils et paramètres loggés pour chaque campagne
 
+Un comptage dynamique des éléments structurels (nœuds + relations) est réalisé directement à partir des exports générés afin de détecter toute divergence d'ingestion entre profils.
+
+Les exécutions « small » servent de validation de pipeline (génération, ingestion, instrumentation) avant toute campagne plus large. Les premiers runs constituent une référence méthodologique et non une conclusion statistique.
+
 ## Limites assumées
 
 - Le tuning est volontairement limité et documenté (pas d'optimisation opportuniste)

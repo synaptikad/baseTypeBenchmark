@@ -19,6 +19,8 @@
 | CPU moyen | % | Utilisation CPU moyenne pendant l'exécution |
 | Disque | Mo | Occupation du volume Docker |
 
+Les métriques mémoire proviennent de `docker stats --no-stream` (RSS du conteneur). Un échantillonnage régulier est effectué pendant toute la durée du scénario ; la valeur « steady-state » correspond à la médiane des échantillons et « peak » au maximum observé. Cette approche reste approximative (bruit du système hôte, caches) mais garantit une mesure homogène entre profils sans dépendance à des outils externes.
+
 ## Interprétation énergétique
 
 Les métriques de ressources peuvent être traduites en impact énergétique :

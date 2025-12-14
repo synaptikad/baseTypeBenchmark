@@ -101,8 +101,9 @@ class ResourceMonitor:
     def summarize(self) -> dict:
         mem_values = [s.mem_mb for s in self.samples if s.mem_mb is not None]
         cpu_values = [s.cpu_pct for s in self.samples if s.cpu_pct is not None]
+        steady_state = statistics.median(mem_values) if mem_values else None
         return {
-            "steady_state_mem_mb": mem_values[0] if mem_values else None,
+            "steady_state_mem_mb": steady_state,
             "peak_mem_mb": max(mem_values) if mem_values else None,
             "avg_cpu_pct": statistics.mean(cpu_values) if cpu_values else None,
             "samples": [s.to_dict() for s in self.samples],
