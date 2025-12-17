@@ -125,16 +125,20 @@ def flush_quantities(session, batch: List[Dict[str, str]]) -> None:
 
 
 def load_edges(session, edges_path: Path, batch_size: int) -> Dict[str, int]:
+    # Use smaller batch for edges (double MATCH is expensive)
+    edge_batch_size = min(batch_size, 1000)
+
     batches: Dict[str, List[Dict[str, str]]] = {}
     measure_batch: List[Dict[str, str]] = []
     counters: Dict[str, int] = {"relationships": 0, "measurements": 0}
     t0 = time.perf_counter()
+    total_edges = 0
 
     for edge in iter_json_lines(edges_path):
         rel = edge["rel"]
         if rel == "MEASURES":
             measure_batch.append(edge)
-            if len(measure_batch) >= batch_size:
+            if len(measure_batch) >= edge_batch_size:
                 flush_quantities(session, measure_batch)
                 counters["measurements"] += len(measure_batch)
                 measure_batch.clear()
@@ -142,9 +146,12 @@ def load_edges(session, edges_path: Path, batch_size: int) -> Dict[str, int]:
 
         batch = batches.setdefault(rel, [])
         batch.append(edge)
-        if len(batch) >= batch_size:
+        if len(batch) >= edge_batch_size:
             flush_edges(session, rel, batch)
             counters["relationships"] += len(batch)
+            total_edges += len(batch)
+            if total_edges % 10000 == 0:
+                print(f"  ... {total_edges} edges loaded", flush=True)
             batch.clear()
 
     for rel, batch in batches.items():
