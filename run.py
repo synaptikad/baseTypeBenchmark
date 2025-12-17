@@ -84,9 +84,9 @@ def run_cmd(cmd: str, cwd: str = None) -> bool:
 SCENARIOS = {
     "P1": {"name": "PostgreSQL Relational", "containers": ["timescaledb"]},
     "P2": {"name": "PostgreSQL JSONB", "containers": ["timescaledb"]},
-    "M1": {"name": "Memgraph Standalone", "containers": ["memgraph"]},
+    "M1": {"name": "Memgraph + Chunks", "containers": ["memgraph"]},  # Timeseries as array nodes
     "M2": {"name": "Memgraph + TimescaleDB", "containers": ["memgraph", "timescaledb"]},
-    "O1": {"name": "Oxigraph Standalone", "containers": ["oxigraph"]},
+    "O1": {"name": "Oxigraph + Chunks", "containers": ["oxigraph"]},  # Timeseries as RDF chunks
     "O2": {"name": "Oxigraph + TimescaleDB", "containers": ["oxigraph", "timescaledb"]},
 }
 
@@ -831,10 +831,10 @@ def is_performance_plateau(prev_p95: float, curr_p95: float, threshold_pct: floa
 QUERIES_BY_SCENARIO = {
     "P1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
     "P2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
-    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5"],  # No timeseries queries
-    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + hybrid Q8
-    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5"],  # No timeseries queries
-    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + hybrid Q8
+    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via chunks
+    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via TimescaleDB
+    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via RDF chunks
+    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via TimescaleDB
 }
 
 # Benchmark protocol
@@ -1199,7 +1199,9 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             if edges_file.exists():
                 load_edges(session, edges_file, batch_size=5000)
 
-            if scenario == "M2" and chunks_file.exists():
+            # M1: Memgraph standalone avec timeseries comme chunks (nœuds array)
+            # M2: Memgraph + TimescaleDB (hybride) - chunks aussi pour requêtes de structure
+            if scenario in ["M1", "M2"] and chunks_file.exists():
                 load_timeseries_chunks(session, chunks_file, batch_size=5000)
 
         result["load_time_s"] = time.time() - load_start
@@ -1492,111 +1494,494 @@ def _next_ram_level(current: int) -> int:
     return current * 2  # Beyond defined levels, double
 
 
-def workflow_benchmark():
-    """Benchmark execution workflow with RAM-Gradient protocol."""
-    print_header("BENCHMARK EXECUTION (RAM-Gradient Protocol)")
+def get_master_dataset() -> Optional[Tuple[str, Path]]:
+    """Find the largest available dataset (master for extraction).
 
-    # Check datasets
+    Returns:
+        Tuple (profile_name, export_path) or None
+    """
     available = get_available_profiles()
     if not available:
+        return None
+
+    # Order by scale then duration (largest first)
+    scale_order = {"large": 2, "medium": 1, "small": 0}
+    duration_order = {"1y": 4, "6m": 3, "1m": 2, "1w": 1, "2d": 0}
+
+    def score(profile):
+        scale = get_scale_from_profile(profile)
+        duration = get_duration_from_profile(profile)
+        return (scale_order.get(scale, 0), duration_order.get(duration, 0))
+
+    sorted_profiles = sorted(available, key=score, reverse=True)
+    master = sorted_profiles[0]
+    export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{master}_seed42"
+
+    return master, export_dir
+
+
+def get_extractable_configs(master_profile: str) -> Dict:
+    """Get all extractable configurations from master dataset.
+
+    Returns:
+        Dict with scales, durations, and full profile list
+    """
+    from basetype_benchmark.dataset.subset_extractor import (
+        get_available_scales, get_available_durations, get_extractable_profiles
+    )
+
+    scales = get_available_scales(master_profile)
+    durations = get_available_durations(master_profile)
+    profiles = [master_profile] + get_extractable_profiles(master_profile)
+
+    return {
+        "scales": scales,
+        "durations": durations,
+        "profiles": profiles,
+        "master": master_profile
+    }
+
+
+def ensure_dataset_extracted(master_dir: Path, target_profile: str) -> Path:
+    """Ensure target profile is extracted from master, return path.
+
+    Args:
+        master_dir: Path to master dataset
+        target_profile: Target profile to extract (e.g., 'small-1m')
+
+    Returns:
+        Path to extracted dataset
+    """
+    from basetype_benchmark.dataset.subset_extractor import SubsetExtractor, can_extract
+
+    # Parse master profile from directory name
+    master_name = master_dir.name.rsplit("_seed", 1)[0]
+
+    # If target is same as master, return master dir
+    if target_profile == master_name:
+        return master_dir
+
+    # Check if already extracted
+    target_dir = master_dir.parent / f"{target_profile}_seed42"
+    if target_dir.exists() and (target_dir / "nodes.csv").exists():
+        print_info(f"Using existing extraction: {target_profile}")
+        return target_dir
+
+    # Extract
+    if not can_extract(master_name, target_profile):
+        raise ValueError(f"Cannot extract {target_profile} from {master_name}")
+
+    print_info(f"Extracting {target_profile} from {master_name}...")
+    extractor = SubsetExtractor(master_dir)
+    return extractor.extract(target_profile)
+
+
+def select_ram_levels() -> List[int]:
+    """Interactive RAM level selection."""
+    print_header("SELECT RAM LEVELS")
+    print("Choose which RAM levels to test:\n")
+
+    print(f"  A. {BOLD}All levels{RESET} ({RAM_LEVELS} GB)")
+    print(f"  D. {BOLD}Default gradient{RESET} (4, 8, 16, 32 GB)")
+    print(f"  S. {BOLD}Select specific levels{RESET}")
+    print(f"  C. {BOLD}Custom single level{RESET}\n")
+    print(f"  0. Back\n")
+
+    choice = prompt("Select", "D").upper()
+
+    if choice == "0":
+        return []
+    elif choice == "A":
+        return RAM_LEVELS.copy()
+    elif choice == "D":
+        return [4, 8, 16, 32]
+    elif choice == "C":
+        try:
+            level = int(prompt("RAM level (GB)", "8"))
+            return [level]
+        except ValueError:
+            print_err("Invalid RAM level")
+            return []
+    elif choice == "S":
+        print("\nAvailable levels:", RAM_LEVELS)
+        levels_str = prompt("Enter levels separated by commas", "4,8,16")
+        try:
+            return [int(x.strip()) for x in levels_str.split(",")]
+        except ValueError:
+            print_err("Invalid input")
+            return []
+
+    return RAM_LEVELS.copy()
+
+
+def workflow_benchmark():
+    """Benchmark execution workflow with full multi-criteria selection."""
+    print_header("BENCHMARK EXECUTION")
+
+    # Check for master dataset
+    master_info = get_master_dataset()
+    if not master_info:
         print_warn("No datasets available. Generate one first (option 2).")
         input("\nPress Enter...")
         return
 
-    print(f"Available datasets: {', '.join(available)}\n")
+    master_profile, master_dir = master_info
+    configs = get_extractable_configs(master_profile)
 
-    # Select dataset
-    for i, ds in enumerate(available, 1):
-        size = SIZE_ESTIMATES.get(ds, "?")
-        print(f"  {i}. {ds} (~{size} GB)")
+    print(f"Master dataset: {BOLD}{master_profile}{RESET}")
+    print(f"Available scales: {', '.join(configs['scales'])}")
+    print(f"Available durations: {', '.join(configs['durations'])}")
+    print(f"Total configurations: {len(configs['profiles'])}\n")
+
+    # Mode selection
+    print(f"  F. {BOLD}FULL{RESET} - Run ALL configurations sequentially")
+    print(f"       ({len(configs['profiles'])} profiles x 6 engines x RAM gradient)")
+    print(f"  S. {BOLD}SELECT{RESET} - Choose specific configurations")
+    print(f"  Q. {BOLD}QUICK{RESET} - Single profile, all engines, single RAM")
+    print(f"\n  0. Back\n")
+
+    mode = prompt("Select mode", "S").upper()
+
+    if mode == "0":
+        return
+    elif mode == "F":
+        _run_full_benchmark(master_dir, configs)
+    elif mode == "Q":
+        _run_quick_benchmark(master_dir, configs)
+    else:
+        _run_selective_benchmark(master_dir, configs)
+
+
+def _run_full_benchmark(master_dir: Path, configs: Dict):
+    """Run FULL benchmark: all profiles x all engines x RAM gradient."""
+    print_header("FULL BENCHMARK MODE")
+
+    total_configs = len(configs['profiles']) * len(SCENARIOS) * len(RAM_LEVELS)
+    print(f"{YELLOW}WARNING: This will run {total_configs} benchmark configurations!{RESET}")
+    print(f"\nProfiles: {len(configs['profiles'])}")
+    print(f"Engines: {len(SCENARIOS)} (P1, P2, M1, M2, O1, O2)")
+    print(f"RAM levels: {len(RAM_LEVELS)} ({RAM_LEVELS})")
+    print(f"\nEstimated time: Several hours to days depending on hardware\n")
+
+    if not prompt_yes_no("Are you SURE you want to run FULL benchmark?", False):
+        return
+
+    # Create results directory
+    results_dir = Path("benchmark_results") / f"full_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    all_results = {"profiles": {}}
+    engines = list(SCENARIOS.keys())
+
+    for i, profile in enumerate(configs['profiles'], 1):
+        print_header(f"PROFILE {i}/{len(configs['profiles'])}: {profile}")
+
+        try:
+            export_dir = ensure_dataset_extracted(master_dir, profile)
+            scale = get_scale_from_profile(profile)
+
+            profile_results = {}
+            for engine in engines:
+                print(f"\n{BOLD}Engine: {engine} ({SCENARIOS[engine]['name']}){RESET}")
+                ram_results = run_ram_gradient_benchmark(engine, export_dir, scale, results_dir)
+                profile_results[engine] = ram_results
+
+                # Save intermediate
+                with open(results_dir / f"{profile}_{engine}.json", 'w') as f:
+                    json.dump(ram_results, f, indent=2, default=str)
+
+            all_results["profiles"][profile] = profile_results
+
+        except Exception as e:
+            print_err(f"Failed on {profile}: {e}")
+            all_results["profiles"][profile] = {"error": str(e)}
+
+    # Save final summary
+    _save_full_results(results_dir, all_results, configs)
+    print_header("FULL BENCHMARK COMPLETE")
+    print(f"Results saved to: {results_dir}")
+    input("\nPress Enter...")
+
+
+def _run_quick_benchmark(master_dir: Path, configs: Dict):
+    """Run QUICK benchmark: single profile, all engines, single RAM."""
+    print_header("QUICK BENCHMARK MODE")
+
+    # Select profile
+    print("Select profile:\n")
+    for i, profile in enumerate(configs['profiles'], 1):
+        size = SIZE_ESTIMATES.get(profile, "?")
+        marker = " (master)" if profile == configs['master'] else ""
+        print(f"  {i}. {profile} (~{size} GB){marker}")
     print(f"\n  0. Back")
 
-    choice = prompt("\nSelect dataset", "1")
+    choice = prompt("\nProfile", "1")
     if choice == "0":
         return
 
     try:
-        dataset = available[int(choice) - 1]
+        profile = configs['profiles'][int(choice) - 1]
     except (ValueError, IndexError):
         print_err("Invalid choice")
         return
 
-    scale = get_scale_from_profile(dataset)
+    # Select RAM level
+    ram_level = int(prompt("RAM level (GB)", "8"))
 
-    # Select engines
-    scenarios = select_engines()
-    if not scenarios:
+    # Confirm
+    print_header("CONFIRM QUICK BENCHMARK")
+    print(f"Profile: {profile}")
+    print(f"Engines: ALL (P1, P2, M1, M2, O1, O2)")
+    print(f"RAM: {ram_level} GB (fixed)")
+
+    if not prompt_yes_no("\nStart quick benchmark?"):
+        return
+
+    # Run
+    try:
+        export_dir = ensure_dataset_extracted(master_dir, profile)
+        scale = get_scale_from_profile(profile)
+    except Exception as e:
+        print_err(f"Dataset preparation failed: {e}")
+        input("\nPress Enter...")
+        return
+
+    results_dir = Path("benchmark_results") / f"quick_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    all_results = {}
+    for engine in SCENARIOS.keys():
+        print_header(f"{engine} ({SCENARIOS[engine]['name']})")
+
+        if not start_containers_with_ram(SCENARIOS[engine]["containers"], ram_level):
+            all_results[engine] = {"status": "container_failed"}
+            continue
+
+        try:
+            result = run_scenario_benchmark(engine, export_dir)
+            result["ram_gb"] = ram_level
+            all_results[engine] = result
+
+            with open(results_dir / f"{engine}.json", 'w') as f:
+                json.dump(result, f, indent=2, default=str)
+        finally:
+            stop_all_containers()
+
+    # Summary
+    with open(results_dir / "summary.json", 'w') as f:
+        json.dump({
+            "mode": "quick",
+            "profile": profile,
+            "ram_gb": ram_level,
+            "results": all_results,
+            "timestamp": datetime.now().isoformat()
+        }, f, indent=2, default=str)
+
+    _print_quick_summary(all_results)
+    print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
+    input("\nPress Enter...")
+
+
+def _run_selective_benchmark(master_dir: Path, configs: Dict):
+    """Run SELECTIVE benchmark: user chooses all parameters."""
+    print_header("SELECTIVE BENCHMARK MODE")
+
+    # Step 1: Select scales
+    print(f"{BOLD}Step 1: Select scales{RESET}\n")
+    print(f"  A. All ({', '.join(configs['scales'])})")
+    for i, scale in enumerate(configs['scales'], 1):
+        print(f"  {i}. {scale} only")
+    print(f"\n  0. Back")
+
+    choice = prompt("Scales", "A").upper()
+    if choice == "0":
+        return
+    elif choice == "A":
+        selected_scales = configs['scales']
+    else:
+        try:
+            selected_scales = [configs['scales'][int(choice) - 1]]
+        except (ValueError, IndexError):
+            print_err("Invalid choice")
+            return
+
+    # Step 2: Select durations
+    print_header("SELECT DURATIONS")
+    print(f"{BOLD}Step 2: Select time windows{RESET}\n")
+    print(f"  A. All ({', '.join(configs['durations'])})")
+    for i, duration in enumerate(configs['durations'], 1):
+        print(f"  {i}. {duration} only")
+    print(f"\n  0. Back")
+
+    choice = prompt("Durations", "A").upper()
+    if choice == "0":
+        return
+    elif choice == "A":
+        selected_durations = configs['durations']
+    else:
+        try:
+            selected_durations = [configs['durations'][int(choice) - 1]]
+        except (ValueError, IndexError):
+            print_err("Invalid choice")
+            return
+
+    # Build profile list
+    selected_profiles = []
+    for scale in selected_scales:
+        for duration in selected_durations:
+            profile = f"{scale}-{duration}"
+            if profile in configs['profiles']:
+                selected_profiles.append(profile)
+
+    if not selected_profiles:
+        print_err("No valid profiles selected")
+        return
+
+    # Step 3: Select engines
+    engines = select_engines()
+    if not engines:
+        return
+
+    # Step 4: Select RAM levels
+    ram_levels = select_ram_levels()
+    if not ram_levels:
         return
 
     # Confirm
-    print_header("CONFIRM RAM-GRADIENT PROTOCOL")
-    print(f"Dataset:   {dataset} (scale: {scale})")
-    print(f"Engines:   {', '.join(scenarios)}")
-    print(f"\n{BOLD}RAM-Gradient Protocol:{RESET}")
-    print(f"  - RAM levels: {RAM_LEVELS} GB")
-    print(f"  - P1/P2: Start min, iterate to plateau")
-    print(f"  - M/O: Start min, escalate on OOM, then plateau")
-    print(f"  - Plateau threshold: {PERF_PLATEAU_THRESHOLD}% improvement")
-    print(f"\n{BOLD}Per RAM level:{RESET}")
-    print(f"  - {N_WARMUP} warmup runs")
-    print(f"  - {N_RUNS} measured runs per query")
-    print(f"  - drop_caches between queries (if root)")
-    print(f"  - Metrics: p50, p95, RAM steady/peak, CPU")
+    print_header("CONFIRM SELECTIVE BENCHMARK")
+    print(f"Profiles: {', '.join(selected_profiles)}")
+    print(f"Engines: {', '.join(engines)}")
+    print(f"RAM levels: {ram_levels} GB")
+
+    total = len(selected_profiles) * len(engines) * len(ram_levels)
+    print(f"\n{BOLD}Total configurations: {total}{RESET}")
 
     if not prompt_yes_no("\nStart benchmark?"):
         return
 
-    # Get export directory
-    export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{dataset}_seed42"
-    if not export_dir.exists():
-        print_err(f"Export directory not found: {export_dir}")
-        input("\nPress Enter...")
-        return
-
-    # Check formats
-    has_csv = (export_dir / "nodes.csv").exists()
-    has_json = (export_dir / "nodes.json").exists()
-    has_jsonld = (export_dir / "graph.jsonld").exists()
-
-    print_info(f"Export formats: CSV={has_csv}, JSON={has_json}, JSON-LD={has_jsonld}")
-
-    # Create results directory
-    results_dir = Path("benchmark_results") / datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Run
+    results_dir = Path("benchmark_results") / f"selective_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    all_results = {}
+    all_results = {"profiles": {}}
 
-    for scenario in scenarios:
-        print_header(f"RAM-GRADIENT: {scenario} ({SCENARIOS[scenario]['name']})")
+    for profile in selected_profiles:
+        print_header(f"PROFILE: {profile}")
 
-        ram_results = run_ram_gradient_benchmark(scenario, export_dir, scale, results_dir)
-        all_results[scenario] = ram_results
+        try:
+            export_dir = ensure_dataset_extracted(master_dir, profile)
+            scale = get_scale_from_profile(profile)
 
-        # Save intermediate results
-        with open(results_dir / f"{scenario}_ram_gradient.json", 'w') as f:
-            json.dump(ram_results, f, indent=2, default=str)
+            profile_results = {}
+            for engine in engines:
+                print(f"\n{BOLD}Engine: {engine}{RESET}")
 
-    # Save final summary
+                # Custom RAM gradient with selected levels
+                ram_results = _run_custom_ram_gradient(
+                    engine, export_dir, scale, ram_levels, results_dir
+                )
+                profile_results[engine] = ram_results
+
+                with open(results_dir / f"{profile}_{engine}.json", 'w') as f:
+                    json.dump(ram_results, f, indent=2, default=str)
+
+            all_results["profiles"][profile] = profile_results
+
+        except Exception as e:
+            print_err(f"Failed on {profile}: {e}")
+            all_results["profiles"][profile] = {"error": str(e)}
+
+    # Save summary
     with open(results_dir / "summary.json", 'w') as f:
         json.dump({
-            "dataset": dataset,
-            "scale": scale,
-            "scenarios": all_results,
-            "protocol": {
-                "ram_levels": RAM_LEVELS,
-                "warmup": N_WARMUP,
-                "runs": N_RUNS,
-                "plateau_threshold": PERF_PLATEAU_THRESHOLD
-            },
+            "mode": "selective",
+            "profiles": selected_profiles,
+            "engines": engines,
+            "ram_levels": ram_levels,
+            "results": all_results,
             "timestamp": datetime.now().isoformat()
         }, f, indent=2, default=str)
 
-    # Print summary
-    print_header("RAM-GRADIENT RESULTS")
-    _print_ram_gradient_summary(all_results, scale)
-
-    print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
+    print_header("SELECTIVE BENCHMARK COMPLETE")
+    print(f"Results saved to: {results_dir}")
     input("\nPress Enter...")
+
+
+def _run_custom_ram_gradient(scenario: str, export_dir: Path, scale: str,
+                             ram_levels: List[int], results_dir: Path) -> Dict:
+    """Run benchmark with custom RAM levels (not auto-escalation)."""
+    containers = SCENARIOS[scenario]["containers"]
+    main_container = f"btb_{containers[0]}"
+
+    ram_results = {}
+
+    for ram_gb in ram_levels:
+        print(f"\n--- {scenario} @ {ram_gb}GB RAM ---")
+
+        if not start_containers_with_ram(containers, ram_gb):
+            ram_results[ram_gb] = {"status": "container_failed"}
+            continue
+
+        try:
+            result = run_scenario_benchmark(scenario, export_dir)
+
+            if check_container_oom(main_container):
+                print_warn(f"OOM at {ram_gb}GB")
+                ram_results[ram_gb] = {"status": "oom", "ram_gb": ram_gb}
+            else:
+                result["ram_gb"] = ram_gb
+                ram_results[ram_gb] = result
+
+                if result["status"] == "completed":
+                    queries = result.get("queries", {})
+                    all_p95 = [q["stats"]["p95"] for q in queries.values()
+                               if q.get("stats") and q["stats"].get("p95")]
+                    avg_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
+                    print_ok(f"{scenario} @ {ram_gb}GB: avg p95={avg_p95:.1f}ms")
+
+        except Exception as e:
+            print_err(f"Error at {ram_gb}GB: {e}")
+            ram_results[ram_gb] = {"status": "error", "error": str(e)}
+
+        finally:
+            stop_all_containers()
+
+    return ram_results
+
+
+def _save_full_results(results_dir: Path, all_results: Dict, configs: Dict):
+    """Save full benchmark results with summary."""
+    with open(results_dir / "summary.json", 'w') as f:
+        json.dump({
+            "mode": "full",
+            "master": configs["master"],
+            "profiles": list(all_results["profiles"].keys()),
+            "engines": list(SCENARIOS.keys()),
+            "ram_levels": RAM_LEVELS,
+            "results": all_results,
+            "timestamp": datetime.now().isoformat()
+        }, f, indent=2, default=str)
+
+
+def _print_quick_summary(results: Dict):
+    """Print summary for quick benchmark."""
+    print_header("QUICK BENCHMARK RESULTS")
+
+    print(f"\n{'Engine':<15} {'Status':<12} {'Load(s)':<10} {'Avg p95(ms)':<12}")
+    print("-" * 50)
+
+    for engine, result in results.items():
+        status = result.get("status", "?")
+        load_time = result.get("load_time_s", 0)
+        queries = result.get("queries", {})
+
+        if status == "completed" and queries:
+            all_p95 = [q["stats"]["p95"] for q in queries.values()
+                       if q.get("stats") and q["stats"].get("p95")]
+            avg_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
+            print(f"{engine:<15} {status:<12} {load_time:<10.1f} {avg_p95:<12.1f}")
+        else:
+            print(f"{engine:<15} {status:<12} {'-':<10} {'-':<12}")
 
 
 def _print_ram_gradient_summary(all_results: Dict, scale: str):
