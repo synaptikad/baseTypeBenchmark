@@ -74,10 +74,14 @@ def load_jsonld(endpoint: str, jsonld_path: Path) -> float:
 
 
 def count_triples(endpoint: str) -> int:
+    """Count total triples in the store.
+
+    Note: Oxigraph uses /query endpoint for SPARQL queries (not /sparql).
+    """
     query = "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }"
-    response = requests.post(
-        f"{endpoint}/sparql",
-        data={"query": query},
+    response = requests.get(
+        f"{endpoint}/query",
+        params={"query": query},
         headers={"Accept": "application/sparql-results+json"},
         timeout=30,
     )
