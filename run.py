@@ -762,25 +762,109 @@ def workflow_benchmark():
             "timestamp": datetime.now().isoformat()
         }, f, indent=2)
 
-    print_header("RESULTS SUMMARY")
+    # Build summary table
+    print_header("RESULTS SUMMARY TABLE")
+
+    # Table header
+    col_widths = {"scenario": 8, "status": 10, "ram_min": 10, "ram_opt": 10, "p95_best": 12, "oom": 12}
+    header = (
+        f"{'Scenario':<{col_widths['scenario']}} | "
+        f"{'Status':<{col_widths['status']}} | "
+        f"{'RAM Min':<{col_widths['ram_min']}} | "
+        f"{'RAM Opt':<{col_widths['ram_opt']}} | "
+        f"{'p95 Best':<{col_widths['p95_best']}} | "
+        f"{'OOM Levels':<{col_widths['oom']}}"
+    )
+    separator = "-" * len(header)
+
+    print(separator)
+    print(header)
+    print(separator)
+
+    # Table rows
     for s, r in results.items():
         if isinstance(r, dict) and "ram_tests" in r:
             tests = r["ram_tests"]
             completed = [t for t in tests if t.get("status") == "completed"]
-            oom = [t for t in tests if t.get("status") == "oom"]
+            oom_tests = [t for t in tests if t.get("status") == "oom"]
 
             if completed:
-                optimal = r.get("optimal_ram")
-                print(f"  {s}: {GREEN}OK{RESET} - Optimal RAM: {optimal}GB")
-                for t in completed:
-                    print(f"      {t['ram_gb']}GB: p95={t.get('p95_latency', '?'):.2f}s")
-            if oom:
-                print(f"      {RED}OOM at: {', '.join(str(t['ram_gb']) + 'GB' for t in oom)}{RESET}")
-        else:
-            status = f"{RED}{r}{RESET}"
-            print(f"  {s}: {status}")
+                status = f"{GREEN}OK{RESET}"
+                ram_min = f"{min(t['ram_gb'] for t in completed)}GB"
+                ram_opt = f"{r.get('optimal_ram', '?')}GB"
+                p95_best = f"{min(t.get('p95_latency', 999) for t in completed):.2f}s"
+            else:
+                status = f"{RED}FAIL{RESET}"
+                ram_min = "-"
+                ram_opt = "-"
+                p95_best = "-"
 
-    print(f"\nSaved to: {results_dir}")
+            if oom_tests:
+                oom_levels = ", ".join(f"{t['ram_gb']}GB" for t in oom_tests)
+            else:
+                oom_levels = "-"
+
+            # Pad status for ANSI codes
+            status_display = status + " " * (col_widths['status'] - 2 if "OK" in status else col_widths['status'] - 4)
+
+            print(
+                f"{s:<{col_widths['scenario']}} | "
+                f"{status_display} | "
+                f"{ram_min:<{col_widths['ram_min']}} | "
+                f"{ram_opt:<{col_widths['ram_opt']}} | "
+                f"{p95_best:<{col_widths['p95_best']}} | "
+                f"{oom_levels:<{col_widths['oom']}}"
+            )
+        else:
+            status = f"{RED}ERROR{RESET}"
+            print(
+                f"{s:<{col_widths['scenario']}} | "
+                f"{status:<{col_widths['status'] + 9}} | "  # +9 for ANSI codes
+                f"{'-':<{col_widths['ram_min']}} | "
+                f"{'-':<{col_widths['ram_opt']}} | "
+                f"{'-':<{col_widths['p95_best']}} | "
+                f"{str(r)[:col_widths['oom']]:<{col_widths['oom']}}"
+            )
+
+    print(separator)
+
+    # Summary stats
+    print(f"\n{BOLD}Summary:{RESET}")
+    total = len(results)
+    ok_count = sum(1 for r in results.values() if isinstance(r, dict) and r.get("optimal_ram"))
+    oom_count = sum(1 for r in results.values() if isinstance(r, dict) and any(t.get("status") == "oom" for t in r.get("ram_tests", [])))
+    fail_count = total - ok_count
+
+    print(f"  Total scenarios: {total}")
+    print(f"  Completed:       {ok_count} ({ok_count * 100 // total if total else 0}%)")
+    if oom_count:
+        print(f"  Had OOM:         {oom_count}")
+    if fail_count:
+        print(f"  Failed:          {fail_count}")
+
+    # Best performers
+    if ok_count > 0:
+        best_ram = None
+        best_perf = None
+        for s, r in results.items():
+            if isinstance(r, dict) and r.get("optimal_ram"):
+                opt_ram = r["optimal_ram"]
+                tests = r.get("ram_tests", [])
+                completed = [t for t in tests if t.get("status") == "completed"]
+                if completed:
+                    best_p95 = min(t.get("p95_latency", 999) for t in completed)
+                    if best_ram is None or opt_ram < best_ram[1]:
+                        best_ram = (s, opt_ram)
+                    if best_perf is None or best_p95 < best_perf[1]:
+                        best_perf = (s, best_p95)
+
+        print(f"\n{BOLD}Best performers:{RESET}")
+        if best_ram:
+            print(f"  Lowest RAM:      {best_ram[0]} ({best_ram[1]}GB)")
+        if best_perf:
+            print(f"  Best latency:    {best_perf[0]} (p95={best_perf[1]:.2f}s)")
+
+    print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
     input("\nPress Enter...")
 
 
