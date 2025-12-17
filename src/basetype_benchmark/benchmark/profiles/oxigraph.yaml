@@ -1,0 +1,79 @@
+engine: oxigraph
+type: oxigraph
+endpoint: http://localhost:7878/sparql
+container: btb_oxigraph
+volume: oxigraph_data
+ingestion:
+  command:
+    - python
+    - loaders/oxigraph/load.py
+    - --endpoint
+    - http://localhost:7878
+authentication: none
+items: 0
+queries:
+  Q1:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q1_energy_chain.sparql
+    - http://localhost:7878/sparql
+  Q2:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q2_functional_impact.sparql
+    - http://localhost:7878/sparql
+  Q3:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q3_space_services.sparql
+    - http://localhost:7878/sparql
+  Q4:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q4_inventory_floor_temp_points.sparql
+    - http://localhost:7878/sparql
+  Q5:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q5_orphans.sparql
+    - http://localhost:7878/sparql
+  Q8:
+    selection:
+      - curl
+      - -s
+      - --data-urlencode
+      - query@queries/sparql/Q8_tenant_served_energy.sparql
+      - http://localhost:7878/sparql
+    aggregation:
+      - bash
+      - -lc
+      - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q8_tenant_served_energy.sql"
+  Q9:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q9_tenant_carbon_footprint.sparql
+    - http://localhost:7878/sparql
+  Q10:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q10_security_access_analysis.sparql
+    - http://localhost:7878/sparql
+  Q11:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q11_it_infrastructure_impact.sparql
+    - http://localhost:7878/sparql
+  Q12:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q12_full_building_analytics.sparql
+    - http://localhost:7878/sparql

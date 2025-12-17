@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+.venv/
+venv/
+dist/
+build/
+
+# Node
+node_modules/
+
+# Docker
+volumes/
+
+# Generated data
+data/
+out/
+results/
+!bench/results/
+!bench/results/.gitkeep
+
+# Logs and outputs
+*.log
+
+# Env (local secrets only)
+.env.local
+.env.secrets
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local cache and exports
+src/basetype_benchmark/dataset/cache/
+src/basetype_benchmark/dataset/exports/
+
+# Private docs (not for public repo)
+docs_private/
+
+# Session and test files
+MEMO_SESSION.md
+*.pkl.gz
+test_ram_*.py
+benchmark_results/
+
+# Claude settings
+.claude/

@@ -1,0 +1,23 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q2: Functional Impact Analysis
+# What spaces are affected if equipment X fails?
+
+SELECT ?type (COUNT(DISTINCT ?affected) AS ?affected_count)
+WHERE {
+  # Get first equipment
+  {
+    SELECT ?eq WHERE {
+      ?eq rdf:type btb:Equipment .
+    } LIMIT 1
+  }
+
+  # Find affected spaces/floors/zones via reverse traversal
+  ?affected (btb:contains|btb:serves|btb:feeds)+ ?eq .
+  ?affected rdf:type ?type .
+
+  FILTER(?type IN (btb:Space, btb:Floor, btb:Zone))
+}
+GROUP BY ?type
+ORDER BY DESC(?affected_count)

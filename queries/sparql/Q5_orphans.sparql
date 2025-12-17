@@ -1,0 +1,21 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q5: Orphan Detection - Nodes without relationships
+
+SELECT ?type (COUNT(?node) AS ?orphan_count)
+WHERE {
+  ?node rdf:type ?type .
+
+  # Filter to BTB types only
+  FILTER(STRSTARTS(STR(?type), "http://basetype.benchmark/ontology#"))
+
+  # No outgoing or incoming relationships (except type)
+  FILTER NOT EXISTS {
+    { ?node ?p ?o . FILTER(?p != rdf:type && ?p != btb:id && ?p != btb:name && ?p != btb:building_id) }
+    UNION
+    { ?s ?p ?node . FILTER(?p != rdf:type) }
+  }
+}
+GROUP BY ?type
+ORDER BY DESC(?orphan_count)

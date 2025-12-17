@@ -1,0 +1,129 @@
+# O2: Oxigraph Hybrid - Structure in Oxigraph (RDF) + Timeseries in TimescaleDB
+# This scenario tests the "RDF for semantics, SQL for timeseries" pattern
+
+engine: oxigraph_hybrid
+type: hybrid
+scenario: O2
+
+# Two containers required
+containers:
+  oxigraph:
+    image: ghcr.io/oxigraph/oxigraph:latest
+    container_name: btb_oxigraph
+    ports:
+      - "7878:7878"
+    healthcheck:
+      command: ["curl", "-f", "http://localhost:7878/health"]
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: btb_timescaledb
+    ports:
+      - "5432:5432"
+    env:
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: benchmark
+      POSTGRES_DB: benchmark
+    healthcheck:
+      command: ["pg_isready", "-U", "benchmark"]
+
+volume: oxigraph_data
+
+# Ingestion: Structure → Oxigraph, Timeseries → TimescaleDB
+ingestion:
+  # Step 1: Load structure into Oxigraph (JSON-LD)
+  structure:
+    - python
+    - src/basetype_benchmark/loaders/oxigraph/load.py
+    - --endpoint
+    - http://localhost:7878
+  # Step 2: Load timeseries into TimescaleDB
+  timeseries:
+    - python
+    - src/basetype_benchmark/loaders/postgres/load.py
+    - --mode
+    - P1
+    - --skip-structure
+  items: 0
+
+# Queries: Structure queries → Oxigraph SPARQL, Timeseries queries → TimescaleDB
+queries:
+  # Pure structural queries → Oxigraph SPARQL
+  Q1:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q1_energy_chain.sparql
+    - http://localhost:7878/sparql
+  Q2:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q2_functional_impact.sparql
+    - http://localhost:7878/sparql
+  Q3:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q3_space_services.sparql
+    - http://localhost:7878/sparql
+  Q4:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q4_inventory_floor_temp_points.sparql
+    - http://localhost:7878/sparql
+  Q5:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q5_orphans.sparql
+    - http://localhost:7878/sparql
+
+  # Pure timeseries queries → TimescaleDB
+  Q6:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U benchmark -d benchmark < queries/sql/Q6_timeseries_hourly_agg.sql"
+  Q7:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U benchmark -d benchmark < queries/sql/Q7_drift_top20.sql"
+
+  # Hybrid queries: Structure (Oxigraph) + Aggregation (TimescaleDB)
+  Q8:
+    type: hybrid
+    selection:
+      - curl
+      - -s
+      - --data-urlencode
+      - query@queries/sparql/Q8_tenant_served_energy.sparql
+      - http://localhost:7878/sparql
+    aggregation:
+      - bash
+      - -lc
+      - "docker exec -i btb_timescaledb psql -U benchmark -d benchmark < queries/sql/Q8_tenant_served_energy.sql"
+
+  Q9:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q9_tenant_carbon_footprint.sparql
+    - http://localhost:7878/sparql
+  Q10:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q10_security_access_analysis.sparql
+    - http://localhost:7878/sparql
+  Q11:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q11_it_infrastructure_impact.sparql
+    - http://localhost:7878/sparql
+  Q12:
+    - curl
+    - -s
+    - --data-urlencode
+    - query@queries/sparql/Q12_full_building_analytics.sparql
+    - http://localhost:7878/sparql

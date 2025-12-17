@@ -1,0 +1,110 @@
+# M2: Memgraph Hybrid - Structure in Memgraph + Timeseries in TimescaleDB
+# This scenario tests the "graph for structure, SQL for timeseries" pattern
+
+engine: memgraph_hybrid
+type: hybrid
+scenario: M2
+
+# Two containers required
+containers:
+  memgraph:
+    image: memgraph/memgraph:latest
+    container_name: btb_memgraph
+    ports:
+      - "7687:7687"
+    healthcheck:
+      command: ["mgconsole", "--version"]
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: btb_timescaledb
+    ports:
+      - "5432:5432"
+    env:
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: benchmark
+      POSTGRES_DB: benchmark
+    healthcheck:
+      command: ["pg_isready", "-U", "benchmark"]
+
+volume: memgraph_data
+
+# Ingestion: Structure → Memgraph, Timeseries → TimescaleDB
+ingestion:
+  # Step 1: Load structure into Memgraph
+  structure:
+    - python
+    - src/basetype_benchmark/loaders/memgraph/load.py
+    - --uri
+    - bolt://localhost:7687
+    - --skip-chunks
+  # Step 2: Load timeseries into TimescaleDB
+  timeseries:
+    - python
+    - src/basetype_benchmark/loaders/postgres/load.py
+    - --mode
+    - P1
+    - --skip-structure
+  items: 0
+
+# Queries: Structure queries → Memgraph, Timeseries queries → TimescaleDB
+queries:
+  # Pure structural queries → Memgraph
+  Q1:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q1_energy_chain.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q2:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q2_functional_impact.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q3:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q3_space_services.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q4:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q4_inventory_floor_temp_points.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q5:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q5_orphans.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+
+  # Pure timeseries queries → TimescaleDB
+  Q6:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U benchmark -d benchmark < queries/sql/Q6_timeseries_hourly_agg.sql"
+  Q7:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U benchmark -d benchmark < queries/sql/Q7_drift_top20.sql"
+
+  # Hybrid queries: Structure (Memgraph) + Aggregation (TimescaleDB)
+  Q8:
+    type: hybrid
+    selection:
+      - bash
+      - -lc
+      - "cat queries/cypher/Q8_tenant_served_energy.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+    aggregation:
+      - bash
+      - -lc
+      - "docker exec -i btb_timescaledb psql -U benchmark -d benchmark < queries/sql/Q8_tenant_served_energy.sql"
+
+  Q9:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q9_tenant_carbon_footprint.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q10:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q10_security_access_analysis.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q11:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q11_it_infrastructure_impact.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q12:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q12_full_building_analytics.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"

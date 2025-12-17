@@ -1,0 +1,1 @@
+"""Requêtes de benchmark pour différents paradigmes de bases de données."""

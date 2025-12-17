@@ -1,0 +1,59 @@
+engine: memgraph
+type: memgraph
+endpoint: bolt://localhost:7688
+deployment: memgraph
+container: btb_memgraph
+volume: memgraph_data
+ingestion:
+  command:
+    - python
+    - loaders/memgraph/load.py
+    - --uri
+    - bolt://localhost:7688
+  items: 0
+queries:
+  Q1:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q1_energy_chain.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q2:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q2_functional_impact.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q3:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q3_space_services.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q4:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q4_inventory_floor_temp_points.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q5:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q5_orphans.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q8:
+    selection:
+      - bash
+      - -lc
+      - "cat queries/cypher/Q8_tenant_served_energy.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+    aggregation:
+      - bash
+      - -lc
+      - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q8_tenant_served_energy.sql"
+  Q9:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q9_tenant_carbon_footprint.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q10:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q10_security_access_analysis.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q11:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q11_it_infrastructure_impact.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"
+  Q12:
+    - bash
+    - -lc
+    - "cat queries/cypher/Q12_full_building_analytics.cypher | docker exec -i btb_memgraph mgconsole --host 127.0.0.1 --port 7687"

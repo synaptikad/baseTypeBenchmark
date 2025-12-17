@@ -1,0 +1,25 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q4: Inventory - Temperature points per floor
+
+SELECT ?floor_id ?floor_name ?building_id
+       (COUNT(DISTINCT ?point) AS ?temp_point_count)
+WHERE {
+  ?floor rdf:type btb:Floor ;
+         btb:id ?floor_id ;
+         btb:name ?floor_name ;
+         btb:building_id ?building_id .
+
+  ?floor btb:contains ?space .
+  ?space rdf:type btb:Space .
+
+  ?space btb:contains|btb:serves ?eq .
+  ?eq rdf:type btb:Equipment .
+
+  ?eq btb:hasPoint ?point .
+  ?point rdf:type btb:Point ;
+         btb:measures btb:Temperature .
+}
+GROUP BY ?floor_id ?floor_name ?building_id
+ORDER BY DESC(?temp_point_count)

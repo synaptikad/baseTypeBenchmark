@@ -1,0 +1,60 @@
+engine: pg_rel
+type: pg
+endpoint: postgresql://localhost:5432/${POSTGRES_DB:-postgres}
+container: btb_timescaledb
+volume: timescaledb_data
+ingestion:
+  command:
+    - bash
+    - -lc
+    - "cat loaders/postgres/schema_rel.sql loaders/postgres/load_nodes_rel.sql loaders/postgres/load_edges_rel.sql loaders/postgres/indexes_rel.sql | docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"
+  items: 0
+queries:
+  Q1:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q1_energy_chain.sql"
+  Q2:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q2_functional_impact.sql"
+  Q3:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q3_space_services.sql"
+  Q4:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q4_inventory_floor_temp_points.sql"
+  Q5:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q5_orphans.sql"
+  Q6:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q6_timeseries_hourly_agg.sql"
+  Q7:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q7_drift_top20.sql"
+  Q8:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q8_tenant_served_energy.sql"
+  Q9:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q9_tenant_carbon_footprint.sql"
+  Q10:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q10_security_access_analysis.sql"
+  Q11:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q11_it_infrastructure_impact.sql"
+  Q12:
+    - bash
+    - -lc
+    - "docker exec -i btb_timescaledb psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} < queries/sql/Q12_full_building_analytics.sql"

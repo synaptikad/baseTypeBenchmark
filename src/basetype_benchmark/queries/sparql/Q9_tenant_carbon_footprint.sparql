@@ -1,0 +1,67 @@
+# Q9: Empreinte carbone par locataire (Tenant Carbon Footprint)
+# COMPLEXITÉ MAXIMALE: Cross-domain query traversant 6 domaines
+# Domaines croisés: Organization, Spatial, Equipment, Energy, Contractual
+# Use case: Calculer l'empreinte carbone de chaque locataire
+
+PREFIX ex: <http://example.org/>
+PREFIX ext: <http://example.org/type/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?tenant_name
+       (COUNT(DISTINCT ?space) AS ?spaces_count)
+       (SUM(COALESCE(xsd:integer(?area), 0)) AS ?total_area_sqm)
+       (COUNT(DISTINCT ?equip) AS ?equipments_count)
+       (COUNT(DISTINCT ?meter) AS ?meters_count)
+       (COUNT(DISTINCT ?power_point) AS ?power_points_count)
+       (SAMPLE(?provider_name) AS ?main_provider)
+WHERE {
+    # 1. Tenants
+    ?tenant a ext:Tenant ;
+            ex:name ?tenant_name .
+
+    # 2. Espaces occupés par le tenant
+    ?tenant ex:OCCUPIES ?space .
+    ?space a ext:Space .
+    OPTIONAL { ?space ex:area_sqm ?area }
+
+    # 3. Équipements dans ces espaces
+    OPTIONAL {
+        ?equip ex:LOCATED_IN ?space ;
+               a ext:Equipment .
+    }
+
+    # 4. Compteurs alimentant les équipements (chemin FEEDS jusqu'à 8 niveaux)
+    # Note: SPARQL 1.1 ne supporte pas les chemins de longueur variable avec borne sup
+    # On utilise une approximation avec des chemins alternatifs
+    OPTIONAL {
+        ?meter a ext:Meter .
+        {
+            ?meter ex:FEEDS ?equip .
+        } UNION {
+            ?meter ex:FEEDS/ex:FEEDS ?equip .
+        } UNION {
+            ?meter ex:FEEDS/ex:FEEDS/ex:FEEDS ?equip .
+        } UNION {
+            ?meter ex:FEEDS/ex:FEEDS/ex:FEEDS/ex:FEEDS ?equip .
+        }
+    }
+
+    # 5. Points de mesure power sur les compteurs
+    OPTIONAL {
+        ?meter ex:HAS_POINT ?power_point .
+        ?power_point a ext:Point ;
+                     ex:quantity "power" .
+    }
+
+    # 6. Contrats et fournisseurs
+    OPTIONAL {
+        ?tenant ex:COVERED_BY ?contract .
+        ?contract a ext:Contract ;
+                  ex:PROVIDED_BY ?provider .
+        ?provider a ext:Provider ;
+                  ex:name ?provider_name .
+    }
+}
+GROUP BY ?tenant ?tenant_name
+ORDER BY DESC(?spaces_count)
+LIMIT 20

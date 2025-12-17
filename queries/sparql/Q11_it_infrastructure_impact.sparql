@@ -1,0 +1,27 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q11: IT Infrastructure Impact Analysis
+
+SELECT ?space_id ?space_name ?building_id
+       (COUNT(DISTINCT ?eq) AS ?it_equipment_count)
+       (GROUP_CONCAT(DISTINCT ?eq_name; separator=", ") AS ?equipment_names)
+WHERE {
+  ?space rdf:type btb:Space ;
+         btb:id ?space_id ;
+         btb:name ?space_name ;
+         btb:building_id ?building_id .
+
+  ?space btb:contains ?eq .
+  ?eq rdf:type btb:Equipment ;
+      btb:name ?eq_name .
+
+  # Filter IT-related equipment
+  FILTER(
+    REGEX(?eq_name, "server|network|switch|router|ups", "i")
+  )
+}
+GROUP BY ?space_id ?space_name ?building_id
+HAVING (COUNT(DISTINCT ?eq) > 0)
+ORDER BY DESC(?it_equipment_count)
+LIMIT 20

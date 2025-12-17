@@ -1,0 +1,30 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q8: Tenant Energy - Structure query for O2 hybrid
+# Returns point IDs for timeseries aggregation in TimescaleDB
+
+SELECT ?tenant_id ?tenant_name (GROUP_CONCAT(DISTINCT ?point_id; separator=",") AS ?point_ids)
+WHERE {
+  ?tenant rdf:type btb:Tenant ;
+          btb:id ?tenant_id ;
+          btb:name ?tenant_name .
+
+  ?tenant btb:occupies ?space .
+  ?space rdf:type btb:Space .
+
+  {
+    ?space btb:serves|btb:contains ?eq .
+  } UNION {
+    ?eq btb:serves|btb:contains ?space .
+  }
+
+  ?eq rdf:type btb:Equipment .
+  ?eq btb:hasPoint ?point .
+
+  ?point rdf:type btb:Point ;
+         btb:id ?point_id ;
+         btb:measures btb:Power .
+}
+GROUP BY ?tenant_id ?tenant_name
+ORDER BY ?tenant_id
