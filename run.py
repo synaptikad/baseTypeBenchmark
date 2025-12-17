@@ -376,8 +376,8 @@ def workflow_dataset():
 # RAM CONFIGURATION
 # =============================================================================
 
-# RAM levels to test (in GB)
-RAM_LEVELS = [4, 8, 16, 32, 64, 128]
+# RAM levels to test (in GB) - up to 256GB for large EC2 instances
+RAM_LEVELS = [4, 8, 16, 32, 64, 128, 256]
 
 # Minimum RAM per scale (estimated)
 MIN_RAM_BY_SCALE = {
@@ -642,8 +642,158 @@ def drop_caches() -> bool:
         return False
 
 
+def get_container_io_stats(container_name: str) -> Optional[Dict]:
+    """Get I/O stats for a container using docker stats."""
+    try:
+        result = subprocess.run(
+            ["docker", "stats", "--no-stream", "--format",
+             "{{.BlockIO}},{{.NetIO}}",
+             container_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return None
+
+        parts = result.stdout.strip().split(",")
+        if len(parts) < 2:
+            return None
+
+        # Parse BlockIO: "1.5GB / 500MB" -> read/write bytes
+        block_io = parts[0].strip()
+        net_io = parts[1].strip()
+
+        def parse_size(s: str) -> float:
+            """Parse size string to MB."""
+            s = s.strip()
+            if "GB" in s or "GiB" in s:
+                return float(s.replace("GB", "").replace("GiB", "").strip()) * 1024
+            elif "MB" in s or "MiB" in s:
+                return float(s.replace("MB", "").replace("MiB", "").strip())
+            elif "KB" in s or "KiB" in s or "kB" in s:
+                return float(s.replace("KB", "").replace("KiB", "").replace("kB", "").strip()) / 1024
+            elif "B" in s:
+                return float(s.replace("B", "").strip()) / (1024 * 1024)
+            return 0
+
+        # BlockIO format: "read / write"
+        block_parts = block_io.split("/")
+        block_read_mb = parse_size(block_parts[0]) if len(block_parts) > 0 else 0
+        block_write_mb = parse_size(block_parts[1]) if len(block_parts) > 1 else 0
+
+        # NetIO format: "rx / tx"
+        net_parts = net_io.split("/")
+        net_rx_mb = parse_size(net_parts[0]) if len(net_parts) > 0 else 0
+        net_tx_mb = parse_size(net_parts[1]) if len(net_parts) > 1 else 0
+
+        return {
+            "block_read_mb": block_read_mb,
+            "block_write_mb": block_write_mb,
+            "net_rx_mb": net_rx_mb,
+            "net_tx_mb": net_tx_mb
+        }
+    except Exception:
+        return None
+
+
+class ResourceMonitor:
+    """Background resource monitor for containers."""
+
+    def __init__(self, container_name: str, interval_s: float = 0.5):
+        self.container_name = container_name
+        self.interval_s = interval_s
+        self.samples: List[Dict] = []
+        self._stop_event = None
+        self._thread = None
+        self._start_time = 0
+
+    def _sample_loop(self):
+        """Sampling loop running in background thread."""
+        import threading
+        while not self._stop_event.is_set():
+            sample = {"timestamp": time.time() - self._start_time}
+
+            # CPU/Memory
+            stats = get_container_stats(self.container_name)
+            if stats:
+                sample.update(stats)
+
+            # I/O
+            io_stats = get_container_io_stats(self.container_name)
+            if io_stats:
+                sample.update(io_stats)
+
+            self.samples.append(sample)
+            time.sleep(self.interval_s)
+
+    def start(self):
+        """Start background monitoring."""
+        import threading
+        self.samples = []
+        self._start_time = time.time()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> Dict:
+        """Stop monitoring and return aggregated metrics."""
+        if self._stop_event:
+            self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+        return self._aggregate()
+
+    def _aggregate(self) -> Dict:
+        """Aggregate collected samples into metrics."""
+        if not self.samples:
+            return {
+                "sample_count": 0,
+                "duration_s": 0,
+                "mem_mb": {"min": 0, "max": 0, "avg": 0, "median": 0},
+                "cpu_pct": {"min": 0, "max": 0, "avg": 0},
+                "io": {"block_read_mb": 0, "block_write_mb": 0, "net_rx_mb": 0, "net_tx_mb": 0}
+            }
+
+        # Memory stats
+        mem_values = [s.get("mem_mb", 0) for s in self.samples if s.get("mem_mb")]
+        cpu_values = [s.get("cpu_pct", 0) for s in self.samples if s.get("cpu_pct") is not None]
+
+        # I/O - get delta between first and last sample
+        first_io = next((s for s in self.samples if s.get("block_read_mb") is not None), {})
+        last_io = next((s for s in reversed(self.samples) if s.get("block_read_mb") is not None), {})
+
+        io_delta = {
+            "block_read_mb": last_io.get("block_read_mb", 0) - first_io.get("block_read_mb", 0),
+            "block_write_mb": last_io.get("block_write_mb", 0) - first_io.get("block_write_mb", 0),
+            "net_rx_mb": last_io.get("net_rx_mb", 0) - first_io.get("net_rx_mb", 0),
+            "net_tx_mb": last_io.get("net_tx_mb", 0) - first_io.get("net_tx_mb", 0),
+        }
+
+        duration = self.samples[-1].get("timestamp", 0) if self.samples else 0
+
+        return {
+            "sample_count": len(self.samples),
+            "duration_s": duration,
+            "mem_mb": {
+                "min": min(mem_values) if mem_values else 0,
+                "max": max(mem_values) if mem_values else 0,
+                "avg": sum(mem_values) / len(mem_values) if mem_values else 0,
+                "median": sorted(mem_values)[len(mem_values) // 2] if mem_values else 0,
+            },
+            "cpu_pct": {
+                "min": min(cpu_values) if cpu_values else 0,
+                "max": max(cpu_values) if cpu_values else 0,
+                "avg": sum(cpu_values) / len(cpu_values) if cpu_values else 0,
+            },
+            "io": io_delta,
+            "samples": self.samples  # Keep raw samples for detailed analysis
+        }
+
+
 def collect_resource_samples(container_name: str, duration_s: float, interval_s: float = 1.0) -> Dict:
-    """Collect resource samples during query execution."""
+    """Collect resource samples during query execution (legacy function)."""
     samples = []
     start = time.time()
     while time.time() - start < duration_s:
@@ -779,28 +929,37 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         get_connection, clear_database, load_p1, load_p2
     )
 
+    container_name = "btb_timescaledb"
     print_info(f"Connecting to PostgreSQL...")
     conn = get_connection()
 
     try:
-        # Clear and load
+        # Clear and load with resource monitoring
         print_info("Clearing database...")
         clear_database(conn)
 
         print_info(f"Loading data ({scenario} schema)...")
+        load_monitor = ResourceMonitor(container_name, interval_s=1.0)
+        load_monitor.start()
         load_start = time.time()
 
         # The loaders expect JSON files, but we have CSV - need adapter
-        # For now, use CSV directly with psycopg2
         if scenario == "P1":
             load_result = _load_postgres_from_csv(conn, export_dir, "relational")
         else:
             load_result = _load_postgres_from_csv(conn, export_dir, "jsonb")
 
         result["load_time_s"] = time.time() - load_start
-        print_ok(f"Data loaded in {result['load_time_s']:.1f}s")
+        result["load_resources"] = load_monitor.stop()
+        # Remove raw samples to reduce result size
+        if "samples" in result["load_resources"]:
+            del result["load_resources"]["samples"]
 
-        # Execute queries
+        print_ok(f"Data loaded in {result['load_time_s']:.1f}s "
+                 f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
+                 f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
+
+        # Execute queries with resource monitoring
         queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
         for query_id in queries_to_run:
             query_text = load_query(scenario, query_id)
@@ -823,7 +982,10 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                 except Exception:
                     conn.rollback()
 
-            # Measured runs
+            # Measured runs with resource monitoring
+            query_monitor = ResourceMonitor(container_name, interval_s=0.2)
+            query_monitor.start()
+
             latencies = []
             rows = 0
             for run_idx in range(N_RUNS):
@@ -842,13 +1004,20 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                     conn.rollback()
                     print_warn(f"Query error: {e}")
 
+            query_resources = query_monitor.stop()
+            # Remove raw samples
+            if "samples" in query_resources:
+                del query_resources["samples"]
+
             stats = compute_stats(latencies)
             result["queries"][query_id] = {
                 "latencies_ms": latencies,
                 "rows": rows,
-                "stats": stats
+                "stats": stats,
+                "resources": query_resources
             }
-            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms "
+                  f"(RAM:{query_resources['mem_mb']['max']:.0f}MB CPU:{query_resources['cpu_pct']['avg']:.1f}%)")
 
         result["status"] = "completed"
 
@@ -989,23 +1158,26 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         get_driver, load_constraints, load_nodes, load_edges, load_timeseries_chunks
     )
 
+    container_name = "btb_memgraph"
     print_info("Connecting to Memgraph...")
     try:
         driver = get_driver()
     except Exception as e:
         print_err(f"Failed to connect to Memgraph: {e}")
-        dump_container_debug("btb_memgraph")
+        dump_container_debug(container_name)
         result["status"] = "error"
         result["error"] = f"Connection failed: {e}"
         return result
 
     try:
-        # Clear and load
+        # Clear and load with resource monitoring
         print_info("Clearing database...")
         with driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
 
         print_info("Loading data...")
+        load_monitor = ResourceMonitor(container_name, interval_s=1.0)
+        load_monitor.start()
         load_start = time.time()
 
         with driver.session() as session:
@@ -1018,6 +1190,7 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             if nodes_file.exists():
                 load_nodes(session, nodes_file, batch_size=5000)
             else:
+                load_monitor.stop()
                 print_warn("nodes.json not found - need to regenerate dataset with graph format")
                 result["status"] = "error"
                 result["error"] = "nodes.json not found - regenerate dataset"
@@ -1030,17 +1203,23 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                 load_timeseries_chunks(session, chunks_file, batch_size=5000)
 
         result["load_time_s"] = time.time() - load_start
-        print_ok(f"Data loaded in {result['load_time_s']:.1f}s")
+        result["load_resources"] = load_monitor.stop()
+        if "samples" in result["load_resources"]:
+            del result["load_resources"]["samples"]
+
+        print_ok(f"Data loaded in {result['load_time_s']:.1f}s "
+                 f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
+                 f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
     except Exception as e:
         print_err(f"Memgraph load error: {e}")
-        dump_container_debug("btb_memgraph")
+        dump_container_debug(container_name)
         result["status"] = "error"
         result["error"] = str(e)
         driver.close()
         return result
 
-    # Execute queries
+    # Execute queries with resource monitoring
     queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
     for query_id in queries_to_run:
         query_text = load_query(scenario, query_id)
@@ -1061,7 +1240,10 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             except Exception:
                 pass
 
-        # Measured runs
+        # Measured runs with resource monitoring
+        query_monitor = ResourceMonitor(container_name, interval_s=0.2)
+        query_monitor.start()
+
         latencies = []
         rows = 0
         for run_idx in range(N_RUNS):
@@ -1076,13 +1258,19 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             except Exception as e:
                 print_warn(f"Query error: {e}")
 
+        query_resources = query_monitor.stop()
+        if "samples" in query_resources:
+            del query_resources["samples"]
+
         stats = compute_stats(latencies)
         result["queries"][query_id] = {
             "latencies_ms": latencies,
             "rows": rows,
-            "stats": stats
+            "stats": stats,
+            "resources": query_resources
         }
-        print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+        print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms "
+              f"(RAM:{query_resources['mem_mb']['max']:.0f}MB CPU:{query_resources['cpu_pct']['avg']:.1f}%)")
 
     result["status"] = "completed"
     driver.close()
@@ -1097,21 +1285,25 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
     )
     import requests
 
+    container_name = "btb_oxigraph"
     endpoint = "http://localhost:7878"
 
     print_info("Connecting to Oxigraph...")
     wait_for_oxigraph(endpoint)
 
     try:
-        # Clear and load
+        # Clear and load with resource monitoring
         print_info("Clearing store...")
         clear_store(endpoint)
 
         print_info("Loading data...")
+        load_monitor = ResourceMonitor(container_name, interval_s=1.0)
+        load_monitor.start()
         load_start = time.time()
 
         jsonld_file = export_dir / "graph.jsonld"
         if not jsonld_file.exists():
+            load_monitor.stop()
             print_warn("graph.jsonld not found - need to regenerate dataset with rdf format")
             result["status"] = "error"
             result["error"] = "graph.jsonld not found - regenerate dataset"
@@ -1119,11 +1311,16 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
 
         load_jsonld(endpoint, jsonld_file)
         result["load_time_s"] = time.time() - load_start
+        result["load_resources"] = load_monitor.stop()
+        if "samples" in result["load_resources"]:
+            del result["load_resources"]["samples"]
 
         triples = count_triples(endpoint)
-        print_ok(f"Data loaded in {result['load_time_s']:.1f}s ({triples} triples)")
+        print_ok(f"Data loaded in {result['load_time_s']:.1f}s ({triples} triples) "
+                 f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
+                 f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
-        # Execute queries
+        # Execute queries with resource monitoring
         queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
         for query_id in queries_to_run:
             query_text = load_query(scenario, query_id)
@@ -1147,7 +1344,10 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                 except Exception:
                     pass
 
-            # Measured runs
+            # Measured runs with resource monitoring
+            query_monitor = ResourceMonitor(container_name, interval_s=0.2)
+            query_monitor.start()
+
             latencies = []
             rows = 0
             for run_idx in range(N_RUNS):
@@ -1168,13 +1368,19 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                 except Exception as e:
                     print_warn(f"Query error: {e}")
 
+            query_resources = query_monitor.stop()
+            if "samples" in query_resources:
+                del query_resources["samples"]
+
             stats = compute_stats(latencies)
             result["queries"][query_id] = {
                 "latencies_ms": latencies,
                 "rows": rows,
-                "stats": stats
+                "stats": stats,
+                "resources": query_resources
             }
-            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms "
+                  f"(RAM:{query_resources['mem_mb']['max']:.0f}MB CPU:{query_resources['cpu_pct']['avg']:.1f}%)")
 
         result["status"] = "completed"
 
