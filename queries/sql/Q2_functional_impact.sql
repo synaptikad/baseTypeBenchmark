@@ -3,7 +3,7 @@
 -- Benchmark: Reverse traversal (impact analysis pattern)
 
 WITH RECURSIVE impact_analysis AS (
-    -- Start from a random equipment (first one found)
+    -- Start from a single equipment (use subquery to avoid LIMIT in CTE base)
     SELECT
         n.id,
         n.type,
@@ -12,8 +12,7 @@ WITH RECURSIVE impact_analysis AS (
         1 as hop_distance,
         ARRAY[n.id] as impact_path
     FROM nodes n
-    WHERE n.type = 'Equipment'
-    LIMIT 1
+    WHERE n.id = (SELECT id FROM nodes WHERE type = 'Equipment' ORDER BY id LIMIT 1)
 
     UNION ALL
 

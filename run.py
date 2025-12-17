@@ -667,8 +667,9 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                     with conn.cursor() as cur:
                         cur.execute(query_text)
                         cur.fetchall()
+                    conn.commit()
                 except Exception:
-                    pass
+                    conn.rollback()
 
             # Measured runs
             latencies = []
@@ -680,8 +681,10 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                         cur.execute(query_text)
                         data = cur.fetchall()
                         rows = len(data)
+                    conn.commit()
                     latencies.append((time.perf_counter() - t0) * 1000)  # ms
                 except Exception as e:
+                    conn.rollback()
                     print_warn(f"Query error: {e}")
 
             stats = compute_stats(latencies)
