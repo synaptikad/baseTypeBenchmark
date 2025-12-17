@@ -1155,7 +1155,8 @@ def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
 def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
     """Run Memgraph benchmark (M1 or M2)."""
     from basetype_benchmark.loaders.memgraph.load import (
-        get_driver, load_constraints, load_nodes, load_edges, load_timeseries_chunks
+        get_driver, load_constraints, load_nodes, load_edges, load_timeseries_chunks,
+        LoadingTimeout, LoadingStalled
     )
 
     container_name = "btb_memgraph"
@@ -1213,7 +1214,28 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                  f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
                  f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
+    except LoadingStalled as e:
+        load_monitor.stop()
+        print_err(f"Memgraph loading STALLED (memory pressure): {e}")
+        dump_container_debug(container_name)
+        result["status"] = "stalled"
+        result["error"] = str(e)
+        result["error_type"] = "memory_pressure"
+        driver.close()
+        return result
+
+    except LoadingTimeout as e:
+        load_monitor.stop()
+        print_err(f"Memgraph loading TIMEOUT: {e}")
+        dump_container_debug(container_name)
+        result["status"] = "timeout"
+        result["error"] = str(e)
+        result["error_type"] = "timeout"
+        driver.close()
+        return result
+
     except Exception as e:
+        load_monitor.stop()
         print_err(f"Memgraph load error: {e}")
         dump_container_debug(container_name)
         result["status"] = "error"
@@ -1430,10 +1452,24 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, scale: str, resu
             # Run benchmark at this RAM level
             bench_result = run_scenario_benchmark(scenario, export_dir)
 
-            # Check for OOM
+            # Check for OOM (kernel kill)
             if check_container_oom(main_container):
                 print_warn(f"OOM detected at {current_ram}GB")
                 ram_results[current_ram] = {"status": "oom", "ram_gb": current_ram}
+                current_ram = _next_ram_level(current_ram)
+                stop_all_containers()
+                continue
+
+            # Check for stalled/timeout (memory pressure without OOM kill)
+            if bench_result["status"] in ("stalled", "timeout"):
+                print_warn(f"Loading {bench_result['status']} at {current_ram}GB - likely insufficient RAM")
+                ram_results[current_ram] = {
+                    "status": bench_result["status"],
+                    "error": bench_result.get("error"),
+                    "error_type": bench_result.get("error_type", "memory_pressure"),
+                    "ram_gb": current_ram
+                }
+                # Escalate to next RAM level
                 current_ram = _next_ram_level(current_ram)
                 stop_all_containers()
                 continue
@@ -1445,7 +1481,7 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, scale: str, resu
                     "error": bench_result.get("error"),
                     "ram_gb": current_ram
                 }
-                # For M/O, OOM might manifest as connection error
+                # For M/O, connection errors might indicate memory issues
                 if scenario.startswith(("M", "O")):
                     current_ram = _next_ram_level(current_ram)
                     stop_all_containers()
@@ -2011,6 +2047,10 @@ def _print_ram_gradient_summary(all_results: Dict, scale: str):
 
             if status == "oom":
                 row += f" {'OOM':<12} |"
+            elif status == "stalled":
+                row += f" {'STALL':<12} |"
+            elif status == "timeout":
+                row += f" {'TIMEOUT':<12} |"
             elif status == "completed":
                 queries = result.get("queries", {})
                 all_p95 = [q["stats"]["p95"] for q in queries.values()
