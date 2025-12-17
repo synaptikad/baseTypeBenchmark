@@ -11,6 +11,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
+    mem_limit: ${MEMORY_LIMIT:-8g}
+    memswap_limit: ${MEMORY_LIMIT:-8g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -24,6 +26,8 @@ services:
       - "7688:7687"
     volumes:
       - memgraph_data:/var/lib/memgraph
+    mem_limit: ${MEMORY_LIMIT:-8g}
+    memswap_limit: ${MEMORY_LIMIT:-8g}
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/7687'" ]
       interval: 10s
@@ -37,7 +41,8 @@ services:
       - "7878:7878"
     volumes:
       - oxigraph_data:/data
-    # No healthcheck - verify from host with curl
+    mem_limit: ${MEMORY_LIMIT:-8g}
+    memswap_limit: ${MEMORY_LIMIT:-8g}
     healthcheck:
       disable: true
 

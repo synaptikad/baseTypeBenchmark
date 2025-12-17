@@ -507,13 +507,25 @@ def start_containers_with_ram(containers: List[str], ram_gb: int) -> bool:
     stop_all_containers()
     print_info(f"Starting: {', '.join(containers)} with {ram_gb}GB RAM limit")
 
-    # Build docker compose command with memory limit
-    mem_limit = f"{ram_gb}g"
-    env_vars = f"MEMORY_LIMIT={mem_limit}"
+    # Set environment variable for docker-compose
+    import os
+    env = os.environ.copy()
+    env["MEMORY_LIMIT"] = f"{ram_gb}g"
 
-    cmd = f"{env_vars} docker compose up -d {' '.join(containers)}"
-    if not run_cmd(cmd, cwd=str(DOCKER_DIR)):
-        print_err("Failed to start containers")
+    try:
+        result = subprocess.run(
+            f"docker compose up -d {' '.join(containers)}",
+            shell=True,
+            cwd=str(DOCKER_DIR),
+            env=env,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print_err(f"Failed to start containers: {result.stderr}")
+            return False
+    except Exception as e:
+        print_err(f"Failed to start containers: {e}")
         return False
 
     # Short wait - actual connection retry is handled by loaders
@@ -522,6 +534,101 @@ def start_containers_with_ram(containers: List[str], ram_gb: int) -> bool:
     time.sleep(wait_time)
     print_ok(f"Containers started ({ram_gb}GB RAM, connection retry handled by loaders)")
     return True
+
+
+def get_container_stats(container_name: str) -> Optional[Dict]:
+    """Get memory and CPU stats for a container."""
+    try:
+        result = subprocess.run(
+            ["docker", "stats", "--no-stream", "--format",
+             "{{.MemUsage}},{{.MemPerc}},{{.CPUPerc}}",
+             container_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return None
+
+        parts = result.stdout.strip().split(",")
+        if len(parts) < 3:
+            return None
+
+        # Parse memory: "1.5GiB / 8GiB" -> extract used
+        mem_str = parts[0].split("/")[0].strip()
+        mem_mb = 0
+        if "GiB" in mem_str:
+            mem_mb = float(mem_str.replace("GiB", "").strip()) * 1024
+        elif "MiB" in mem_str:
+            mem_mb = float(mem_str.replace("MiB", "").strip())
+        elif "KiB" in mem_str:
+            mem_mb = float(mem_str.replace("KiB", "").strip()) / 1024
+
+        # Parse CPU: "25.5%" -> 25.5
+        cpu_pct = float(parts[2].replace("%", "").strip())
+
+        return {"mem_mb": mem_mb, "cpu_pct": cpu_pct}
+    except Exception:
+        return None
+
+
+def check_container_oom(container_name: str) -> bool:
+    """Check if container was killed by OOM."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.OOMKilled}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.stdout.strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def drop_caches() -> bool:
+    """Drop system caches (requires root on Linux)."""
+    try:
+        # This only works on Linux with root privileges
+        result = subprocess.run(
+            ["sudo", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches"],
+            capture_output=True,
+            timeout=5
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def collect_resource_samples(container_name: str, duration_s: float, interval_s: float = 1.0) -> Dict:
+    """Collect resource samples during query execution."""
+    samples = []
+    start = time.time()
+    while time.time() - start < duration_s:
+        stats = get_container_stats(container_name)
+        if stats:
+            samples.append(stats)
+        time.sleep(interval_s)
+
+    if not samples:
+        return {"steady_mem_mb": 0, "peak_mem_mb": 0, "avg_cpu_pct": 0}
+
+    mem_values = [s["mem_mb"] for s in samples]
+    cpu_values = [s["cpu_pct"] for s in samples]
+
+    return {
+        "steady_mem_mb": sorted(mem_values)[len(mem_values) // 2],  # median
+        "peak_mem_mb": max(mem_values),
+        "avg_cpu_pct": sum(cpu_values) / len(cpu_values)
+    }
+
+
+def is_performance_plateau(prev_p95: float, curr_p95: float, threshold_pct: float = 10.0) -> bool:
+    """Check if performance improvement is below threshold (plateau reached)."""
+    if prev_p95 <= 0:
+        return False
+    improvement = (prev_p95 - curr_p95) / prev_p95 * 100
+    return improvement < threshold_pct
 
 
 # =============================================================================
@@ -661,6 +768,9 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
 
             print(f"    {query_id}...", end=" ", flush=True)
 
+            # Drop caches before query (if root)
+            drop_caches()
+
             # Warmup
             for _ in range(N_WARMUP):
                 try:
@@ -674,7 +784,10 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             # Measured runs
             latencies = []
             rows = 0
-            for _ in range(N_RUNS):
+            for run_idx in range(N_RUNS):
+                # Drop caches between runs for fair measurement
+                if run_idx > 0:
+                    drop_caches()
                 try:
                     t0 = time.perf_counter()
                     with conn.cursor() as cur:
@@ -880,6 +993,9 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
 
             print(f"    {query_id}...", end=" ", flush=True)
 
+            # Drop caches before query
+            drop_caches()
+
             # Warmup
             for _ in range(N_WARMUP):
                 try:
@@ -891,7 +1007,9 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             # Measured runs
             latencies = []
             rows = 0
-            for _ in range(N_RUNS):
+            for run_idx in range(N_RUNS):
+                if run_idx > 0:
+                    drop_caches()
                 try:
                     t0 = time.perf_counter()
                     with driver.session() as session:
@@ -960,6 +1078,9 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
 
             print(f"    {query_id}...", end=" ", flush=True)
 
+            # Drop caches before query
+            drop_caches()
+
             # Warmup
             for _ in range(N_WARMUP):
                 try:
@@ -974,7 +1095,9 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             # Measured runs
             latencies = []
             rows = 0
-            for _ in range(N_RUNS):
+            for run_idx in range(N_RUNS):
+                if run_idx > 0:
+                    drop_caches()
                 try:
                     t0 = time.perf_counter()
                     resp = requests.get(
@@ -1008,12 +1131,109 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
 
 
 # =============================================================================
-# WORKFLOW: BENCHMARK
+# WORKFLOW: BENCHMARK (RAM-Gradient Protocol)
 # =============================================================================
 
+def run_ram_gradient_benchmark(scenario: str, export_dir: Path, scale: str, results_dir: Path) -> Dict:
+    """Run RAM-Gradient benchmark for a scenario.
+
+    Protocol:
+    - P1/P2: Start from min RAM, iterate up until performance plateau
+    - M/O: Start from min RAM, escalate on OOM, continue to plateau
+
+    Returns dict with results per RAM level.
+    """
+    strategy = get_ram_strategy(scenario, scale)
+    containers = SCENARIOS[scenario]["containers"]
+    main_container = f"btb_{containers[0]}"
+
+    ram_results = {}
+    prev_p95 = float('inf')
+    current_ram = strategy["start_ram"]
+
+    print_info(f"RAM Strategy: {strategy['description']}")
+    print_info(f"Starting RAM: {current_ram}GB, Max: {strategy['max_ram']}GB")
+
+    while current_ram <= strategy["max_ram"]:
+        print(f"\n{BOLD}--- Testing {scenario} @ {current_ram}GB RAM ---{RESET}")
+
+        # Start containers with RAM limit
+        if not start_containers_with_ram(containers, current_ram):
+            ram_results[current_ram] = {"status": "container_failed"}
+            current_ram = _next_ram_level(current_ram)
+            continue
+
+        try:
+            # Run benchmark at this RAM level
+            bench_result = run_scenario_benchmark(scenario, export_dir)
+
+            # Check for OOM
+            if check_container_oom(main_container):
+                print_warn(f"OOM detected at {current_ram}GB")
+                ram_results[current_ram] = {"status": "oom", "ram_gb": current_ram}
+                current_ram = _next_ram_level(current_ram)
+                stop_all_containers()
+                continue
+
+            if bench_result["status"] != "completed":
+                print_err(f"Benchmark failed: {bench_result.get('error', 'unknown')}")
+                ram_results[current_ram] = {
+                    "status": "error",
+                    "error": bench_result.get("error"),
+                    "ram_gb": current_ram
+                }
+                # For M/O, OOM might manifest as connection error
+                if scenario.startswith(("M", "O")):
+                    current_ram = _next_ram_level(current_ram)
+                    stop_all_containers()
+                    continue
+                break
+
+            # Collect resource metrics
+            resources = get_container_stats(main_container)
+            bench_result["resources"] = resources
+            bench_result["ram_gb"] = current_ram
+
+            # Calculate avg p95
+            all_p95 = [q["stats"]["p95"] for q in bench_result["queries"].values()
+                       if q.get("stats") and q["stats"].get("p95")]
+            avg_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
+
+            ram_results[current_ram] = bench_result
+            print_ok(f"{scenario} @ {current_ram}GB: avg p95={avg_p95:.1f}ms")
+
+            # Check for plateau
+            if is_performance_plateau(prev_p95, avg_p95, PERF_PLATEAU_THRESHOLD):
+                print_info(f"Performance plateau reached at {current_ram}GB (improvement < {PERF_PLATEAU_THRESHOLD}%)")
+                break
+
+            prev_p95 = avg_p95
+
+        except Exception as e:
+            print_err(f"Error at {current_ram}GB: {e}")
+            ram_results[current_ram] = {"status": "error", "error": str(e), "ram_gb": current_ram}
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            stop_all_containers()
+
+        current_ram = _next_ram_level(current_ram)
+
+    return ram_results
+
+
+def _next_ram_level(current: int) -> int:
+    """Get next RAM level to test."""
+    for level in RAM_LEVELS:
+        if level > current:
+            return level
+    return current * 2  # Beyond defined levels, double
+
+
 def workflow_benchmark():
-    """Benchmark execution workflow."""
-    print_header("BENCHMARK EXECUTION")
+    """Benchmark execution workflow with RAM-Gradient protocol."""
+    print_header("BENCHMARK EXECUTION (RAM-Gradient Protocol)")
 
     # Check datasets
     available = get_available_profiles()
@@ -1040,19 +1260,27 @@ def workflow_benchmark():
         print_err("Invalid choice")
         return
 
+    scale = get_scale_from_profile(dataset)
+
     # Select engines
     scenarios = select_engines()
     if not scenarios:
         return
 
     # Confirm
-    print_header("CONFIRM")
-    print(f"Dataset:   {dataset}")
+    print_header("CONFIRM RAM-GRADIENT PROTOCOL")
+    print(f"Dataset:   {dataset} (scale: {scale})")
     print(f"Engines:   {', '.join(scenarios)}")
-    print(f"\nProtocol per engine:")
-    print(f"  - {N_WARMUP} warmup runs (not counted)")
+    print(f"\n{BOLD}RAM-Gradient Protocol:{RESET}")
+    print(f"  - RAM levels: {RAM_LEVELS} GB")
+    print(f"  - P1/P2: Start min, iterate to plateau")
+    print(f"  - M/O: Start min, escalate on OOM, then plateau")
+    print(f"  - Plateau threshold: {PERF_PLATEAU_THRESHOLD}% improvement")
+    print(f"\n{BOLD}Per RAM level:{RESET}")
+    print(f"  - {N_WARMUP} warmup runs")
     print(f"  - {N_RUNS} measured runs per query")
-    print(f"  - Metrics: p50, p95, min, max latency")
+    print(f"  - drop_caches between queries (if root)")
+    print(f"  - Metrics: p50, p95, RAM steady/peak, CPU")
 
     if not prompt_yes_no("\nStart benchmark?"):
         return
@@ -1064,135 +1292,105 @@ def workflow_benchmark():
         input("\nPress Enter...")
         return
 
-    # Check what formats are available
+    # Check formats
     has_csv = (export_dir / "nodes.csv").exists()
     has_json = (export_dir / "nodes.json").exists()
     has_jsonld = (export_dir / "graph.jsonld").exists()
 
-    print_info(f"Export formats available:")
-    print(f"  CSV (PostgreSQL): {'yes' if has_csv else 'no'}")
-    print(f"  JSON (Memgraph):  {'yes' if has_json else 'no'}")
-    print(f"  JSON-LD (Oxigraph): {'yes' if has_jsonld else 'no'}")
+    print_info(f"Export formats: CSV={has_csv}, JSON={has_json}, JSON-LD={has_jsonld}")
 
-    # Warn if missing formats
-    missing = []
-    for s in scenarios:
-        if s.startswith("P") and not has_csv:
-            missing.append(f"{s} needs CSV")
-        elif s.startswith("M") and not has_json:
-            missing.append(f"{s} needs JSON")
-        elif s.startswith("O") and not has_jsonld:
-            missing.append(f"{s} needs JSON-LD")
-
-    if missing:
-        print_warn("Missing export formats:")
-        for m in missing:
-            print(f"  - {m}")
-        print_info("Regenerate dataset to include all formats")
-        if not prompt_yes_no("Continue anyway?", False):
-            return
-
-    # Run benchmarks
+    # Create results directory
     results_dir = Path("benchmark_results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    results = {}
+    all_results = {}
 
     for scenario in scenarios:
-        print_header(f"RUNNING {scenario}: {SCENARIOS[scenario]['name']}")
+        print_header(f"RAM-GRADIENT: {scenario} ({SCENARIOS[scenario]['name']})")
 
-        containers = SCENARIOS[scenario]["containers"]
+        ram_results = run_ram_gradient_benchmark(scenario, export_dir, scale, results_dir)
+        all_results[scenario] = ram_results
 
-        if not start_containers(containers):
-            results[scenario] = {"status": "error", "error": "Container start failed"}
-            continue
+        # Save intermediate results
+        with open(results_dir / f"{scenario}_ram_gradient.json", 'w') as f:
+            json.dump(ram_results, f, indent=2, default=str)
 
-        try:
-            bench_result = run_scenario_benchmark(scenario, export_dir)
-            results[scenario] = bench_result
-
-            if bench_result["status"] == "completed":
-                # Calculate overall stats
-                all_p95 = [q["stats"]["p95"] for q in bench_result["queries"].values() if q.get("stats")]
-                overall_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
-
-                print_ok(f"{scenario} completed: {len(bench_result['queries'])} queries, avg p95={overall_p95:.1f}ms")
-            else:
-                print_err(f"{scenario} failed: {bench_result.get('error', 'unknown')}")
-
-        except Exception as e:
-            results[scenario] = {"status": "error", "error": str(e)}
-            print_err(f"{scenario} error: {e}")
-
-        finally:
-            stop_all_containers()
-
-    # Save results
+    # Save final summary
     with open(results_dir / "summary.json", 'w') as f:
         json.dump({
             "dataset": dataset,
-            "scenarios": results,
-            "protocol": {"warmup": N_WARMUP, "runs": N_RUNS},
+            "scale": scale,
+            "scenarios": all_results,
+            "protocol": {
+                "ram_levels": RAM_LEVELS,
+                "warmup": N_WARMUP,
+                "runs": N_RUNS,
+                "plateau_threshold": PERF_PLATEAU_THRESHOLD
+            },
             "timestamp": datetime.now().isoformat()
         }, f, indent=2, default=str)
 
-    # Print summary table
-    print_header("RESULTS SUMMARY")
+    # Print summary
+    print_header("RAM-GRADIENT RESULTS")
+    _print_ram_gradient_summary(all_results, scale)
 
-    print(f"\n{BOLD}Benchmark Results:{RESET}")
-    header = f"{'Scenario':<8} | {'Status':<10} | {'Load(s)':<10} | {'Queries':<8} | {'Avg p95(ms)':<12}"
+    print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
+    input("\nPress Enter...")
+
+
+def _print_ram_gradient_summary(all_results: Dict, scale: str):
+    """Print RAM-Gradient summary table."""
+    print(f"\n{BOLD}RAM × Scenario Matrix (avg p95 in ms):{RESET}\n")
+
+    # Header
+    scenarios = list(all_results.keys())
+    header = f"{'RAM(GB)':<10} |" + "".join(f" {s:<12} |" for s in scenarios)
     sep = "-" * len(header)
 
     print(sep)
     print(header)
     print(sep)
 
-    for s, r in results.items():
-        if r.get("status") == "completed":
-            queries = r.get("queries", {})
-            all_p95 = [q["stats"]["p95"] for q in queries.values() if q.get("stats")]
-            avg_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
-            print(f"{s:<8} | {GREEN}OK{RESET}        | {r.get('load_time_s', 0):<10.1f} | {len(queries):<8} | {avg_p95:<12.1f}")
-        else:
-            err = str(r.get("error", "unknown"))[:20]
-            print(f"{s:<8} | {RED}FAIL{RESET}      | {'-':<10} | {'-':<8} | {err:<12}")
+    # Find all RAM levels tested
+    all_rams = set()
+    for scenario_results in all_results.values():
+        all_rams.update(scenario_results.keys())
+    all_rams = sorted(all_rams)
+
+    for ram in all_rams:
+        row = f"{ram:<10} |"
+        for scenario in scenarios:
+            result = all_results.get(scenario, {}).get(ram, {})
+            status = result.get("status", "")
+
+            if status == "oom":
+                row += f" {'OOM':<12} |"
+            elif status == "completed":
+                queries = result.get("queries", {})
+                all_p95 = [q["stats"]["p95"] for q in queries.values()
+                           if q.get("stats") and q["stats"].get("p95")]
+                avg_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
+                row += f" {avg_p95:<12.1f} |"
+            elif status == "error":
+                row += f" {'ERR':<12} |"
+            else:
+                row += f" {'-':<12} |"
+        print(row)
 
     print(sep)
 
-    # Query breakdown
-    completed = {s: r for s, r in results.items() if r.get("status") == "completed"}
-    if completed:
-        print(f"\n{BOLD}Query Performance (p95 in ms):{RESET}")
-
-        # Get all query IDs
-        all_queries = set()
-        for r in completed.values():
-            all_queries.update(r.get("queries", {}).keys())
-        all_queries = sorted(all_queries)
-
-        if all_queries:
-            q_header = f"{'Scenario':<8} |" + "".join(f" {q:<8} |" for q in all_queries)
-            q_sep = "-" * len(q_header)
-            print(q_sep)
-            print(q_header)
-            print(q_sep)
-
-            for s, r in completed.items():
-                row = f"{s:<8} |"
-                for q in all_queries:
-                    qdata = r.get("queries", {}).get(q, {})
-                    stats = qdata.get("stats", {})
-                    p95 = stats.get("p95", 0)
-                    if p95:
-                        row += f" {p95:<8.1f} |"
-                    else:
-                        row += f" {'N/A':<8} |"
-                print(row)
-
-            print(q_sep)
-
-    print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
-    input("\nPress Enter...")
+    # RAM_min per scenario
+    print(f"\n{BOLD}RAM_min (smallest RAM without OOM/degradation):{RESET}")
+    for scenario, results in all_results.items():
+        ram_min = None
+        for ram in sorted(results.keys()):
+            if results[ram].get("status") == "completed":
+                ram_min = ram
+                break
+        if ram_min:
+            print(f"  {scenario}: {ram_min} GB")
+        else:
+            print(f"  {scenario}: N/A (all failed)")
 
 
 # =============================================================================
