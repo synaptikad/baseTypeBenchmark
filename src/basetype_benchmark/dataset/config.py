@@ -294,18 +294,22 @@ SAMPLES_PER_DAY = {
     "minute": 1440,
 }
 
-# Ratio de points avec timeseries (tous sauf fixed)
-TIMESERIES_RATIO = 0.70
-"""70% des points génèrent des timeseries (event_rare + hourly + quarter_hour + minute)."""
+# Ratio de points avec timeseries CONTINUES (seulement mesures régulières)
+# Les événements rares (alarmes, états, accès) ne génèrent PAS de timeseries continues
+TIMESERIES_RATIO = 0.45
+"""45% des points génèrent des timeseries continues (hourly + quarter_hour + fast)."""
 
-# Moyenne pondérée de samples/jour pour estimation
+# Moyenne pondérée de samples/jour pour les points avec TS continues
+# Distribution réaliste:
+# - 20% hourly (24 samples/jour)
+# - 20% quarter_hour (96 samples/jour)
+# - 5% fast/minute (288 samples/jour)
 AVERAGE_SAMPLES_PER_DAY = (
-    0.25 * 5 +      # event_rare
-    0.20 * 24 +     # hourly
-    0.20 * 96 +     # quarter_hour
-    0.05 * 1440     # minute
-) / 0.70  # Normalisé sur les 70% qui ont des TS
-# = (1.25 + 4.8 + 19.2 + 72) / 0.70 ≈ 139 samples/jour/point avec TS
+    0.20 * 24 +       # hourly (compteurs énergie)
+    0.20 * 96 +       # quarter_hour (température, CO2, etc.)
+    0.05 * 288        # fast 5min (IT monitoring)
+) / 0.45  # Normalisé sur les 45% qui ont des TS continues
+# = (4.8 + 19.2 + 14.4) / 0.45 ≈ 85 samples/jour/point avec TS
 
 
 # =============================================================================

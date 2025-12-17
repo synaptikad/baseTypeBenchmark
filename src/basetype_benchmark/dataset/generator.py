@@ -1088,7 +1088,12 @@ def _generate_timeseries(
     profile: ScaleProfile,
     rng: Random
 ) -> List[TimeseriesChunk]:
-    """Génère les séries temporelles pour les points sélectionnés."""
+    """Génère les séries temporelles pour les points sélectionnés.
+
+    Seuls les points avec des mesures continues (fréquence > 0) génèrent
+    des timeseries. Les événements rares (alarmes, états, accès) n'ont pas
+    de timeseries régulières.
+    """
     timeseries: List[TimeseriesChunk] = []
 
     start_time = int((datetime.now() - timedelta(days=profile.duration_days)).timestamp())
@@ -1102,6 +1107,11 @@ def _generate_timeseries(
             continue
 
         frequency_minutes = _get_sampling_frequency(quantity)
+
+        # Skip event-based quantities (frequency = 0)
+        if frequency_minutes == 0:
+            continue
+
         values = _generate_values(quantity, profile.duration_days, frequency_minutes, rng)
 
         chunk = TimeseriesChunk(
@@ -1117,16 +1127,65 @@ def _generate_timeseries(
 
 
 def _get_sampling_frequency(quantity: str) -> int:
-    """Fréquence d'échantillonnage en minutes."""
-    frequencies = {
-        "temperature": 15, "humidity": 15, "co2": 15, "pressure": 30,
-        "power": 15, "energy": 15, "voltage": 30, "current": 30,
-        "flow": 15, "illuminance": 30, "noise_level": 60,
-        "cpu_usage": 5, "memory_usage": 5, "disk_usage": 60,
-        "network_throughput": 5, "network_latency": 5,
-        "charging_power": 15, "people_count": 15, "air_quality": 30,
+    """Fréquence d'échantillonnage en minutes selon le type de quantité.
+
+    Classification réaliste smart building:
+    - Mesures continues (15min): température, CO2, humidité, puissance
+    - Compteurs énergie (60min): kWh, m³
+    - Mesures IT rapides (5min): CPU, RAM, réseau
+    - Événements rares: retourne 0 (pas de timeseries régulières)
+    """
+    # Mesures continues - 15 min (96 samples/jour)
+    continuous_15min = {
+        "temperature", "humidity", "co2", "air_quality",
+        "power", "flow", "people_count", "charging_power",
     }
-    return frequencies.get(quantity, 60)
+
+    # Mesures moyennes - 30 min (48 samples/jour)
+    continuous_30min = {
+        "pressure", "illuminance", "voltage", "current",
+    }
+
+    # Compteurs énergie - 60 min (24 samples/jour)
+    hourly = {
+        "energy", "water_consumption", "gas_consumption", "thermal_energy",
+    }
+
+    # IT/SCADA rapide - 5 min (288 samples/jour)
+    fast_5min = {
+        "cpu_usage", "memory_usage", "network_throughput", "network_latency",
+    }
+
+    # IT lent - 60 min
+    slow_hourly = {
+        "disk_usage", "noise_level",
+    }
+
+    # Événements rares - PAS de timeseries continues
+    # Ces quantités génèrent des événements discrets, pas des séries régulières
+    event_based = {
+        "status", "command", "setpoint", "mode", "alarm_state",
+        "occupancy", "presence", "workspace_status", "space_reservation_status",
+        "access_event", "intrusion_status", "camera_status", "ssi_status",
+        "spot_status", "av_status", "display_status", "asset_status",
+        "maintenance_due", "battery_level", "runtime_hours", "audio_level",
+        "power_factor", "frequency",
+    }
+
+    if quantity in continuous_15min:
+        return 15
+    elif quantity in continuous_30min:
+        return 30
+    elif quantity in hourly:
+        return 60
+    elif quantity in fast_5min:
+        return 5
+    elif quantity in slow_hourly:
+        return 60
+    elif quantity in event_based:
+        return 0  # Pas de timeseries régulières
+    else:
+        return 60  # Défaut: horaire
 
 
 def _generate_values(quantity: str, duration_days: int, freq_minutes: int, rng: Random) -> List[float]:
