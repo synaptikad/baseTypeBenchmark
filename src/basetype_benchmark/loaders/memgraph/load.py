@@ -12,9 +12,48 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ServiceUnavailable
+
+
+def get_driver(
+    uri: str = "bolt://localhost:7688",
+    auth: Optional[tuple] = None,
+    max_retries: int = 10,
+    retry_delay: float = 3.0
+):
+    """Create a Memgraph driver with retry logic.
+
+    Args:
+        uri: Bolt URI (default uses port 7688 as mapped in docker-compose)
+        auth: Optional (user, password) tuple
+        max_retries: Maximum connection attempts
+        retry_delay: Seconds to wait between retries
+
+    Returns:
+        Neo4j driver object
+
+    Raises:
+        ServiceUnavailable: If connection fails after all retries
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            driver = GraphDatabase.driver(uri, auth=auth)
+            # Test connection
+            with driver.session() as session:
+                session.run("RETURN 1")
+            return driver
+        except (ServiceUnavailable, Exception) as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                print(f"[INFO] Memgraph not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                print(f"[ERROR] Memgraph connection failed after {max_retries} attempts: {e}")
+    raise last_error
 
 
 def iter_json_lines(path: Path) -> Iterable[Dict[str, str]]:
@@ -205,7 +244,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--uri",
         default="bolt://localhost:7688",
-        help="URI Bolt Memgraph (par défaut bolt://localhost:7688)",
+        help="URI Bolt Memgraph (port 7688 mapped from container's 7687)",
     )
     parser.add_argument("--user", default=None, help="Utilisateur Memgraph si l'authentification est activée")
     parser.add_argument("--password", default=None, help="Mot de passe Memgraph si l'authentification est activée")
@@ -238,7 +277,7 @@ def main() -> None:
     if args.user is not None and args.password is not None:
         auth = (args.user, args.password)
 
-    driver = GraphDatabase.driver(args.uri, auth=auth)
+    driver = get_driver(args.uri, auth=auth)
     with driver.session() as session:
         load_constraints(session)
         load_nodes(session, args.nodes_file, args.batch_size)

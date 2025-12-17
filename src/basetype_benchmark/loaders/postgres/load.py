@@ -22,16 +22,46 @@ def get_connection(
     port: int = 5432,
     user: str = "benchmark",
     password: str = "benchmark",
-    database: str = "benchmark"
+    database: str = "benchmark",
+    max_retries: int = 10,
+    retry_delay: float = 3.0
 ):
-    """Create a PostgreSQL connection."""
-    return psycopg2.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database
-    )
+    """Create a PostgreSQL connection with retry logic.
+
+    Args:
+        host: PostgreSQL host
+        port: PostgreSQL port
+        user: PostgreSQL user
+        password: PostgreSQL password
+        database: PostgreSQL database
+        max_retries: Maximum connection attempts
+        retry_delay: Seconds to wait between retries
+
+    Returns:
+        psycopg2 connection object
+
+    Raises:
+        psycopg2.OperationalError: If connection fails after all retries
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            conn = psycopg2.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=database
+            )
+            return conn
+        except psycopg2.OperationalError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                print(f"[INFO] PostgreSQL not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                print(f"[ERROR] PostgreSQL connection failed after {max_retries} attempts")
+    raise last_error
 
 
 def clear_database(conn) -> None:

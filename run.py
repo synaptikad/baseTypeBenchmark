@@ -525,6 +525,486 @@ def start_containers_with_ram(containers: List[str], ram_gb: int) -> bool:
 
 
 # =============================================================================
+# BENCHMARK EXECUTION ENGINE
+# =============================================================================
+
+# Queries by scenario
+QUERIES_BY_SCENARIO = {
+    "P1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
+    "P2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
+    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5"],  # No timeseries queries
+    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + hybrid Q8
+    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5"],  # No timeseries queries
+    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + hybrid Q8
+}
+
+# Benchmark protocol
+N_WARMUP = 3
+N_RUNS = 10
+
+QUERIES_DIR = Path(__file__).parent / "queries"
+
+
+def load_query(scenario: str, query_id: str) -> Optional[str]:
+    """Load query text for a scenario."""
+    if scenario.startswith("P"):
+        query_dir = QUERIES_DIR / "sql"
+        ext = "sql"
+    elif scenario.startswith("M"):
+        query_dir = QUERIES_DIR / "cypher"
+        ext = "cypher"
+    elif scenario.startswith("O"):
+        query_dir = QUERIES_DIR / "sparql"
+        ext = "sparql"
+    else:
+        return None
+
+    # Find query file
+    for f in query_dir.glob(f"{query_id}_*.{ext}"):
+        return f.read_text(encoding="utf-8")
+    return None
+
+
+def compute_stats(latencies: List[float]) -> Dict:
+    """Compute latency statistics."""
+    import statistics
+    if not latencies:
+        return {"p50": 0, "p95": 0, "min": 0, "max": 0, "avg": 0}
+
+    sorted_lat = sorted(latencies)
+    p95_idx = int(len(sorted_lat) * 0.95)
+
+    return {
+        "p50": statistics.median(latencies),
+        "p95": sorted_lat[min(p95_idx, len(sorted_lat) - 1)],
+        "min": min(latencies),
+        "max": max(latencies),
+        "avg": statistics.mean(latencies)
+    }
+
+
+def run_scenario_benchmark(scenario: str, export_dir: Path) -> Dict:
+    """Run benchmark for a single scenario using existing loaders.
+
+    Args:
+        scenario: P1, P2, M1, M2, O1, O2
+        export_dir: Path to exported dataset
+
+    Returns:
+        Dict with benchmark results
+    """
+    result = {
+        "scenario": scenario,
+        "status": "pending",
+        "load_time_s": 0.0,
+        "queries": {},
+        "error": None
+    }
+
+    start_total = time.time()
+
+    try:
+        if scenario in ["P1", "P2"]:
+            result = _run_postgres_benchmark(scenario, export_dir, result)
+        elif scenario in ["M1", "M2"]:
+            result = _run_memgraph_benchmark(scenario, export_dir, result)
+        elif scenario in ["O1", "O2"]:
+            result = _run_oxigraph_benchmark(scenario, export_dir, result)
+        else:
+            result["status"] = "error"
+            result["error"] = f"Unknown scenario: {scenario}"
+
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+        import traceback
+        traceback.print_exc()
+
+    result["total_time_s"] = time.time() - start_total
+    return result
+
+
+def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
+    """Run PostgreSQL benchmark (P1 or P2)."""
+    from basetype_benchmark.loaders.postgres.load import (
+        get_connection, clear_database, load_p1, load_p2
+    )
+
+    print_info(f"Connecting to PostgreSQL...")
+    conn = get_connection()
+
+    try:
+        # Clear and load
+        print_info("Clearing database...")
+        clear_database(conn)
+
+        print_info(f"Loading data ({scenario} schema)...")
+        load_start = time.time()
+
+        # The loaders expect JSON files, but we have CSV - need adapter
+        # For now, use CSV directly with psycopg2
+        if scenario == "P1":
+            load_result = _load_postgres_from_csv(conn, export_dir, "relational")
+        else:
+            load_result = _load_postgres_from_csv(conn, export_dir, "jsonb")
+
+        result["load_time_s"] = time.time() - load_start
+        print_ok(f"Data loaded in {result['load_time_s']:.1f}s")
+
+        # Execute queries
+        queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
+        for query_id in queries_to_run:
+            query_text = load_query(scenario, query_id)
+            if not query_text:
+                print_warn(f"Query {query_id} not found, skipping")
+                continue
+
+            print(f"    {query_id}...", end=" ", flush=True)
+
+            # Warmup
+            for _ in range(N_WARMUP):
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(query_text)
+                        cur.fetchall()
+                except Exception:
+                    pass
+
+            # Measured runs
+            latencies = []
+            rows = 0
+            for _ in range(N_RUNS):
+                try:
+                    t0 = time.perf_counter()
+                    with conn.cursor() as cur:
+                        cur.execute(query_text)
+                        data = cur.fetchall()
+                        rows = len(data)
+                    latencies.append((time.perf_counter() - t0) * 1000)  # ms
+                except Exception as e:
+                    print_warn(f"Query error: {e}")
+
+            stats = compute_stats(latencies)
+            result["queries"][query_id] = {
+                "latencies_ms": latencies,
+                "rows": rows,
+                "stats": stats
+            }
+            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+
+        result["status"] = "completed"
+
+    finally:
+        conn.close()
+
+    return result
+
+
+def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
+    """Load PostgreSQL from CSV files."""
+    from psycopg2.extras import execute_batch
+
+    cur = conn.cursor()
+
+    # Create schema
+    cur.execute("DROP TABLE IF EXISTS timeseries CASCADE")
+    cur.execute("DROP TABLE IF EXISTS edges CASCADE")
+    cur.execute("DROP TABLE IF EXISTS nodes CASCADE")
+
+    # Nodes table
+    cur.execute("""
+        CREATE TABLE nodes (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            name TEXT,
+            building_id INTEGER DEFAULT 0,
+            data JSONB DEFAULT '{}'
+        )
+    """)
+
+    # Edges table (no FK for performance)
+    cur.execute("""
+        CREATE TABLE edges (
+            src_id TEXT NOT NULL,
+            dst_id TEXT NOT NULL,
+            rel_type TEXT NOT NULL,
+            PRIMARY KEY (src_id, dst_id, rel_type)
+        )
+    """)
+
+    # Timeseries table
+    cur.execute("""
+        CREATE TABLE timeseries (
+            time TIMESTAMPTZ NOT NULL,
+            point_id TEXT NOT NULL,
+            value DOUBLE PRECISION
+        )
+    """)
+
+    # Try to create hypertable
+    try:
+        cur.execute("SELECT create_hypertable('timeseries', 'time', if_not_exists => TRUE)")
+    except Exception:
+        pass
+
+    # Create indexes
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_src_rel ON edges(src_id, rel_type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst_rel ON edges(dst_id, rel_type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
+
+    conn.commit()
+
+    # Load nodes from CSV
+    import csv
+    nodes_file = export_dir / "nodes.csv"
+    if nodes_file.exists():
+        with open(nodes_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            batch = []
+            for row in reader:
+                batch.append((
+                    row['id'],
+                    row['type'],
+                    row.get('name', ''),
+                    int(row['building_id']) if row.get('building_id') else 0,
+                    row.get('data', '{}')
+                ))
+                if len(batch) >= 1000:
+                    execute_batch(cur, """
+                        INSERT INTO nodes (id, type, name, building_id, data)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                    """, batch)
+                    conn.commit()
+                    batch.clear()
+            if batch:
+                execute_batch(cur, """
+                    INSERT INTO nodes (id, type, name, building_id, data)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, batch)
+                conn.commit()
+
+    # Load edges from CSV
+    edges_file = export_dir / "edges.csv"
+    if edges_file.exists():
+        with open(edges_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            batch = []
+            for row in reader:
+                batch.append((row['src_id'], row['dst_id'], row['rel_type']))
+                if len(batch) >= 1000:
+                    execute_batch(cur, """
+                        INSERT INTO edges (src_id, dst_id, rel_type)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT DO NOTHING
+                    """, batch)
+                    conn.commit()
+                    batch.clear()
+            if batch:
+                execute_batch(cur, """
+                    INSERT INTO edges (src_id, dst_id, rel_type)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, batch)
+                conn.commit()
+
+    # Load timeseries from CSV (use COPY for performance)
+    ts_file = export_dir / "timeseries.csv"
+    if ts_file.exists():
+        with open(ts_file, 'r', encoding='utf-8') as f:
+            cur.copy_expert(
+                "COPY timeseries (time, point_id, value) FROM STDIN WITH CSV HEADER",
+                f
+            )
+        conn.commit()
+
+    cur.close()
+    return {"nodes": True, "edges": True, "timeseries": True}
+
+
+def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
+    """Run Memgraph benchmark (M1 or M2)."""
+    from basetype_benchmark.loaders.memgraph.load import (
+        get_driver, load_constraints, load_nodes, load_edges, load_timeseries_chunks
+    )
+
+    print_info("Connecting to Memgraph...")
+    driver = get_driver()
+
+    try:
+        # Clear and load
+        print_info("Clearing database...")
+        with driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n")
+
+        print_info("Loading data...")
+        load_start = time.time()
+
+        with driver.session() as session:
+            load_constraints(session)
+
+            nodes_file = export_dir / "nodes.json"
+            edges_file = export_dir / "edges.json"
+            chunks_file = export_dir / "timeseries_chunks.json"
+
+            if nodes_file.exists():
+                load_nodes(session, nodes_file, batch_size=1000)
+            else:
+                print_warn("nodes.json not found - need to regenerate dataset with graph format")
+                result["status"] = "error"
+                result["error"] = "nodes.json not found - regenerate dataset"
+                return result
+
+            if edges_file.exists():
+                load_edges(session, edges_file, batch_size=1000)
+
+            if scenario == "M2" and chunks_file.exists():
+                load_timeseries_chunks(session, chunks_file, batch_size=1000)
+
+        result["load_time_s"] = time.time() - load_start
+        print_ok(f"Data loaded in {result['load_time_s']:.1f}s")
+
+        # Execute queries
+        queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
+        for query_id in queries_to_run:
+            query_text = load_query(scenario, query_id)
+            if not query_text:
+                print_warn(f"Query {query_id} not found, skipping")
+                continue
+
+            print(f"    {query_id}...", end=" ", flush=True)
+
+            # Warmup
+            for _ in range(N_WARMUP):
+                try:
+                    with driver.session() as session:
+                        list(session.run(query_text))
+                except Exception:
+                    pass
+
+            # Measured runs
+            latencies = []
+            rows = 0
+            for _ in range(N_RUNS):
+                try:
+                    t0 = time.perf_counter()
+                    with driver.session() as session:
+                        records = list(session.run(query_text))
+                        rows = len(records)
+                    latencies.append((time.perf_counter() - t0) * 1000)  # ms
+                except Exception as e:
+                    print_warn(f"Query error: {e}")
+
+            stats = compute_stats(latencies)
+            result["queries"][query_id] = {
+                "latencies_ms": latencies,
+                "rows": rows,
+                "stats": stats
+            }
+            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+
+        result["status"] = "completed"
+
+    finally:
+        driver.close()
+
+    return result
+
+
+def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
+    """Run Oxigraph benchmark (O1 or O2)."""
+    from basetype_benchmark.loaders.oxigraph.load import (
+        wait_for_oxigraph, clear_store, load_jsonld, count_triples
+    )
+    import requests
+
+    endpoint = "http://localhost:7878"
+
+    print_info("Connecting to Oxigraph...")
+    wait_for_oxigraph(endpoint)
+
+    try:
+        # Clear and load
+        print_info("Clearing store...")
+        clear_store(endpoint)
+
+        print_info("Loading data...")
+        load_start = time.time()
+
+        jsonld_file = export_dir / "graph.jsonld"
+        if not jsonld_file.exists():
+            print_warn("graph.jsonld not found - need to regenerate dataset with rdf format")
+            result["status"] = "error"
+            result["error"] = "graph.jsonld not found - regenerate dataset"
+            return result
+
+        load_jsonld(endpoint, jsonld_file)
+        result["load_time_s"] = time.time() - load_start
+
+        triples = count_triples(endpoint)
+        print_ok(f"Data loaded in {result['load_time_s']:.1f}s ({triples} triples)")
+
+        # Execute queries
+        queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
+        for query_id in queries_to_run:
+            query_text = load_query(scenario, query_id)
+            if not query_text:
+                print_warn(f"Query {query_id} not found, skipping")
+                continue
+
+            print(f"    {query_id}...", end=" ", flush=True)
+
+            # Warmup
+            for _ in range(N_WARMUP):
+                try:
+                    requests.get(
+                        f"{endpoint}/query",
+                        params={"query": query_text},
+                        timeout=60
+                    )
+                except Exception:
+                    pass
+
+            # Measured runs
+            latencies = []
+            rows = 0
+            for _ in range(N_RUNS):
+                try:
+                    t0 = time.perf_counter()
+                    resp = requests.get(
+                        f"{endpoint}/query",
+                        params={"query": query_text},
+                        headers={"Accept": "application/sparql-results+json"},
+                        timeout=60
+                    )
+                    latencies.append((time.perf_counter() - t0) * 1000)  # ms
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        rows = len(data.get("results", {}).get("bindings", []))
+                except Exception as e:
+                    print_warn(f"Query error: {e}")
+
+            stats = compute_stats(latencies)
+            result["queries"][query_id] = {
+                "latencies_ms": latencies,
+                "rows": rows,
+                "stats": stats
+            }
+            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+
+        result["status"] = "completed"
+
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+
+    return result
+
+
+# =============================================================================
 # WORKFLOW: BENCHMARK
 # =============================================================================
 
@@ -544,11 +1024,7 @@ def workflow_benchmark():
     # Select dataset
     for i, ds in enumerate(available, 1):
         size = SIZE_ESTIMATES.get(ds, "?")
-        extractable = get_extractable_profiles(ds)
-        extract_info = ""
-        if extractable:
-            extract_info = f" {DIM}(can extract: {', '.join(extractable[:3])}{'...' if len(extractable) > 3 else ''}){RESET}"
-        print(f"  {i}. {ds} (~{size} GB){extract_info}")
+        print(f"  {i}. {ds} (~{size} GB)")
     print(f"\n  0. Back")
 
     choice = prompt("\nSelect dataset", "1")
@@ -556,112 +1032,64 @@ def workflow_benchmark():
         return
 
     try:
-        source_dataset = available[int(choice) - 1]
+        dataset = available[int(choice) - 1]
     except (ValueError, IndexError):
         print_err("Invalid choice")
         return
-
-    # Check if we can extract subsets
-    extractable = get_extractable_profiles(source_dataset)
-
-    if extractable:
-        print_header("DATASET SCOPE")
-        print(f"Source dataset: {BOLD}{source_dataset}{RESET}\n")
-        print("You can benchmark on:\n")
-        print(f"  1. {BOLD}Full dataset{RESET} ({source_dataset})")
-        print(f"  2. {BOLD}Extract subset{RESET} (smaller scale/duration)\n")
-        print(f"  0. Back\n")
-
-        scope_choice = prompt("Select", "1")
-        if scope_choice == "0":
-            return
-
-        if scope_choice == "2":
-            # Select scale
-            print_header("SELECT SCALE")
-            source_scale = get_scale_from_profile(source_dataset)
-            scale_order = ["small", "medium", "large"]
-            available_scales = [s for s in scale_order if scale_order.index(s) <= scale_order.index(source_scale)]
-
-            for i, scale in enumerate(available_scales, 1):
-                info = SCALES[scale]
-                print(f"  {i}. {scale:8} ({info['points']} points)")
-                print(f"     {DIM}{info['description']}{RESET}\n")
-            print(f"  0. Back\n")
-
-            scale_choice = prompt("Select scale", "1")
-            if scale_choice == "0":
-                return
-
-            try:
-                target_scale = available_scales[int(scale_choice) - 1]
-            except (ValueError, IndexError):
-                print_err("Invalid choice")
-                return
-
-            # Select duration
-            print_header("SELECT DURATION")
-            source_duration = get_duration_from_profile(source_dataset)
-            duration_order = ["2d", "1w", "1m", "6m", "1y"]
-            available_durations = [d for d in duration_order if duration_order.index(d) <= duration_order.index(source_duration)]
-
-            for i, duration in enumerate(available_durations, 1):
-                info = DURATIONS[duration]
-                print(f"  {i}. {duration:4} ({info['days']:3} days)")
-                print(f"     {DIM}{info['description']}{RESET}\n")
-            print(f"  0. Back\n")
-
-            dur_choice = prompt("Select duration", "1")
-            if dur_choice == "0":
-                return
-
-            try:
-                target_duration = available_durations[int(dur_choice) - 1]
-            except (ValueError, IndexError):
-                print_err("Invalid choice")
-                return
-
-            dataset = f"{target_scale}-{target_duration}"
-            print_info(f"Will extract {dataset} from {source_dataset}")
-        else:
-            dataset = source_dataset
-    else:
-        dataset = source_dataset
 
     # Select engines
     scenarios = select_engines()
     if not scenarios:
         return
 
-    # RAM strategy display
-    scale = get_scale_from_profile(dataset)
-    print_header("RAM STRATEGY")
-    print(f"Dataset scale: {BOLD}{scale}{RESET}\n")
-    print("RAM testing strategy per engine:\n")
-
-    for scenario in scenarios:
-        strategy = get_ram_strategy(scenario, scale)
-        print(f"  {scenario}: Start at {strategy['start_ram']}GB")
-        print(f"      {DIM}{strategy['description']}{RESET}\n")
-
     # Confirm
     print_header("CONFIRM")
     print(f"Dataset:   {dataset}")
-    if dataset != source_dataset:
-        print(f"Source:    {source_dataset} (will extract)")
     print(f"Engines:   {', '.join(scenarios)}")
     print(f"\nProtocol per engine:")
-    print(f"  1. Start containers with RAM limit")
-    print(f"  2. Load data (detect OOM)")
-    print(f"  3. Execute benchmark queries (Q1-Q8)")
-    print(f"  4. Check performance delta")
-    print(f"  5. Iterate RAM if needed")
-    print(f"  6. Stop containers")
+    print(f"  - {N_WARMUP} warmup runs (not counted)")
+    print(f"  - {N_RUNS} measured runs per query")
+    print(f"  - Metrics: p50, p95, min, max latency")
 
     if not prompt_yes_no("\nStart benchmark?"):
         return
 
-    # Run
+    # Get export directory
+    export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{dataset}_seed42"
+    if not export_dir.exists():
+        print_err(f"Export directory not found: {export_dir}")
+        input("\nPress Enter...")
+        return
+
+    # Check what formats are available
+    has_csv = (export_dir / "nodes.csv").exists()
+    has_json = (export_dir / "nodes.json").exists()
+    has_jsonld = (export_dir / "graph.jsonld").exists()
+
+    print_info(f"Export formats available:")
+    print(f"  CSV (PostgreSQL): {'yes' if has_csv else 'no'}")
+    print(f"  JSON (Memgraph):  {'yes' if has_json else 'no'}")
+    print(f"  JSON-LD (Oxigraph): {'yes' if has_jsonld else 'no'}")
+
+    # Warn if missing formats
+    missing = []
+    for s in scenarios:
+        if s.startswith("P") and not has_csv:
+            missing.append(f"{s} needs CSV")
+        elif s.startswith("M") and not has_json:
+            missing.append(f"{s} needs JSON")
+        elif s.startswith("O") and not has_jsonld:
+            missing.append(f"{s} needs JSON-LD")
+
+    if missing:
+        print_warn("Missing export formats:")
+        for m in missing:
+            print(f"  - {m}")
+        print_info("Regenerate dataset to include all formats")
+        if not prompt_yes_no("Continue anyway?", False):
+            return
+
+    # Run benchmarks
     results_dir = Path("benchmark_results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -671,293 +1099,94 @@ def workflow_benchmark():
         print_header(f"RUNNING {scenario}: {SCENARIOS[scenario]['name']}")
 
         containers = SCENARIOS[scenario]["containers"]
-        strategy = get_ram_strategy(scenario, scale)
 
-        ram_results = []
-        current_ram = strategy["start_ram"]
-        prev_perf = None
+        if not start_containers(containers):
+            results[scenario] = {"status": "error", "error": "Container start failed"}
+            continue
 
-        while current_ram <= strategy["max_ram"]:
-            print(f"\n{BOLD}--- Testing with {current_ram}GB RAM ---{RESET}\n")
+        try:
+            bench_result = run_scenario_benchmark(scenario, export_dir)
+            results[scenario] = bench_result
 
-            if not start_containers_with_ram(containers, current_ram):
-                if strategy["strategy"] == "escalate_on_oom":
-                    print_warn(f"Container failed at {current_ram}GB, escalating...")
-                    current_ram = RAM_LEVELS[RAM_LEVELS.index(current_ram) + 1] if current_ram < max(RAM_LEVELS) else None
-                    if current_ram is None:
-                        print_err("Max RAM reached, cannot continue")
-                        break
-                    continue
-                else:
-                    results[scenario] = "container_error"
-                    break
+            if bench_result["status"] == "completed":
+                # Calculate overall stats
+                all_p95 = [q["stats"]["p95"] for q in bench_result["queries"].values() if q.get("stats")]
+                overall_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
 
-            try:
-                # Real benchmark execution
-                from basetype_benchmark.benchmark_executor import BenchmarkExecutor, format_detailed_results
+                print_ok(f"{scenario} completed: {len(bench_result['queries'])} queries, avg p95={overall_p95:.1f}ms")
+            else:
+                print_err(f"{scenario} failed: {bench_result.get('error', 'unknown')}")
 
-                # Get dataset export path
-                export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{dataset}_seed42"
-                if not export_dir.exists():
-                    # Try source dataset if extracting subset
-                    export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{source_dataset}_seed42"
+        except Exception as e:
+            results[scenario] = {"status": "error", "error": str(e)}
+            print_err(f"{scenario} error: {e}")
 
-                executor = BenchmarkExecutor()
-
-                def progress_callback(phase, message):
-                    if phase == "query":
-                        print(f"    {message}")
-                    elif phase == "query_done":
-                        print(f"    {GREEN}[OK]{RESET} {message}")
-                    elif phase in ["load", "connect", "schema", "clear"]:
-                        print_info(message)
-                    elif phase == "load_done":
-                        print_ok(message)
-
-                print_info(f"Executing {scenario} on {dataset} with {current_ram}GB RAM...")
-
-                bench_result = executor.run_benchmark(
-                    scenario=scenario,
-                    dataset_dir=export_dir,
-                    ram_gb=current_ram,
-                    callback=progress_callback
-                )
-
-                if bench_result.status == "oom":
-                    raise MemoryError("OOM detected")
-                elif bench_result.status == "error":
-                    raise Exception(bench_result.error)
-
-                # Convert p95 from ms to seconds for comparison
-                current_perf = bench_result.overall_p95 / 1000.0
-
-                ram_results.append({
-                    "ram_gb": current_ram,
-                    "status": "completed",
-                    "p95_latency": current_perf,
-                    "p50_latency": bench_result.overall_p50 / 1000.0,
-                    "load_time": bench_result.load_time_s,
-                    "query_stats": {
-                        qid: {
-                            "p50": qs.p50,
-                            "p95": qs.p95,
-                            "min": qs.min_latency,
-                            "max": qs.max_latency,
-                            "runs": qs.success_count
-                        }
-                        for qid, qs in bench_result.query_stats.items()
-                    }
-                })
-
-                # Print detailed results
-                print(format_detailed_results(bench_result))
-                print_ok(f"{scenario} @ {current_ram}GB completed (p95: {current_perf:.2f}s)")
-
-                # Check for plateau
-                if prev_perf is not None:
-                    improvement = ((prev_perf - current_perf) / prev_perf) * 100
-                    print_info(f"Improvement vs previous: {improvement:.1f}%")
-
-                    if improvement < PERF_PLATEAU_THRESHOLD:
-                        print_ok(f"Performance plateau reached at {current_ram}GB")
-                        break
-
-                prev_perf = current_perf
-
-                # Move to next RAM level
-                try:
-                    next_idx = RAM_LEVELS.index(current_ram) + 1
-                    current_ram = RAM_LEVELS[next_idx]
-                except (ValueError, IndexError):
-                    print_info("Max RAM level reached")
-                    break
-
-            except Exception as e:
-                if "OOM" in str(e) or "out of memory" in str(e).lower():
-                    print_warn(f"OOM at {current_ram}GB")
-                    ram_results.append({
-                        "ram_gb": current_ram,
-                        "status": "oom"
-                    })
-                    # Escalate
-                    try:
-                        next_idx = RAM_LEVELS.index(current_ram) + 1
-                        current_ram = RAM_LEVELS[next_idx]
-                    except (ValueError, IndexError):
-                        print_err("Max RAM reached after OOM")
-                        break
-                else:
-                    ram_results.append({
-                        "ram_gb": current_ram,
-                        "status": f"error: {e}"
-                    })
-                    print_err(str(e))
-                    break
-            finally:
-                stop_all_containers()
-
-        results[scenario] = {
-            "ram_tests": ram_results,
-            "optimal_ram": ram_results[-1]["ram_gb"] if ram_results and ram_results[-1].get("status") == "completed" else None
-        }
+        finally:
+            stop_all_containers()
 
     # Save results
     with open(results_dir / "summary.json", 'w') as f:
         json.dump({
             "dataset": dataset,
-            "source_dataset": source_dataset,
-            "scale": scale,
             "scenarios": results,
+            "protocol": {"warmup": N_WARMUP, "runs": N_RUNS},
             "timestamp": datetime.now().isoformat()
-        }, f, indent=2)
+        }, f, indent=2, default=str)
 
-    # Build summary table
-    print_header("RESULTS SUMMARY TABLE")
+    # Print summary table
+    print_header("RESULTS SUMMARY")
 
-    # Main table header
-    print(f"\n{BOLD}RAM Gradient Results:{RESET}")
-    header = (
-        f"{'Scenario':<8} | {'Status':<6} | {'RAM Min':<8} | {'RAM Opt':<8} | "
-        f"{'Load(s)':<8} | {'p50(s)':<8} | {'p95(s)':<8} | {'Queries':<8} | {'OOM':<10}"
-    )
-    separator = "-" * len(header)
+    print(f"\n{BOLD}Benchmark Results:{RESET}")
+    header = f"{'Scenario':<8} | {'Status':<10} | {'Load(s)':<10} | {'Queries':<8} | {'Avg p95(ms)':<12}"
+    sep = "-" * len(header)
 
-    print(separator)
+    print(sep)
     print(header)
-    print(separator)
+    print(sep)
 
-    # Table rows
     for s, r in results.items():
-        if isinstance(r, dict) and "ram_tests" in r:
-            tests = r["ram_tests"]
-            completed = [t for t in tests if t.get("status") == "completed"]
-            oom_tests = [t for t in tests if t.get("status") == "oom"]
-
-            if completed:
-                status = f"{GREEN}OK{RESET}    "
-                ram_min = f"{min(t['ram_gb'] for t in completed)}GB"
-                ram_opt = f"{r.get('optimal_ram', '?')}GB"
-                # Get best run metrics
-                best_run = min(completed, key=lambda t: t.get('p95_latency', 999))
-                p95_best = f"{best_run.get('p95_latency', 0):.2f}"
-                p50_best = f"{best_run.get('p50_latency', 0):.2f}"
-                load_time = f"{best_run.get('load_time', 0):.1f}"
-                # Count queries
-                query_stats = best_run.get('query_stats', {})
-                num_queries = len(query_stats)
-            else:
-                status = f"{RED}FAIL{RESET}  "
-                ram_min = "-"
-                ram_opt = "-"
-                p95_best = "-"
-                p50_best = "-"
-                load_time = "-"
-                num_queries = 0
-
-            oom_str = ", ".join(f"{t['ram_gb']}" for t in oom_tests) if oom_tests else "-"
-
-            print(
-                f"{s:<8} | {status} | {ram_min:<8} | {ram_opt:<8} | "
-                f"{load_time:<8} | {p50_best:<8} | {p95_best:<8} | {num_queries:<8} | {oom_str:<10}"
-            )
+        if r.get("status") == "completed":
+            queries = r.get("queries", {})
+            all_p95 = [q["stats"]["p95"] for q in queries.values() if q.get("stats")]
+            avg_p95 = sum(all_p95) / len(all_p95) if all_p95 else 0
+            print(f"{s:<8} | {GREEN}OK{RESET}        | {r.get('load_time_s', 0):<10.1f} | {len(queries):<8} | {avg_p95:<12.1f}")
         else:
-            status = f"{RED}ERR{RESET}   "
-            err_msg = str(r)[:10] if r else "-"
-            print(
-                f"{s:<8} | {status} | {'-':<8} | {'-':<8} | "
-                f"{'-':<8} | {'-':<8} | {'-':<8} | {'-':<8} | {err_msg:<10}"
-            )
+            err = str(r.get("error", "unknown"))[:20]
+            print(f"{s:<8} | {RED}FAIL{RESET}      | {'-':<10} | {'-':<8} | {err:<12}")
 
-    print(separator)
+    print(sep)
 
-    # Query breakdown table (for completed scenarios)
-    completed_scenarios = {s: r for s, r in results.items()
-                          if isinstance(r, dict) and r.get("ram_tests")
-                          and any(t.get("status") == "completed" for t in r["ram_tests"])}
+    # Query breakdown
+    completed = {s: r for s, r in results.items() if r.get("status") == "completed"}
+    if completed:
+        print(f"\n{BOLD}Query Performance (p95 in ms):{RESET}")
 
-    if completed_scenarios:
-        print(f"\n{BOLD}Query Performance (best RAM level, ms):{RESET}")
-
-        # Collect all query IDs
+        # Get all query IDs
         all_queries = set()
-        for s, r in completed_scenarios.items():
-            best_run = next((t for t in r["ram_tests"] if t.get("status") == "completed"), None)
-            if best_run and best_run.get("query_stats"):
-                all_queries.update(best_run["query_stats"].keys())
-
+        for r in completed.values():
+            all_queries.update(r.get("queries", {}).keys())
         all_queries = sorted(all_queries)
 
         if all_queries:
-            # Header
             q_header = f"{'Scenario':<8} |" + "".join(f" {q:<8} |" for q in all_queries)
             q_sep = "-" * len(q_header)
             print(q_sep)
             print(q_header)
             print(q_sep)
 
-            # Rows
-            for s, r in completed_scenarios.items():
-                best_run = min(
-                    [t for t in r["ram_tests"] if t.get("status") == "completed"],
-                    key=lambda t: t.get('p95_latency', 999)
-                )
-                query_stats = best_run.get("query_stats", {})
-
+            for s, r in completed.items():
                 row = f"{s:<8} |"
                 for q in all_queries:
-                    if q in query_stats:
-                        p95 = query_stats[q].get("p95", 0)
+                    qdata = r.get("queries", {}).get(q, {})
+                    stats = qdata.get("stats", {})
+                    p95 = stats.get("p95", 0)
+                    if p95:
                         row += f" {p95:<8.1f} |"
                     else:
                         row += f" {'N/A':<8} |"
                 print(row)
 
             print(q_sep)
-
-    # Summary stats
-    print(f"\n{BOLD}Summary:{RESET}")
-    total = len(results)
-    ok_count = sum(1 for r in results.values() if isinstance(r, dict) and r.get("optimal_ram"))
-    oom_count = sum(1 for r in results.values() if isinstance(r, dict) and any(t.get("status") == "oom" for t in r.get("ram_tests", [])))
-    fail_count = total - ok_count
-
-    print(f"  Total scenarios:    {total}")
-    print(f"  Completed:          {ok_count} ({ok_count * 100 // total if total else 0}%)")
-    if oom_count:
-        print(f"  Had OOM:            {oom_count}")
-    if fail_count:
-        print(f"  Failed:             {fail_count}")
-
-    # Best performers
-    if ok_count > 0:
-        best_ram = None
-        best_perf = None
-        fastest_load = None
-
-        for s, r in results.items():
-            if isinstance(r, dict) and r.get("optimal_ram"):
-                opt_ram = r["optimal_ram"]
-                tests = r.get("ram_tests", [])
-                completed = [t for t in tests if t.get("status") == "completed"]
-                if completed:
-                    best_run = min(completed, key=lambda t: t.get('p95_latency', 999))
-                    best_p95 = best_run.get("p95_latency", 999)
-                    load_t = best_run.get("load_time", 999)
-
-                    if best_ram is None or opt_ram < best_ram[1]:
-                        best_ram = (s, opt_ram)
-                    if best_perf is None or best_p95 < best_perf[1]:
-                        best_perf = (s, best_p95)
-                    if fastest_load is None or load_t < fastest_load[1]:
-                        fastest_load = (s, load_t)
-
-        print(f"\n{BOLD}Best performers:{RESET}")
-        if best_ram:
-            print(f"  Lowest RAM needed:  {best_ram[0]} ({best_ram[1]}GB)")
-        if best_perf:
-            print(f"  Best p95 latency:   {best_perf[0]} ({best_perf[1]:.2f}s)")
-        if fastest_load:
-            print(f"  Fastest data load:  {fastest_load[0]} ({fastest_load[1]:.1f}s)")
 
     print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
     input("\nPress Enter...")

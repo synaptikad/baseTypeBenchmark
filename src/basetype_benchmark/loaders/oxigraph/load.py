@@ -14,18 +14,60 @@ from pathlib import Path
 import requests
 
 
+def wait_for_oxigraph(
+    endpoint: str = "http://localhost:7878",
+    max_retries: int = 10,
+    retry_delay: float = 3.0
+) -> bool:
+    """Wait for Oxigraph to be ready with retry logic.
+
+    Args:
+        endpoint: Oxigraph HTTP endpoint
+        max_retries: Maximum connection attempts
+        retry_delay: Seconds to wait between retries
+
+    Returns:
+        True if connected, raises exception otherwise
+    """
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(
+                f"{endpoint}/query",
+                params={"query": "SELECT * WHERE { ?s ?p ?o } LIMIT 1"},
+                timeout=10
+            )
+            # 200 = OK with results, 204 = OK no content
+            if response.status_code in [200, 204]:
+                return True
+        except requests.exceptions.RequestException:
+            pass
+
+        if attempt < max_retries - 1:
+            print(f"[INFO] Oxigraph not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+        else:
+            print(f"[ERROR] Oxigraph connection failed after {max_retries} attempts")
+            raise ConnectionError(f"Cannot connect to Oxigraph at {endpoint}")
+
+    return False
+
+
 def clear_store(endpoint: str) -> None:
     response = requests.delete(f"{endpoint}/store", timeout=30)
-    response.raise_for_status()
+    # Accept both 200 and 204 as success
+    if response.status_code not in [200, 204]:
+        response.raise_for_status()
 
 
 def load_jsonld(endpoint: str, jsonld_path: Path) -> float:
     payload = jsonld_path.read_bytes()
     t0 = time.perf_counter()
     response = requests.post(
-        f"{endpoint}/store", headers={"Content-Type": "application/ld+json"}, data=payload, timeout=120
+        f"{endpoint}/store", headers={"Content-Type": "application/ld+json"}, data=payload, timeout=300
     )
-    response.raise_for_status()
+    # Accept 200, 201, 204 as success (201 = Created is valid for POST)
+    if response.status_code not in [200, 201, 204]:
+        response.raise_for_status()
     elapsed = time.perf_counter() - t0
     print(f"Ingestion Oxigraph: {len(payload)} octets chargés en {elapsed:.2f}s")
     return elapsed
@@ -72,6 +114,9 @@ def main() -> None:
     args = parse_args()
     if not args.jsonld_file.exists():
         raise FileNotFoundError(f"Fichier JSON-LD introuvable: {args.jsonld_file}")
+
+    # Wait for Oxigraph to be ready
+    wait_for_oxigraph(args.endpoint)
 
     if not args.skip_clear:
         clear_store(args.endpoint)

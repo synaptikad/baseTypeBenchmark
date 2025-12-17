@@ -58,7 +58,8 @@ class DatasetManager:
         import time as time_module
 
         if formats is None:
-            formats = ['postgres']
+            # Export all formats by default for benchmark compatibility
+            formats = ['postgres', 'graph', 'rdf']
 
         # Résoudre l'alias
         resolved_profile = ALIASES.get(profile_name, profile_name)
