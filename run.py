@@ -586,6 +586,48 @@ def check_container_oom(container_name: str) -> bool:
         return False
 
 
+def get_container_logs(container_name: str, tail: int = 50) -> str:
+    """Get last N lines of container logs."""
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--tail", str(tail), container_name],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.stdout + result.stderr
+    except Exception as e:
+        return f"Failed to get logs: {e}"
+
+
+def dump_container_debug(container_name: str):
+    """Dump container debug info (logs, stats, state)."""
+    print(f"\n{YELLOW}=== DEBUG INFO: {container_name} ==={RESET}")
+
+    # State
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format",
+             "Status: {{.State.Status}}, OOMKilled: {{.State.OOMKilled}}, ExitCode: {{.State.ExitCode}}",
+             container_name],
+            capture_output=True, text=True, timeout=10
+        )
+        print(f"State: {result.stdout.strip()}")
+    except Exception as e:
+        print(f"State: Error - {e}")
+
+    # Stats
+    stats = get_container_stats(container_name)
+    if stats:
+        print(f"Memory: {stats['mem_mb']:.1f} MB, CPU: {stats['cpu_pct']:.1f}%")
+
+    # Logs
+    print(f"\n--- Last 30 lines of logs ---")
+    logs = get_container_logs(container_name, tail=30)
+    print(logs)
+    print(f"--- End logs ---\n")
+
+
 def drop_caches() -> bool:
     """Drop system caches (requires root on Linux)."""
     try:
@@ -948,7 +990,14 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
     )
 
     print_info("Connecting to Memgraph...")
-    driver = get_driver()
+    try:
+        driver = get_driver()
+    except Exception as e:
+        print_err(f"Failed to connect to Memgraph: {e}")
+        dump_container_debug("btb_memgraph")
+        result["status"] = "error"
+        result["error"] = f"Connection failed: {e}"
+        return result
 
     try:
         # Clear and load
@@ -983,54 +1032,60 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         result["load_time_s"] = time.time() - load_start
         print_ok(f"Data loaded in {result['load_time_s']:.1f}s")
 
-        # Execute queries
-        queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
-        for query_id in queries_to_run:
-            query_text = load_query(scenario, query_id)
-            if not query_text:
-                print_warn(f"Query {query_id} not found, skipping")
-                continue
-
-            print(f"    {query_id}...", end=" ", flush=True)
-
-            # Drop caches before query
-            drop_caches()
-
-            # Warmup
-            for _ in range(N_WARMUP):
-                try:
-                    with driver.session() as session:
-                        list(session.run(query_text))
-                except Exception:
-                    pass
-
-            # Measured runs
-            latencies = []
-            rows = 0
-            for run_idx in range(N_RUNS):
-                if run_idx > 0:
-                    drop_caches()
-                try:
-                    t0 = time.perf_counter()
-                    with driver.session() as session:
-                        records = list(session.run(query_text))
-                        rows = len(records)
-                    latencies.append((time.perf_counter() - t0) * 1000)  # ms
-                except Exception as e:
-                    print_warn(f"Query error: {e}")
-
-            stats = compute_stats(latencies)
-            result["queries"][query_id] = {
-                "latencies_ms": latencies,
-                "rows": rows,
-                "stats": stats
-            }
-            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
-
-        result["status"] = "completed"
-
-    finally:
+    except Exception as e:
+        print_err(f"Memgraph load error: {e}")
+        dump_container_debug("btb_memgraph")
+        result["status"] = "error"
+        result["error"] = str(e)
         driver.close()
+        return result
+
+    # Execute queries
+    queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
+    for query_id in queries_to_run:
+        query_text = load_query(scenario, query_id)
+        if not query_text:
+            print_warn(f"Query {query_id} not found, skipping")
+            continue
+
+        print(f"    {query_id}...", end=" ", flush=True)
+
+        # Drop caches before query
+        drop_caches()
+
+        # Warmup
+        for _ in range(N_WARMUP):
+            try:
+                with driver.session() as session:
+                    list(session.run(query_text))
+            except Exception:
+                pass
+
+        # Measured runs
+        latencies = []
+        rows = 0
+        for run_idx in range(N_RUNS):
+            if run_idx > 0:
+                drop_caches()
+            try:
+                t0 = time.perf_counter()
+                with driver.session() as session:
+                    records = list(session.run(query_text))
+                    rows = len(records)
+                latencies.append((time.perf_counter() - t0) * 1000)  # ms
+            except Exception as e:
+                print_warn(f"Query error: {e}")
+
+        stats = compute_stats(latencies)
+        result["queries"][query_id] = {
+            "latencies_ms": latencies,
+            "rows": rows,
+            "stats": stats
+        }
+        print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms")
+
+    result["status"] = "completed"
+    driver.close()
 
     return result
 
