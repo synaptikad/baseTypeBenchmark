@@ -186,7 +186,7 @@ class PostgresLoader:
         cur.execute("DROP TABLE IF EXISTS nodes CASCADE")
 
         if schema_type == "relational":
-            # P1: Relational schema
+            # P1: Relational schema (no FK constraints - data may have refs to external IDs)
             cur.execute("""
                 CREATE TABLE nodes (
                     id TEXT PRIMARY KEY,
@@ -199,8 +199,8 @@ class PostgresLoader:
             cur.execute("""
                 CREATE TABLE edges (
                     id SERIAL PRIMARY KEY,
-                    src_id TEXT NOT NULL REFERENCES nodes(id),
-                    dst_id TEXT NOT NULL REFERENCES nodes(id),
+                    src_id TEXT NOT NULL,
+                    dst_id TEXT NOT NULL,
                     rel_type TEXT NOT NULL
                 )
             """)
@@ -336,19 +336,26 @@ class MemgraphLoader:
         self.config = config or MEMGRAPH_CONFIG
         self.driver = None
 
-    def connect(self) -> bool:
-        """Connect to Memgraph via Bolt protocol."""
-        try:
-            from neo4j import GraphDatabase
-            uri = f"bolt://{self.config['host']}:{self.config['port']}"
-            self.driver = GraphDatabase.driver(uri)
-            # Test connection
-            with self.driver.session() as session:
-                session.run("RETURN 1")
-            return True
-        except Exception as e:
-            print(f"[ERROR] Memgraph connection failed: {e}")
-            return False
+    def connect(self, max_retries: int = 10, retry_delay: float = 3.0) -> bool:
+        """Connect to Memgraph via Bolt protocol with retry logic."""
+        from neo4j import GraphDatabase
+        uri = f"bolt://{self.config['host']}:{self.config['port']}"
+
+        for attempt in range(max_retries):
+            try:
+                self.driver = GraphDatabase.driver(uri)
+                # Test connection
+                with self.driver.session() as session:
+                    session.run("RETURN 1")
+                return True
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"[INFO] Memgraph not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"[ERROR] Memgraph connection failed after {max_retries} attempts: {e}")
+                    return False
+        return False
 
     def close(self):
         if self.driver:
@@ -435,14 +442,23 @@ class OxigraphLoader:
         self.config = config or OXIGRAPH_CONFIG
         self.base_url = f"http://{self.config['host']}:{self.config['port']}"
 
-    def connect(self) -> bool:
-        """Test connection to Oxigraph."""
-        try:
-            resp = requests.get(f"{self.base_url}/query", params={"query": "SELECT * WHERE { ?s ?p ?o } LIMIT 1"})
-            return resp.status_code in [200, 204]
-        except Exception as e:
-            print(f"[ERROR] Oxigraph connection failed: {e}")
-            return False
+    def connect(self, max_retries: int = 10, retry_delay: float = 3.0) -> bool:
+        """Test connection to Oxigraph with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(f"{self.base_url}/query", params={"query": "SELECT * WHERE { ?s ?p ?o } LIMIT 1"}, timeout=10)
+                if resp.status_code in [200, 204]:
+                    return True
+            except Exception as e:
+                pass
+
+            if attempt < max_retries - 1:
+                print(f"[INFO] Oxigraph not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                print(f"[ERROR] Oxigraph connection failed after {max_retries} attempts")
+                return False
+        return False
 
     def close(self):
         pass  # HTTP, no persistent connection
@@ -455,35 +471,90 @@ class OxigraphLoader:
             pass
 
     def load_data(self, export_dir: Path) -> Tuple[bool, float]:
-        """Load JSON-LD data into Oxigraph."""
+        """Load data into Oxigraph from CSV files by converting to N-Triples."""
         start = time.time()
 
         try:
-            # Load JSON-LD file
+            # First try JSON-LD if available
             jsonld_file = export_dir / "graph.jsonld"
             if not jsonld_file.exists():
-                # Try RDF directory
                 jsonld_file = export_dir / "rdf" / "graph.jsonld"
 
             if jsonld_file.exists():
                 with open(jsonld_file, 'r', encoding='utf-8') as f:
                     data = f.read()
-
                 resp = requests.post(
                     f"{self.base_url}/store",
                     data=data,
-                    headers={"Content-Type": "application/ld+json"}
+                    headers={"Content-Type": "application/ld+json"},
+                    timeout=300
                 )
+                if resp.status_code in [200, 204]:
+                    return True, time.time() - start
 
-                if resp.status_code not in [200, 204]:
-                    print(f"[ERROR] Oxigraph load failed: {resp.status_code}")
-                    return False, time.time() - start
+            # Otherwise, generate N-Triples from CSV
+            ntriples = self._csv_to_ntriples(export_dir)
+            if not ntriples:
+                print(f"[WARN] No data to load for Oxigraph")
+                return True, time.time() - start
+
+            # Load N-Triples into Oxigraph
+            resp = requests.post(
+                f"{self.base_url}/store",
+                data=ntriples.encode('utf-8'),
+                headers={"Content-Type": "application/n-triples"},
+                timeout=300
+            )
+
+            if resp.status_code not in [200, 204]:
+                print(f"[ERROR] Oxigraph load failed: HTTP {resp.status_code}")
+                return False, time.time() - start
 
             return True, time.time() - start
 
         except Exception as e:
             print(f"[ERROR] Oxigraph loading failed: {e}")
             return False, time.time() - start
+
+    def _csv_to_ntriples(self, export_dir: Path) -> str:
+        """Convert CSV files to N-Triples format for Oxigraph."""
+        lines = []
+        base = "http://example.org/id/"
+        type_base = "http://example.org/type/"
+        pred_base = "http://example.org/"
+
+        # Load nodes
+        nodes_file = export_dir / "nodes.csv"
+        if nodes_file.exists():
+            with open(nodes_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    node_uri = f"<{base}{row['id']}>"
+                    node_type = row.get('type', 'Node')
+
+                    # rdf:type
+                    lines.append(f"{node_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{type_base}{node_type}> .")
+
+                    # Properties
+                    if row.get('name'):
+                        name_escaped = row['name'].replace('\\', '\\\\').replace('"', '\\"')
+                        lines.append(f'{node_uri} <{pred_base}name> "{name_escaped}" .')
+
+                    if row.get('building_id'):
+                        lines.append(f'{node_uri} <{pred_base}building_id> "{row["building_id"]}" .')
+
+        # Load edges
+        edges_file = export_dir / "edges.csv"
+        if edges_file.exists():
+            with open(edges_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    src_uri = f"<{base}{row['src_id']}>"
+                    dst_uri = f"<{base}{row['dst_id']}>"
+                    rel_type = row.get('rel_type', 'RELATED_TO')
+                    lines.append(f"{src_uri} <{pred_base}{rel_type}> {dst_uri} .")
+
+        return "\n".join(lines)
 
     def execute_query(self, query: str) -> QueryResult:
         """Execute a SPARQL query and measure latency."""

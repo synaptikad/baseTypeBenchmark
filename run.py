@@ -215,9 +215,11 @@ def start_containers(containers: List[str]) -> bool:
         print_err("Failed to start containers")
         return False
 
-    print_info("Waiting for containers to be ready...")
-    time.sleep(10)
-    print_ok("Containers ready")
+    # Wait longer for containers to be ready (Memgraph needs more time)
+    wait_time = 5
+    print_info(f"Waiting {wait_time}s for containers to initialize...")
+    time.sleep(wait_time)
+    print_ok("Containers started (connection retry handled by loaders)")
     return True
 
 
@@ -514,9 +516,11 @@ def start_containers_with_ram(containers: List[str], ram_gb: int) -> bool:
         print_err("Failed to start containers")
         return False
 
-    print_info("Waiting for containers to be ready...")
-    time.sleep(10)
-    print_ok(f"Containers ready ({ram_gb}GB RAM)")
+    # Short wait - actual connection retry is handled by loaders
+    wait_time = 5
+    print_info(f"Waiting {wait_time}s for containers to initialize...")
+    time.sleep(wait_time)
+    print_ok(f"Containers started ({ram_gb}GB RAM, connection retry handled by loaders)")
     return True
 
 
