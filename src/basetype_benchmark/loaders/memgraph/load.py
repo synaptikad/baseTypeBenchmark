@@ -80,18 +80,18 @@ def load_nodes(session, nodes_path: Path, batch_size: int) -> int:
         if len(batch) >= batch_size:
             session.run(
                 "UNWIND $batch AS row "
-                "MERGE (n:Node {id: row.id}) "
-                "SET n.type = row.type, n.name = row.name",
+                "CREATE (n:Node {id: row.id, type: row.type, name: row.name})",
                 batch=batch,
             )
             total += len(batch)
+            if total % 10000 == 0:
+                print(f"  ... {total} nodes loaded", flush=True)
             batch.clear()
 
     if batch:
         session.run(
             "UNWIND $batch AS row "
-            "MERGE (n:Node {id: row.id}) "
-            "SET n.type = row.type, n.name = row.name",
+            "CREATE (n:Node {id: row.id, type: row.type, name: row.name})",
             batch=batch,
         )
         total += len(batch)

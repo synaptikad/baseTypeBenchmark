@@ -854,7 +854,7 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
             chunks_file = export_dir / "timeseries_chunks.json"
 
             if nodes_file.exists():
-                load_nodes(session, nodes_file, batch_size=1000)
+                load_nodes(session, nodes_file, batch_size=5000)
             else:
                 print_warn("nodes.json not found - need to regenerate dataset with graph format")
                 result["status"] = "error"
@@ -862,10 +862,10 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                 return result
 
             if edges_file.exists():
-                load_edges(session, edges_file, batch_size=1000)
+                load_edges(session, edges_file, batch_size=5000)
 
             if scenario == "M2" and chunks_file.exists():
-                load_timeseries_chunks(session, chunks_file, batch_size=1000)
+                load_timeseries_chunks(session, chunks_file, batch_size=5000)
 
         result["load_time_s"] = time.time() - load_start
         print_ok(f"Data loaded in {result['load_time_s']:.1f}s")
