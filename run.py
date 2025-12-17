@@ -371,6 +371,156 @@ def workflow_dataset():
 
 
 # =============================================================================
+# RAM CONFIGURATION
+# =============================================================================
+
+# RAM levels to test (in GB)
+RAM_LEVELS = [4, 8, 16, 32, 64, 128]
+
+# Minimum RAM per scale (estimated)
+MIN_RAM_BY_SCALE = {
+    "small": {"P1": 4, "P2": 4, "M1": 8, "M2": 8, "O1": 4, "O2": 4},
+    "medium": {"P1": 8, "P2": 8, "M1": 16, "M2": 16, "O1": 8, "O2": 8},
+    "large": {"P1": 16, "P2": 16, "M1": 64, "M2": 64, "O1": 16, "O2": 16},
+}
+
+# Performance plateau threshold (if improvement < this %, stop iterating)
+PERF_PLATEAU_THRESHOLD = 10  # 10% improvement threshold
+
+
+def get_scale_from_profile(profile: str) -> str:
+    """Extract scale from profile name (e.g., 'small-1w' -> 'small')."""
+    return profile.split("-")[0]
+
+
+def get_duration_from_profile(profile: str) -> str:
+    """Extract duration from profile name (e.g., 'small-1w' -> '1w')."""
+    return profile.split("-")[1]
+
+
+def can_extract_subset(source_profile: str, target_scale: str, target_duration: str) -> bool:
+    """Check if target subset can be extracted from source profile."""
+    source_scale = get_scale_from_profile(source_profile)
+    source_duration = get_duration_from_profile(source_profile)
+
+    # Scale hierarchy: large > medium > small
+    scale_order = {"small": 0, "medium": 1, "large": 2}
+    # Duration hierarchy: 1y > 6m > 1m > 1w > 2d
+    duration_order = {"2d": 0, "1w": 1, "1m": 2, "6m": 3, "1y": 4}
+
+    source_scale_idx = scale_order.get(source_scale, -1)
+    target_scale_idx = scale_order.get(target_scale, -1)
+    source_duration_idx = duration_order.get(source_duration, -1)
+    target_duration_idx = duration_order.get(target_duration, -1)
+
+    return source_scale_idx >= target_scale_idx and source_duration_idx >= target_duration_idx
+
+
+def get_extractable_profiles(source_profile: str) -> List[str]:
+    """Get list of profiles that can be extracted from source."""
+    source_scale = get_scale_from_profile(source_profile)
+    source_duration = get_duration_from_profile(source_profile)
+
+    scale_order = {"small": 0, "medium": 1, "large": 2}
+    duration_order = {"2d": 0, "1w": 1, "1m": 2, "6m": 3, "1y": 4}
+
+    source_scale_idx = scale_order.get(source_scale, 0)
+    source_duration_idx = duration_order.get(source_duration, 0)
+
+    profiles = []
+    for scale, sidx in scale_order.items():
+        if sidx <= source_scale_idx:
+            for duration, didx in duration_order.items():
+                if didx <= source_duration_idx:
+                    profile = f"{scale}-{duration}"
+                    if profile != source_profile:  # Exclude source itself
+                        profiles.append(profile)
+
+    return sorted(profiles)
+
+
+def select_engines() -> List[str]:
+    """Interactive engine selection."""
+    print_header("SELECT ENGINES")
+    print("Choose which database engines to benchmark:\n")
+
+    print(f"  A. {BOLD}All engines{RESET} (P1, P2, M1, M2, O1, O2)")
+    print(f"  S. {BOLD}Select individually{RESET}\n")
+    print(f"  0. Back\n")
+
+    choice = prompt("Select", "A").upper()
+
+    if choice == "0":
+        return []
+
+    if choice == "A":
+        return list(SCENARIOS.keys())
+
+    # Individual selection
+    print_header("ENGINE SELECTION")
+    print("Answer Y/N for each engine:\n")
+
+    selected = []
+    for sid, info in SCENARIOS.items():
+        containers = ", ".join(info["containers"])
+        print(f"  {sid}: {info['name']}")
+        print(f"  {DIM}Containers: {containers}{RESET}")
+        if prompt_yes_no(f"  Include {sid}?", True):
+            selected.append(sid)
+        print()
+
+    return selected
+
+
+def get_ram_strategy(scenario: str, scale: str) -> Dict:
+    """Get RAM testing strategy for a scenario.
+
+    Returns dict with:
+        - start_ram: initial RAM to try
+        - strategy: 'iterate_up' (P1/P2) or 'escalate_on_oom' (M/O)
+        - max_ram: maximum RAM to test
+    """
+    min_ram = MIN_RAM_BY_SCALE.get(scale, MIN_RAM_BY_SCALE["small"]).get(scenario, 8)
+
+    if scenario.startswith("P"):
+        # PostgreSQL: start from minimum, iterate up until plateau
+        return {
+            "start_ram": min_ram,
+            "strategy": "iterate_up",
+            "max_ram": 128,
+            "description": "Start low, iterate until performance plateau"
+        }
+    else:
+        # Memgraph/Oxigraph: start from minimum, escalate on OOM
+        return {
+            "start_ram": min_ram,
+            "strategy": "escalate_on_oom",
+            "max_ram": 128,
+            "description": "Start low, escalate on OOM, continue to find plateau"
+        }
+
+
+def start_containers_with_ram(containers: List[str], ram_gb: int) -> bool:
+    """Start containers with specific RAM limit."""
+    stop_all_containers()
+    print_info(f"Starting: {', '.join(containers)} with {ram_gb}GB RAM limit")
+
+    # Build docker compose command with memory limit
+    mem_limit = f"{ram_gb}g"
+    env_vars = f"MEMORY_LIMIT={mem_limit}"
+
+    cmd = f"{env_vars} docker compose up -d {' '.join(containers)}"
+    if not run_cmd(cmd, cwd=str(DOCKER_DIR)):
+        print_err("Failed to start containers")
+        return False
+
+    print_info("Waiting for containers to be ready...")
+    time.sleep(10)
+    print_ok(f"Containers ready ({ram_gb}GB RAM)")
+    return True
+
+
+# =============================================================================
 # WORKFLOW: BENCHMARK
 # =============================================================================
 
@@ -381,7 +531,7 @@ def workflow_benchmark():
     # Check datasets
     available = get_available_profiles()
     if not available:
-        print_warn("No datasets available. Generate one first (option 1).")
+        print_warn("No datasets available. Generate one first (option 2).")
         input("\nPress Enter...")
         return
 
@@ -390,7 +540,11 @@ def workflow_benchmark():
     # Select dataset
     for i, ds in enumerate(available, 1):
         size = SIZE_ESTIMATES.get(ds, "?")
-        print(f"  {i}. {ds} (~{size} GB)")
+        extractable = get_extractable_profiles(ds)
+        extract_info = ""
+        if extractable:
+            extract_info = f" {DIM}(can extract: {', '.join(extractable[:3])}{'...' if len(extractable) > 3 else ''}){RESET}"
+        print(f"  {i}. {ds} (~{size} GB){extract_info}")
     print(f"\n  0. Back")
 
     choice = prompt("\nSelect dataset", "1")
@@ -398,49 +552,107 @@ def workflow_benchmark():
         return
 
     try:
-        dataset = available[int(choice) - 1]
+        source_dataset = available[int(choice) - 1]
     except (ValueError, IndexError):
         print_err("Invalid choice")
         return
 
-    # Select scenario
-    print_header("SELECT SCENARIO")
-    print("Each scenario tests a different database architecture:\n")
+    # Check if we can extract subsets
+    extractable = get_extractable_profiles(source_dataset)
 
-    scenario_list = list(SCENARIOS.keys())
-    for i, (sid, info) in enumerate(SCENARIOS.items(), 1):
-        containers = ", ".join(info["containers"])
-        warn = ""
-        if sid == "M1" and "large" in dataset:
-            warn = f" {RED}[high RAM - may OOM]{RESET}"
-        print(f"  {i}. {sid}: {info['name']}")
-        print(f"     {DIM}Containers: {containers}{warn}{RESET}\n")
+    if extractable:
+        print_header("DATASET SCOPE")
+        print(f"Source dataset: {BOLD}{source_dataset}{RESET}\n")
+        print("You can benchmark on:\n")
+        print(f"  1. {BOLD}Full dataset{RESET} ({source_dataset})")
+        print(f"  2. {BOLD}Extract subset{RESET} (smaller scale/duration)\n")
+        print(f"  0. Back\n")
 
-    print(f"  A. All scenarios (sequential)")
-    print(f"  0. Back\n")
+        scope_choice = prompt("Select", "1")
+        if scope_choice == "0":
+            return
 
-    choice = prompt("Select scenario", "1").upper()
-    if choice == "0":
+        if scope_choice == "2":
+            # Select scale
+            print_header("SELECT SCALE")
+            source_scale = get_scale_from_profile(source_dataset)
+            scale_order = ["small", "medium", "large"]
+            available_scales = [s for s in scale_order if scale_order.index(s) <= scale_order.index(source_scale)]
+
+            for i, scale in enumerate(available_scales, 1):
+                info = SCALES[scale]
+                print(f"  {i}. {scale:8} ({info['points']} points)")
+                print(f"     {DIM}{info['description']}{RESET}\n")
+            print(f"  0. Back\n")
+
+            scale_choice = prompt("Select scale", "1")
+            if scale_choice == "0":
+                return
+
+            try:
+                target_scale = available_scales[int(scale_choice) - 1]
+            except (ValueError, IndexError):
+                print_err("Invalid choice")
+                return
+
+            # Select duration
+            print_header("SELECT DURATION")
+            source_duration = get_duration_from_profile(source_dataset)
+            duration_order = ["2d", "1w", "1m", "6m", "1y"]
+            available_durations = [d for d in duration_order if duration_order.index(d) <= duration_order.index(source_duration)]
+
+            for i, duration in enumerate(available_durations, 1):
+                info = DURATIONS[duration]
+                print(f"  {i}. {duration:4} ({info['days']:3} days)")
+                print(f"     {DIM}{info['description']}{RESET}\n")
+            print(f"  0. Back\n")
+
+            dur_choice = prompt("Select duration", "1")
+            if dur_choice == "0":
+                return
+
+            try:
+                target_duration = available_durations[int(dur_choice) - 1]
+            except (ValueError, IndexError):
+                print_err("Invalid choice")
+                return
+
+            dataset = f"{target_scale}-{target_duration}"
+            print_info(f"Will extract {dataset} from {source_dataset}")
+        else:
+            dataset = source_dataset
+    else:
+        dataset = source_dataset
+
+    # Select engines
+    scenarios = select_engines()
+    if not scenarios:
         return
 
-    if choice == "A":
-        scenarios = scenario_list
-    else:
-        try:
-            scenarios = [scenario_list[int(choice) - 1]]
-        except (ValueError, IndexError):
-            print_err("Invalid choice")
-            return
+    # RAM strategy display
+    scale = get_scale_from_profile(dataset)
+    print_header("RAM STRATEGY")
+    print(f"Dataset scale: {BOLD}{scale}{RESET}\n")
+    print("RAM testing strategy per engine:\n")
+
+    for scenario in scenarios:
+        strategy = get_ram_strategy(scenario, scale)
+        print(f"  {scenario}: Start at {strategy['start_ram']}GB")
+        print(f"      {DIM}{strategy['description']}{RESET}\n")
 
     # Confirm
     print_header("CONFIRM")
     print(f"Dataset:   {dataset}")
-    print(f"Scenarios: {', '.join(scenarios)}")
-    print(f"\nFor each scenario:")
-    print(f"  1. Start required containers only")
-    print(f"  2. Load data")
-    print(f"  3. Execute benchmark queries")
-    print(f"  4. Stop containers")
+    if dataset != source_dataset:
+        print(f"Source:    {source_dataset} (will extract)")
+    print(f"Engines:   {', '.join(scenarios)}")
+    print(f"\nProtocol per engine:")
+    print(f"  1. Start containers with RAM limit")
+    print(f"  2. Load data (detect OOM)")
+    print(f"  3. Execute benchmark queries (Q1-Q8)")
+    print(f"  4. Check performance delta")
+    print(f"  5. Iterate RAM if needed")
+    print(f"  6. Stop containers")
 
     if not prompt_yes_no("\nStart benchmark?"):
         return
@@ -455,34 +667,118 @@ def workflow_benchmark():
         print_header(f"RUNNING {scenario}: {SCENARIOS[scenario]['name']}")
 
         containers = SCENARIOS[scenario]["containers"]
-        if not start_containers(containers):
-            results[scenario] = "container_error"
-            continue
+        strategy = get_ram_strategy(scenario, scale)
 
-        try:
-            # TODO: actual benchmark execution
-            print_info(f"Executing {scenario} on {dataset}...")
-            time.sleep(2)  # placeholder
-            results[scenario] = "completed"
-            print_ok(f"{scenario} completed")
-        except Exception as e:
-            results[scenario] = f"error: {e}"
-            print_err(str(e))
-        finally:
-            stop_all_containers()
+        ram_results = []
+        current_ram = strategy["start_ram"]
+        prev_perf = None
+
+        while current_ram <= strategy["max_ram"]:
+            print(f"\n{BOLD}--- Testing with {current_ram}GB RAM ---{RESET}\n")
+
+            if not start_containers_with_ram(containers, current_ram):
+                if strategy["strategy"] == "escalate_on_oom":
+                    print_warn(f"Container failed at {current_ram}GB, escalating...")
+                    current_ram = RAM_LEVELS[RAM_LEVELS.index(current_ram) + 1] if current_ram < max(RAM_LEVELS) else None
+                    if current_ram is None:
+                        print_err("Max RAM reached, cannot continue")
+                        break
+                    continue
+                else:
+                    results[scenario] = "container_error"
+                    break
+
+            try:
+                # TODO: actual benchmark execution
+                print_info(f"Executing {scenario} on {dataset} with {current_ram}GB RAM...")
+                time.sleep(2)  # placeholder
+
+                # Simulated performance metric (replace with actual)
+                current_perf = 100 / current_ram  # Lower is better (placeholder)
+
+                ram_results.append({
+                    "ram_gb": current_ram,
+                    "status": "completed",
+                    "p95_latency": current_perf  # placeholder
+                })
+
+                print_ok(f"{scenario} @ {current_ram}GB completed (p95: {current_perf:.2f}s)")
+
+                # Check for plateau
+                if prev_perf is not None:
+                    improvement = ((prev_perf - current_perf) / prev_perf) * 100
+                    print_info(f"Improvement vs previous: {improvement:.1f}%")
+
+                    if improvement < PERF_PLATEAU_THRESHOLD:
+                        print_ok(f"Performance plateau reached at {current_ram}GB")
+                        break
+
+                prev_perf = current_perf
+
+                # Move to next RAM level
+                try:
+                    next_idx = RAM_LEVELS.index(current_ram) + 1
+                    current_ram = RAM_LEVELS[next_idx]
+                except (ValueError, IndexError):
+                    print_info("Max RAM level reached")
+                    break
+
+            except Exception as e:
+                if "OOM" in str(e) or "out of memory" in str(e).lower():
+                    print_warn(f"OOM at {current_ram}GB")
+                    ram_results.append({
+                        "ram_gb": current_ram,
+                        "status": "oom"
+                    })
+                    # Escalate
+                    try:
+                        next_idx = RAM_LEVELS.index(current_ram) + 1
+                        current_ram = RAM_LEVELS[next_idx]
+                    except (ValueError, IndexError):
+                        print_err("Max RAM reached after OOM")
+                        break
+                else:
+                    ram_results.append({
+                        "ram_gb": current_ram,
+                        "status": f"error: {e}"
+                    })
+                    print_err(str(e))
+                    break
+            finally:
+                stop_all_containers()
+
+        results[scenario] = {
+            "ram_tests": ram_results,
+            "optimal_ram": ram_results[-1]["ram_gb"] if ram_results and ram_results[-1].get("status") == "completed" else None
+        }
 
     # Save results
     with open(results_dir / "summary.json", 'w') as f:
         json.dump({
             "dataset": dataset,
+            "source_dataset": source_dataset,
+            "scale": scale,
             "scenarios": results,
             "timestamp": datetime.now().isoformat()
         }, f, indent=2)
 
-    print_header("RESULTS")
+    print_header("RESULTS SUMMARY")
     for s, r in results.items():
-        status = f"{GREEN}OK{RESET}" if r == "completed" else f"{RED}{r}{RESET}"
-        print(f"  {s}: {status}")
+        if isinstance(r, dict) and "ram_tests" in r:
+            tests = r["ram_tests"]
+            completed = [t for t in tests if t.get("status") == "completed"]
+            oom = [t for t in tests if t.get("status") == "oom"]
+
+            if completed:
+                optimal = r.get("optimal_ram")
+                print(f"  {s}: {GREEN}OK{RESET} - Optimal RAM: {optimal}GB")
+                for t in completed:
+                    print(f"      {t['ram_gb']}GB: p95={t.get('p95_latency', '?'):.2f}s")
+            if oom:
+                print(f"      {RED}OOM at: {', '.join(str(t['ram_gb']) + 'GB' for t in oom)}{RESET}")
+        else:
+            status = f"{RED}{r}{RESET}"
+            print(f"  {s}: {status}")
 
     print(f"\nSaved to: {results_dir}")
     input("\nPress Enter...")
