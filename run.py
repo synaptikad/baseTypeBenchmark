@@ -689,19 +689,64 @@ def workflow_benchmark():
                     break
 
             try:
-                # TODO: actual benchmark execution
-                print_info(f"Executing {scenario} on {dataset} with {current_ram}GB RAM...")
-                time.sleep(2)  # placeholder
+                # Real benchmark execution
+                from basetype_benchmark.benchmark_executor import BenchmarkExecutor, format_detailed_results
 
-                # Simulated performance metric (replace with actual)
-                current_perf = 100 / current_ram  # Lower is better (placeholder)
+                # Get dataset export path
+                export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{dataset}_seed42"
+                if not export_dir.exists():
+                    # Try source dataset if extracting subset
+                    export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{source_dataset}_seed42"
+
+                executor = BenchmarkExecutor()
+
+                def progress_callback(phase, message):
+                    if phase == "query":
+                        print(f"    {message}")
+                    elif phase == "query_done":
+                        print(f"    {GREEN}[OK]{RESET} {message}")
+                    elif phase in ["load", "connect", "schema", "clear"]:
+                        print_info(message)
+                    elif phase == "load_done":
+                        print_ok(message)
+
+                print_info(f"Executing {scenario} on {dataset} with {current_ram}GB RAM...")
+
+                bench_result = executor.run_benchmark(
+                    scenario=scenario,
+                    dataset_dir=export_dir,
+                    ram_gb=current_ram,
+                    callback=progress_callback
+                )
+
+                if bench_result.status == "oom":
+                    raise MemoryError("OOM detected")
+                elif bench_result.status == "error":
+                    raise Exception(bench_result.error)
+
+                # Convert p95 from ms to seconds for comparison
+                current_perf = bench_result.overall_p95 / 1000.0
 
                 ram_results.append({
                     "ram_gb": current_ram,
                     "status": "completed",
-                    "p95_latency": current_perf  # placeholder
+                    "p95_latency": current_perf,
+                    "p50_latency": bench_result.overall_p50 / 1000.0,
+                    "load_time": bench_result.load_time_s,
+                    "query_stats": {
+                        qid: {
+                            "p50": qs.p50,
+                            "p95": qs.p95,
+                            "min": qs.min_latency,
+                            "max": qs.max_latency,
+                            "runs": qs.success_count
+                        }
+                        for qid, qs in bench_result.query_stats.items()
+                    }
                 })
 
+                # Print detailed results
+                print(format_detailed_results(bench_result))
                 print_ok(f"{scenario} @ {current_ram}GB completed (p95: {current_perf:.2f}s)")
 
                 # Check for plateau
@@ -765,15 +810,11 @@ def workflow_benchmark():
     # Build summary table
     print_header("RESULTS SUMMARY TABLE")
 
-    # Table header
-    col_widths = {"scenario": 8, "status": 10, "ram_min": 10, "ram_opt": 10, "p95_best": 12, "oom": 12}
+    # Main table header
+    print(f"\n{BOLD}RAM Gradient Results:{RESET}")
     header = (
-        f"{'Scenario':<{col_widths['scenario']}} | "
-        f"{'Status':<{col_widths['status']}} | "
-        f"{'RAM Min':<{col_widths['ram_min']}} | "
-        f"{'RAM Opt':<{col_widths['ram_opt']}} | "
-        f"{'p95 Best':<{col_widths['p95_best']}} | "
-        f"{'OOM Levels':<{col_widths['oom']}}"
+        f"{'Scenario':<8} | {'Status':<6} | {'RAM Min':<8} | {'RAM Opt':<8} | "
+        f"{'Load(s)':<8} | {'p50(s)':<8} | {'p95(s)':<8} | {'Queries':<8} | {'OOM':<10}"
     )
     separator = "-" * len(header)
 
@@ -789,44 +830,85 @@ def workflow_benchmark():
             oom_tests = [t for t in tests if t.get("status") == "oom"]
 
             if completed:
-                status = f"{GREEN}OK{RESET}"
+                status = f"{GREEN}OK{RESET}    "
                 ram_min = f"{min(t['ram_gb'] for t in completed)}GB"
                 ram_opt = f"{r.get('optimal_ram', '?')}GB"
-                p95_best = f"{min(t.get('p95_latency', 999) for t in completed):.2f}s"
+                # Get best run metrics
+                best_run = min(completed, key=lambda t: t.get('p95_latency', 999))
+                p95_best = f"{best_run.get('p95_latency', 0):.2f}"
+                p50_best = f"{best_run.get('p50_latency', 0):.2f}"
+                load_time = f"{best_run.get('load_time', 0):.1f}"
+                # Count queries
+                query_stats = best_run.get('query_stats', {})
+                num_queries = len(query_stats)
             else:
-                status = f"{RED}FAIL{RESET}"
+                status = f"{RED}FAIL{RESET}  "
                 ram_min = "-"
                 ram_opt = "-"
                 p95_best = "-"
+                p50_best = "-"
+                load_time = "-"
+                num_queries = 0
 
-            if oom_tests:
-                oom_levels = ", ".join(f"{t['ram_gb']}GB" for t in oom_tests)
-            else:
-                oom_levels = "-"
-
-            # Pad status for ANSI codes
-            status_display = status + " " * (col_widths['status'] - 2 if "OK" in status else col_widths['status'] - 4)
+            oom_str = ", ".join(f"{t['ram_gb']}" for t in oom_tests) if oom_tests else "-"
 
             print(
-                f"{s:<{col_widths['scenario']}} | "
-                f"{status_display} | "
-                f"{ram_min:<{col_widths['ram_min']}} | "
-                f"{ram_opt:<{col_widths['ram_opt']}} | "
-                f"{p95_best:<{col_widths['p95_best']}} | "
-                f"{oom_levels:<{col_widths['oom']}}"
+                f"{s:<8} | {status} | {ram_min:<8} | {ram_opt:<8} | "
+                f"{load_time:<8} | {p50_best:<8} | {p95_best:<8} | {num_queries:<8} | {oom_str:<10}"
             )
         else:
-            status = f"{RED}ERROR{RESET}"
+            status = f"{RED}ERR{RESET}   "
+            err_msg = str(r)[:10] if r else "-"
             print(
-                f"{s:<{col_widths['scenario']}} | "
-                f"{status:<{col_widths['status'] + 9}} | "  # +9 for ANSI codes
-                f"{'-':<{col_widths['ram_min']}} | "
-                f"{'-':<{col_widths['ram_opt']}} | "
-                f"{'-':<{col_widths['p95_best']}} | "
-                f"{str(r)[:col_widths['oom']]:<{col_widths['oom']}}"
+                f"{s:<8} | {status} | {'-':<8} | {'-':<8} | "
+                f"{'-':<8} | {'-':<8} | {'-':<8} | {'-':<8} | {err_msg:<10}"
             )
 
     print(separator)
+
+    # Query breakdown table (for completed scenarios)
+    completed_scenarios = {s: r for s, r in results.items()
+                          if isinstance(r, dict) and r.get("ram_tests")
+                          and any(t.get("status") == "completed" for t in r["ram_tests"])}
+
+    if completed_scenarios:
+        print(f"\n{BOLD}Query Performance (best RAM level, ms):{RESET}")
+
+        # Collect all query IDs
+        all_queries = set()
+        for s, r in completed_scenarios.items():
+            best_run = next((t for t in r["ram_tests"] if t.get("status") == "completed"), None)
+            if best_run and best_run.get("query_stats"):
+                all_queries.update(best_run["query_stats"].keys())
+
+        all_queries = sorted(all_queries)
+
+        if all_queries:
+            # Header
+            q_header = f"{'Scenario':<8} |" + "".join(f" {q:<8} |" for q in all_queries)
+            q_sep = "-" * len(q_header)
+            print(q_sep)
+            print(q_header)
+            print(q_sep)
+
+            # Rows
+            for s, r in completed_scenarios.items():
+                best_run = min(
+                    [t for t in r["ram_tests"] if t.get("status") == "completed"],
+                    key=lambda t: t.get('p95_latency', 999)
+                )
+                query_stats = best_run.get("query_stats", {})
+
+                row = f"{s:<8} |"
+                for q in all_queries:
+                    if q in query_stats:
+                        p95 = query_stats[q].get("p95", 0)
+                        row += f" {p95:<8.1f} |"
+                    else:
+                        row += f" {'N/A':<8} |"
+                print(row)
+
+            print(q_sep)
 
     # Summary stats
     print(f"\n{BOLD}Summary:{RESET}")
@@ -835,34 +917,43 @@ def workflow_benchmark():
     oom_count = sum(1 for r in results.values() if isinstance(r, dict) and any(t.get("status") == "oom" for t in r.get("ram_tests", [])))
     fail_count = total - ok_count
 
-    print(f"  Total scenarios: {total}")
-    print(f"  Completed:       {ok_count} ({ok_count * 100 // total if total else 0}%)")
+    print(f"  Total scenarios:    {total}")
+    print(f"  Completed:          {ok_count} ({ok_count * 100 // total if total else 0}%)")
     if oom_count:
-        print(f"  Had OOM:         {oom_count}")
+        print(f"  Had OOM:            {oom_count}")
     if fail_count:
-        print(f"  Failed:          {fail_count}")
+        print(f"  Failed:             {fail_count}")
 
     # Best performers
     if ok_count > 0:
         best_ram = None
         best_perf = None
+        fastest_load = None
+
         for s, r in results.items():
             if isinstance(r, dict) and r.get("optimal_ram"):
                 opt_ram = r["optimal_ram"]
                 tests = r.get("ram_tests", [])
                 completed = [t for t in tests if t.get("status") == "completed"]
                 if completed:
-                    best_p95 = min(t.get("p95_latency", 999) for t in completed)
+                    best_run = min(completed, key=lambda t: t.get('p95_latency', 999))
+                    best_p95 = best_run.get("p95_latency", 999)
+                    load_t = best_run.get("load_time", 999)
+
                     if best_ram is None or opt_ram < best_ram[1]:
                         best_ram = (s, opt_ram)
                     if best_perf is None or best_p95 < best_perf[1]:
                         best_perf = (s, best_p95)
+                    if fastest_load is None or load_t < fastest_load[1]:
+                        fastest_load = (s, load_t)
 
         print(f"\n{BOLD}Best performers:{RESET}")
         if best_ram:
-            print(f"  Lowest RAM:      {best_ram[0]} ({best_ram[1]}GB)")
+            print(f"  Lowest RAM needed:  {best_ram[0]} ({best_ram[1]}GB)")
         if best_perf:
-            print(f"  Best latency:    {best_perf[0]} (p95={best_perf[1]:.2f}s)")
+            print(f"  Best p95 latency:   {best_perf[0]} ({best_perf[1]:.2f}s)")
+        if fastest_load:
+            print(f"  Fastest data load:  {fastest_load[0]} ({fastest_load[1]:.1f}s)")
 
     print(f"\n{DIM}Results saved to: {results_dir}{RESET}")
     input("\nPress Enter...")
