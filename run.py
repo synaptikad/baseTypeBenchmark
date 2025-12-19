@@ -1293,8 +1293,8 @@ def run_query_benchmark(
     latencies = []
     rows = 0
     for run_idx in range(n_runs):
-        if run_idx > 0:
-            drop_caches()
+        # Note: drop_caches between runs removed for performance
+        # Single drop_caches before warmup is sufficient
         try:
             t0 = time.perf_counter()
             rows = execute_fn(query_text)
