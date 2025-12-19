@@ -1310,12 +1310,38 @@ def run_query_benchmark(
 
     stats = compute_stats(latencies)
 
-    # Build result with extended or basic resources
+    # Normalize resources format for consistent access
+    # ExtendedResourceMonitor uses memory.used_mb, basic uses mem_mb
+    if isinstance(query_resources.get("cpu"), dict):
+        # Extended monitor format -> normalize to basic format
+        mem_info = query_resources.get("memory", {}).get("used_mb", {})
+        cpu_info = query_resources.get("cpu", {}).get("total_pct", {})
+        normalized_resources = {
+            "mem_mb": {
+                "min": mem_info.get("min", 0),
+                "max": mem_info.get("max", 0),
+                "avg": mem_info.get("avg", 0),
+            },
+            "cpu_pct": {
+                "min": cpu_info.get("min", 0),
+                "max": cpu_info.get("max", 0),
+                "avg": cpu_info.get("avg", 0),
+            },
+            "extended": query_resources  # Keep full data for detailed analysis
+        }
+    else:
+        # Basic monitor format - ensure keys exist
+        normalized_resources = {
+            "mem_mb": query_resources.get("mem_mb", {"min": 0, "max": 0, "avg": 0}),
+            "cpu_pct": query_resources.get("cpu_pct", {"min": 0, "max": 0, "avg": 0}),
+        }
+
+    # Build result with normalized resources
     result = {
         "latencies_ms": latencies,
         "rows": rows,
         "stats": stats,
-        "resources": query_resources,
+        "resources": normalized_resources,
         "params": params or {}
     }
 
