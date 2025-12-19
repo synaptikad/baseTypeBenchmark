@@ -307,16 +307,15 @@ def get_scenario_files(export_dir: Path, scenario: str) -> dict:
     scenario_lower = scenario.lower()
     scenario_dir = export_dir / scenario_lower
 
-    # Fallback to old structure if V2 not available
+    # V2 structure required - no fallback to V1
     if not scenario_dir.exists():
-        # Old V1 structure: all files in root
-        return {
-            "nodes": export_dir / "nodes.csv",
-            "edges": export_dir / "edges.csv",
-            "timeseries": export_dir / "timeseries.csv",
-            "graph": export_dir / "graph.jsonld",
-            "chunks": export_dir / "timeseries_chunks.json",
-        }
+        available_dirs = [d.name for d in export_dir.iterdir() if d.is_dir()]
+        raise FileNotFoundError(
+            f"Scenario directory not found: {scenario_dir}\n"
+            f"Available directories: {available_dirs}\n"
+            f"Dataset may need regeneration with V2 generator.\n"
+            f"Run: 1. Purge Datasets -> 2. Generate Dataset"
+        )
 
     # V2 structure by scenario
     if scenario in ("P1",):
@@ -1538,6 +1537,15 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
         clear_database(conn)
 
         print_info(f"Loading data ({scenario} schema)...")
+
+        # Get and display file paths for debugging
+        files = get_scenario_files(export_dir, scenario)
+        print_info(f"Export dir: {export_dir}")
+        print_info(f"Files to load:")
+        for key, path in files.items():
+            exists = "OK" if path.exists() else "MISSING"
+            print(f"          - {key}: {path.name} [{exists}]")
+
         load_monitor = ResourceMonitor(container_name, interval_s=1.0)
         load_monitor.start()
         load_start = time.time()
@@ -1987,6 +1995,11 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
 
     # Get file paths for this scenario (V2 format)
     files = get_scenario_files(export_dir, scenario)
+    print_info(f"Export dir: {export_dir}")
+    print_info(f"Files to load:")
+    for key, path in files.items():
+        exists = "OK" if path.exists() else "MISSING"
+        print(f"          - {key}: {path.name} [{exists}]")
 
     try:
         # Clear and load with resource monitoring
@@ -2120,6 +2133,11 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
     try:
         # Get V2 file paths for this scenario
         files = get_scenario_files(export_dir, scenario)
+        print_info(f"Export dir: {export_dir}")
+        print_info(f"Files to load:")
+        for key, path in files.items():
+            exists = "OK" if path.exists() else "MISSING"
+            print(f"          - {key}: {path.name} [{exists}]")
 
         # Clear and load with resource monitoring
         print_info("Clearing store...")
