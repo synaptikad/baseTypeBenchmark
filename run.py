@@ -1772,11 +1772,12 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                 conn.commit()
 
     # Load timeseries from CSV (use COPY for performance)
+    # CSV format from exporter_v2: point_id, time, value
     ts_file = files["timeseries"]
     if ts_file.exists():
         with open(ts_file, 'r', encoding='utf-8') as f:
             cur.copy_expert(
-                "COPY timeseries (time, point_id, value) FROM STDIN WITH CSV HEADER",
+                "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
                 f
             )
         conn.commit()
