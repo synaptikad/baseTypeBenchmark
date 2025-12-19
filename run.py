@@ -82,6 +82,40 @@ def run_cmd(cmd: str, cwd: str = None) -> bool:
         return False
 
 
+def get_docker_compose_cmd() -> str:
+    """Detect available docker compose command."""
+    # Try new syntax first (docker compose)
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            return "docker compose"
+    except:
+        pass
+
+    # Fall back to old syntax (docker-compose)
+    try:
+        result = subprocess.run(
+            ["docker-compose", "version"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            return "docker-compose"
+    except:
+        pass
+
+    # Default to new syntax (will fail with clear error)
+    return "docker compose"
+
+
+# Detect docker compose command at startup
+DOCKER_COMPOSE_CMD = get_docker_compose_cmd()
+
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -208,7 +242,7 @@ def download_from_huggingface(profile: str, seed: int = 42):
 def stop_all_containers():
     """Stop all benchmark containers."""
     print_info("Stopping all containers...")
-    run_cmd("docker compose down", cwd=str(DOCKER_DIR))
+    run_cmd(f"{DOCKER_COMPOSE_CMD} down", cwd=str(DOCKER_DIR))
 
 
 def start_containers(containers: List[str]) -> bool:
@@ -216,7 +250,7 @@ def start_containers(containers: List[str]) -> bool:
     stop_all_containers()
     print_info(f"Starting: {', '.join(containers)}")
 
-    if not run_cmd(f"docker compose up -d {' '.join(containers)}", cwd=str(DOCKER_DIR)):
+    if not run_cmd(f"{DOCKER_COMPOSE_CMD} up -d {' '.join(containers)}", cwd=str(DOCKER_DIR)):
         print_err("Failed to start containers")
         return False
 
@@ -596,7 +630,7 @@ def start_containers_with_ram(containers: List[str], ram_gb: int) -> bool:
 
     try:
         result = subprocess.run(
-            f"docker compose up -d {' '.join(containers)}",
+            f"{DOCKER_COMPOSE_CMD} up -d {' '.join(containers)}",
             shell=True,
             cwd=str(DOCKER_DIR),
             env=env,
