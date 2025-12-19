@@ -3188,7 +3188,8 @@ def get_export_size_info() -> Tuple[int, float]:
     total_size = 0.0
 
     for subdir in export_dir.iterdir():
-        if subdir.is_dir() and any(subdir.glob("*.csv")):
+        # V2 format: check for fingerprint.json (created after successful export)
+        if subdir.is_dir() and (subdir / "fingerprint.json").exists():
             count += 1
             total_size += sum(f.stat().st_size for f in subdir.rglob('*') if f.is_file()) / (1024 * 1024)
 
