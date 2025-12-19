@@ -114,26 +114,16 @@ echo "📊 [6/6] Generating datasets..."
 
 cd /home/benchmark/baseTypeBenchmark
 
-# Activate venv and generate datasets
+# Ready for interactive benchmark
 sudo -u benchmark bash -c '
 source .venv/bin/activate
 export PYTHONPATH=/home/benchmark/baseTypeBenchmark/src
 
-# Generate all scale profiles
-echo "  Generating small-1w..."
-python -c "from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator; g = BuildingGraphGenerator(); g.generate_from_profile(\"small-1w\"); g.export_all(\"data/small-1w\")"
-
-echo "  Generating medium-10w..."
-python -c "from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator; g = BuildingGraphGenerator(); g.generate_from_profile(\"medium-10w\"); g.export_all(\"data/medium-10w\")"
-
-echo "  Generating large-100w..."
-python -c "from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator; g = BuildingGraphGenerator(); g.generate_from_profile(\"large-100w\"); g.export_all(\"data/large-100w\")"
-
-echo "  Generating xlarge-500w..."
-python -c "from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator; g = BuildingGraphGenerator(); g.generate_from_profile(\"xlarge-500w\"); g.export_all(\"data/xlarge-500w\")"
+echo "  Setup complete. Use run.py to generate datasets and run benchmarks."
+echo "  Example: python run.py"
 '
 
-echo "✓ Datasets generated"
+echo "Setup complete - use run.py for dataset generation"
 
 # =============================================================================
 # SUMMARY
@@ -154,6 +144,6 @@ echo "  2. cd baseTypeBenchmark"
 echo "  3. source .venv/bin/activate"
 echo "  4. See HETZNER_GUIDE.md for benchmark commands"
 echo ""
-echo "Quick test:"
-echo "  python test_ram_validation.py --help"
+echo "Quick start:"
+echo "  python run.py"
 echo ""

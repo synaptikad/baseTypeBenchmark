@@ -1,0 +1,210 @@
+# config/equipment_distribution.yaml
+# Matrice de distribution équipements par type d'espace
+
+distribution:
+  # === BUREAUX ===
+  office_open:
+    HVAC:
+      - { type: FCU, min: 2, max: 4 }
+      - { type: Thermostat, min: 1, max: 2 }
+      - { type: TemperatureSensor, min: 1, max: 2 }
+      - { type: CO2_Sensor, min: 1, max: 2 }
+    Lighting:
+      - { type: LED_Luminaire, min: 8, max: 16 }
+      - { type: Occupancy_Sensor, min: 2, max: 4 }
+    IT:
+      - { type: WirelessAccessPoint, min: 1, max: 3 }
+    FireSafety:
+      - { type: SmokeDetector, min: 2, max: 4 }
+    BMS:
+      - { type: PeopleCounter, min: 1, max: 2 }
+
+  office_closed:
+    HVAC:
+      - { type: FCU, min: 1, max: 1 }
+      - { type: Thermostat, min: 1, max: 1 }
+    Lighting:
+      - { type: LED_Luminaire, min: 2, max: 4 }
+      - { type: Occupancy_Sensor, min: 1, max: 1 }
+    Security:
+      - { type: DoorContact, min: 1, max: 1 }
+    FireSafety:
+      - { type: SmokeDetector, min: 1, max: 1 }
+
+  # === SALLES DE RÉUNION ===
+  meeting_small:
+    AV:
+      - { type: Display, min: 1, max: 1 }
+    HVAC:
+      - { type: FCU, min: 1, max: 1 }
+      - { type: Thermostat, min: 1, max: 1 }
+    Lighting:
+      - { type: LED_Luminaire, min: 2, max: 4 }
+      - { type: Dimmer, min: 1, max: 1 }
+    Security:
+      - { type: DoorContact, min: 1, max: 1 }
+
+  meeting_large:
+    AV:
+      - { type: Display, min: 1, max: 2 }
+      - { type: VideoConferenceCodec, min: 1, max: 1 }
+      - { type: Microphone, min: 2, max: 4 }
+    HVAC:
+      - { type: FCU, min: 1, max: 2 }
+      - { type: Thermostat, min: 1, max: 1 }
+      - { type: CO2_Sensor, min: 1, max: 1 }
+    Lighting:
+      - { type: LED_Luminaire, min: 4, max: 8 }
+      - { type: Dimmer, min: 1, max: 1 }
+    BMS:
+      - { type: PeopleCounter, min: 1, max: 1 }
+
+  conference:
+    AV:
+      - { type: Display, min: 2, max: 4 }
+      - { type: VideoConferenceCodec, min: 1, max: 2 }
+      - { type: Microphone, min: 4, max: 8 }
+      - { type: Speaker, min: 2, max: 4 }
+    HVAC:
+      - { type: AHU, min: 0, max: 1 }
+      - { type: FCU, min: 2, max: 4 }
+      - { type: Thermostat, min: 1, max: 2 }
+    Lighting:
+      - { type: LED_Luminaire, min: 8, max: 16 }
+      - { type: Dimmer, min: 2, max: 4 }
+    Security:
+      - { type: DoorContact, min: 2, max: 4 }
+      - { type: IPCamera, min: 1, max: 2 }
+    BMS:
+      - { type: PeopleCounter, min: 1, max: 2 }
+
+  # === CIRCULATIONS ===
+  corridor:
+    FireSafety:
+      - { type: SmokeDetector, min: 2, max: 4 }
+      - { type: ManualCallPoint, min: 1, max: 1 }
+    Lighting:
+      - { type: LED_Luminaire, min: 4, max: 8 }
+      - { type: Emergency_Lighting, min: 2, max: 4 }
+    Security:
+      - { type: IPCamera, min: 1, max: 2 }
+
+  lobby:
+    Elevator:
+      - { type: PassengerElevator, min: 2, max: 4 }
+    Security:
+      - { type: SpeedGate, min: 2, max: 6 }
+      - { type: IPCamera, min: 2, max: 4 }
+      - { type: BadgeReader, min: 2, max: 4 }
+    Lighting:
+      - { type: LED_Luminaire, min: 6, max: 12 }
+    HVAC:
+      - { type: AHU, min: 0, max: 1 }
+    AV:
+      - { type: Display, min: 1, max: 2 }
+    BMS:
+      - { type: PeopleCounter, min: 2, max: 4 }
+
+  vertical:
+    Elevator:
+      - { type: PassengerElevator, min: 1, max: 2 }
+    Plumbing:
+      - { type: Water_Meter, min: 0, max: 1 }
+    FireSafety:
+      - { type: SmokeDetector, min: 1, max: 2 }
+      - { type: Emergency_Lighting, min: 1, max: 2 }
+
+  # === SERVICES ===
+  restroom:
+    Plumbing:
+      - { type: Water_Meter, min: 1, max: 1 }
+    Lighting:
+      - { type: LED_Luminaire, min: 2, max: 4 }
+      - { type: Occupancy_Sensor, min: 1, max: 1 }
+    FireSafety:
+      - { type: SmokeDetector, min: 1, max: 1 }
+
+  kitchen:
+    Electrical:
+      - { type: ElectricalPanel, min: 1, max: 1 }
+    FireSafety:
+      - { type: SmokeDetector, min: 1, max: 2 }
+      - { type: FireExtinguisher, min: 1, max: 2 }
+    Lighting:
+      - { type: LED_Luminaire, min: 4, max: 8 }
+    HVAC:
+      - { type: ExhaustFan, min: 1, max: 2 }
+      - { type: FCU, min: 1, max: 1 }
+
+  storage:
+    FireSafety:
+      - { type: SmokeDetector, min: 1, max: 2 }
+    Security:
+      - { type: DoorContact, min: 1, max: 1 }
+    HVAC:
+      - { type: Thermostat, min: 0, max: 1 }
+
+  # === TECHNIQUES ===
+  technical_elec:
+    Electrical:
+      - { type: TGBT, min: 1, max: 1 }
+      - { type: ElectricalPanel, min: 2, max: 6 }
+      - { type: UPS, min: 1, max: 2 }
+      - { type: EnergyMeter, min: 4, max: 12 }
+    Security:
+      - { type: DoorContact, min: 1, max: 1 }
+      - { type: BadgeReader, min: 1, max: 1 }
+    FireSafety:
+      - { type: SmokeDetector, min: 2, max: 4 }
+      - { type: FireAlarmPanel, min: 1, max: 1 }
+
+  technical_hvac:
+    HVAC:
+      - { type: AHU, min: 1, max: 3 }
+      - { type: Chiller, min: 1, max: 2 }
+      - { type: Boiler, min: 1, max: 2 }
+      - { type: Pump, min: 4, max: 12 }
+      - { type: VFD, min: 4, max: 12 }
+      - { type: CoolingTower, min: 0, max: 2 }
+    Plumbing:
+      - { type: Pump, min: 2, max: 6 }
+      - { type: Water_Meter, min: 1, max: 2 }
+    Electrical:
+      - { type: ElectricalPanel, min: 1, max: 2 }
+    FireSafety:
+      - { type: SmokeDetector, min: 2, max: 4 }
+
+  technical_it:
+    IT:
+      - { type: NetworkSwitch, min: 2, max: 8 }
+      - { type: RackServer, min: 4, max: 16 }
+      - { type: WirelessAccessPoint, min: 0, max: 2 }
+    Security:
+      - { type: DoorContact, min: 1, max: 1 }
+      - { type: BadgeReader, min: 1, max: 1 }
+      - { type: IPCamera, min: 1, max: 2 }
+    Electrical:
+      - { type: UPS, min: 1, max: 2 }
+      - { type: PDU, min: 2, max: 8 }
+    HVAC:
+      - { type: CRAC, min: 1, max: 4 }
+    FireSafety:
+      - { type: SmokeDetector, min: 2, max: 4 }
+
+  # === PARKING ===
+  parking:
+    Parking:
+      - { type: ParkingSensor, min: 20, max: 100 }
+      - { type: EVCharger, min: 2, max: 10 }
+      - { type: BarrierGate, min: 2, max: 4 }
+      - { type: TicketDispenser, min: 1, max: 2 }
+    FireSafety:
+      - { type: SmokeDetector, min: 4, max: 12 }
+      - { type: ExhaustFan, min: 2, max: 4 }
+      - { type: CO_Sensor, min: 2, max: 6 }
+    Security:
+      - { type: IPCamera, min: 4, max: 12 }
+      - { type: BadgeReader, min: 2, max: 4 }
+    Lighting:
+      - { type: LED_Luminaire, min: 10, max: 40 }
+      - { type: Emergency_Lighting, min: 4, max: 8 }

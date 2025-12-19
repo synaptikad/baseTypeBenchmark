@@ -1,19 +1,19 @@
--- Q3: Space Services - What equipment serves each space?
--- Benchmark: Multi-hop traversal with aggregation
--- Pattern: Space → Equipment mapping
+-- Q3: Space Services - What equipment serves this space?
+-- Benchmark: Lookup relationship pattern
+-- Parameter: $SPACE_ID - space to query for serving equipment
 
 SELECT
     s.id as space_id,
     s.name as space_name,
     s.building_id,
-    COUNT(DISTINCT eq.id) as equipment_count,
-    ARRAY_AGG(DISTINCT eq.type) as equipment_types
+    eq.id as equipment_id,
+    eq.name as equipment_name,
+    eq.type as equipment_type,
+    e1.rel_type as relationship
 FROM nodes s
 JOIN edges e1 ON e1.src_id = s.id OR e1.dst_id = s.id
 JOIN nodes eq ON (eq.id = e1.src_id OR eq.id = e1.dst_id) AND eq.id != s.id
-WHERE s.type = 'Space'
+WHERE s.id = '$SPACE_ID'
   AND eq.type = 'Equipment'
   AND e1.rel_type IN ('CONTAINS', 'SERVES', 'LOCATED_IN')
-GROUP BY s.id, s.name, s.building_id
-ORDER BY equipment_count DESC
-LIMIT 100;
+ORDER BY eq.name;

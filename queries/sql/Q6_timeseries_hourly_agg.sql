@@ -1,6 +1,6 @@
 -- Q6: Timeseries Hourly Aggregation
 -- Benchmark: TimescaleDB time_bucket + aggregation (key TS query)
--- Pattern: Hourly averages for last 24h
+-- Parameters: $POINT_ID - point to aggregate, $DATE_START/$DATE_END - time range
 
 SELECT
     time_bucket('1 hour', time) as hour,
@@ -10,7 +10,8 @@ SELECT
     MAX(value) as max_value,
     COUNT(*) as sample_count
 FROM timeseries
-WHERE time >= NOW() - INTERVAL '24 hours'
+WHERE point_id = '$POINT_ID'
+  AND time >= '$DATE_START'::timestamptz
+  AND time < '$DATE_END'::timestamptz
 GROUP BY hour, point_id
-ORDER BY hour DESC, point_id
-LIMIT 1000;
+ORDER BY hour DESC;

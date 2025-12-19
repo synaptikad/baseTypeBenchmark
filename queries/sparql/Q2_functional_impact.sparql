@@ -3,17 +3,14 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 # Q2: Functional Impact Analysis
 # What spaces are affected if equipment X fails?
+# Parameter: $EQUIPMENT_ID - equipment to analyze for impact
 
 SELECT ?type (COUNT(DISTINCT ?affected) AS ?affected_count)
 WHERE {
-  # Get first equipment
-  {
-    SELECT ?eq WHERE {
-      ?eq rdf:type btb:Equipment .
-    } LIMIT 1
-  }
+  # Start from specified equipment
+  BIND(<http://basetype.benchmark/$EQUIPMENT_ID> AS ?eq)
 
-  # Find affected spaces/floors/zones via reverse traversal
+  # Find affected spaces/floors/zones via reverse traversal (up to 8 hops)
   ?affected (btb:contains|btb:serves|btb:feeds)+ ?eq .
   ?affected rdf:type ?type .
 

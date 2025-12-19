@@ -1,0 +1,38 @@
+# config/profiles/large.yaml
+# Profile LARGE - 12 bâtiments, ~1.5M points
+
+profile: large
+seed: 42
+
+buildings: 12
+floors:
+  - type: basement
+    count: 2
+  - type: ground
+    count: 1
+  - type: standard
+    count: 15
+  - type: rooftop
+    count: 1
+
+tenants: 30
+meters:
+  main: 12
+  sub_per_main: 5
+
+targets:
+  spaces: 2600
+  equipments: 39000
+  points: 1500000
+  meters: 72
+
+# Durées disponibles pour timeseries
+durations:
+  - name: 1w
+    days: 7
+  - name: 1m
+    days: 30
+  - name: 6m
+    days: 180
+  - name: 1y
+    days: 365

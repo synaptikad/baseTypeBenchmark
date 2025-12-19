@@ -1,13 +1,15 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-# Q3: Space Services - What equipment serves each space?
+# Q3: Space Services - What equipment serves this space?
+# Parameter: $SPACE_ID - space to query for serving equipment
 
-SELECT ?space_id ?space_name ?building_id
-       (COUNT(DISTINCT ?eq) AS ?equipment_count)
+SELECT ?space_id ?space_name ?building_id ?equipment_id ?equipment_name ?equipment_type
 WHERE {
-  ?space rdf:type btb:Space ;
-         btb:id ?space_id ;
+  # Start from specified space
+  BIND(<http://basetype.benchmark/$SPACE_ID> AS ?space)
+
+  ?space btb:id ?space_id ;
          btb:name ?space_name ;
          btb:building_id ?building_id .
 
@@ -18,8 +20,9 @@ WHERE {
     ?eq btb:contains|btb:serves|btb:locatedIn ?space .
   }
 
-  ?eq rdf:type btb:Equipment .
+  ?eq rdf:type btb:Equipment ;
+      btb:id ?equipment_id ;
+      btb:name ?equipment_name .
+  OPTIONAL { ?eq btb:type ?equipment_type }
 }
-GROUP BY ?space_id ?space_name ?building_id
-ORDER BY DESC(?equipment_count)
-LIMIT 100
+ORDER BY ?equipment_name

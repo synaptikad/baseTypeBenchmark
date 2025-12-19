@@ -1,37 +1,54 @@
 """Gestionnaire de datasets avec export direct sur disque.
 
 Le workflow pour les benchmarks est:
-1. generate_and_export() -> génère et écrit directement les CSV/JSON sur disque
+1. generate_and_export() -> génère via generator_v2 et exporte via exporter_v2
 2. Les benchmarks chargent depuis ces fichiers (I/O disque réaliste)
 
-Pas de cache pickle - cela fausserait les benchmarks.
-
-IMPORTANT: Pour les gros datasets (large-1y = ~550GB), on utilise le mode streaming:
-- Le graphe (nodes/edges) est généré en RAM (~quelques GB) puis écrit
-- Les timeseries sont générées par chunks (~16GB) et écrites immédiatement
-- Cela évite d'exploser la RAM
+Version 2.0 - Utilise le nouveau générateur basé sur docs/Exploration
+et produit les 6 formats de sortie (P1, P2, M1, M2, O1, O2).
 """
 from __future__ import annotations
 
-import csv
 import gc
 import json
 import shutil
-from datetime import datetime, timezone
+import time as time_module
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, Dict, Any
 
-from basetype_benchmark.dataset.config import (
-    ALIASES, DEFAULT_SEED, get_profile, SIZE_ESTIMATES_GB, TIMESERIES_RATIO
-)
-from basetype_benchmark.dataset.export_graph import export_property_graph
-from basetype_benchmark.dataset.export_pg import export_postgres
-from basetype_benchmark.dataset.export_rdf import export_rdf
-from basetype_benchmark.dataset.generator import (
-    Dataset, Summary, generate_dataset, generate_graph_only,
-    _get_sampling_frequency, _generate_values
-)
-from basetype_benchmark.dataset.model import TimeseriesChunk, Node, TIMESERIES_QUANTITIES
+from .config import ALIASES, DEFAULT_SEED
+from .generator_v2 import DatasetGeneratorV2, Dataset, generate_timeseries
+from . import exporter_v2
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Répertoire de configuration
+CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "config"
+
+# Répertoire Exploration pour les définitions d'équipements
+EXPLORATION_DIR = Path(__file__).parent.parent.parent.parent / "docs" / "Exploration"
+
+# Durées disponibles
+DURATIONS = {
+    "2d": 2,
+    "1w": 7,
+    "1m": 30,
+    "6m": 180,
+    "1y": 365,
+}
+
+# Estimations de taille (GB) pour scale+duration
+SIZE_ESTIMATES_GB = {
+    ("small", 2): 0.5, ("small", 7): 1, ("small", 30): 5, ("small", 180): 27, ("small", 365): 55,
+    ("medium", 2): 1, ("medium", 7): 2, ("medium", 30): 10, ("medium", 180): 54, ("medium", 365): 110,
+    ("large", 2): 5, ("large", 7): 11, ("large", 30): 45, ("large", 180): 270, ("large", 365): 550,
+}
+
+# Seuil pour mode streaming (GB)
+STREAMING_THRESHOLD_GB = 5
 
 
 class DatasetManager:
@@ -42,439 +59,242 @@ class DatasetManager:
         self.export_dir = self.base_dir / "exports"
         self.export_dir.mkdir(exist_ok=True)
 
-    def _estimate_size_gb(self, profile) -> float:
-        """Estime la taille du dataset en GB."""
-        estimates = {
-            ("small", 2): 0.5, ("small", 7): 1, ("small", 30): 5, ("small", 180): 27, ("small", 365): 55,
-            ("medium", 2): 1, ("medium", 7): 2, ("medium", 30): 10, ("medium", 180): 54, ("medium", 365): 110,
-            ("large", 2): 5, ("large", 7): 11, ("large", 30): 45, ("large", 180): 270, ("large", 365): 550,
-        }
-        if profile.points <= 60000:
-            scale = "small"
-        elif profile.points <= 150000:
-            scale = "medium"
-        else:
-            scale = "large"
-        return estimates.get((scale, profile.duration_days), profile.points * profile.duration_days / 1e7)
+    def _parse_profile(self, profile_name: str) -> Tuple[str, int]:
+        """Parse le nom de profil pour extraire scale et duration_days.
 
-    def generate_and_export(self, profile_name: str, seed: int = DEFAULT_SEED,
-                            formats: list = None) -> Tuple[Path, Summary]:
+        Args:
+            profile_name: Nom du profil (ex: 'small-1w', 'medium-1m')
+
+        Returns:
+            Tuple (scale, duration_days)
+        """
+        resolved = ALIASES.get(profile_name, profile_name)
+        parts = resolved.split("-")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid profile name: {profile_name}. Expected format: scale-duration (e.g., small-1w)")
+
+        scale = parts[0]
+        duration_key = parts[1]
+
+        if scale not in ("small", "medium", "large"):
+            raise ValueError(f"Invalid scale: {scale}. Expected: small, medium, large")
+
+        if duration_key not in DURATIONS:
+            raise ValueError(f"Invalid duration: {duration_key}. Expected: {list(DURATIONS.keys())}")
+
+        return scale, DURATIONS[duration_key]
+
+    def _estimate_size_gb(self, scale: str, duration_days: int) -> float:
+        """Estime la taille du dataset en GB."""
+        return SIZE_ESTIMATES_GB.get((scale, duration_days), 10.0)
+
+    def generate_and_export(
+        self,
+        profile_name: str,
+        seed: int = DEFAULT_SEED,
+        formats: list = None
+    ) -> Tuple[Path, Dict[str, Any], Dict[str, Any]]:
         """Génère un dataset et l'exporte directement sur disque.
 
-        Pour les gros datasets (>10 GB estimés), utilise le mode STREAMING:
-        - Génère le graphe en RAM (quelques GB max)
-        - Génère les timeseries par chunks et écrit immédiatement
-        - Affiche une progression réelle
+        Workflow V2:
+        1. Génère le graphe avec generator_v2 (depuis Exploration + YAML)
+        2. Exporte vers Parquet (format pivot)
+        3. Exporte vers les 6 formats cibles (P1, P2, M1, M2, O1, O2)
+        4. Calcule le fingerprint pour validation
+
+        Pour les gros datasets (>5 GB), utilise le mode streaming.
 
         Args:
             profile_name: Nom du profil (ex: 'small-1w', 'medium-1m')
             seed: Graine pour reproductibilité
-            formats: Liste des formats d'export ['postgres', 'graph', 'rdf']
-                    Par défaut: tous les formats
+            formats: Liste des formats d'export (None = tous)
+                    Options: 'parquet', 'postgresql', 'postgresql_jsonb',
+                             'memgraph', 'memgraph_m1', 'oxigraph', 'oxigraph_o1'
 
         Returns:
-            Tuple (chemin_export, summary)
+            Tuple (chemin_export, summary_dict, fingerprint_dict)
         """
-        import time as time_module
-        from random import Random
-
         if formats is None:
-            formats = ['postgres', 'graph', 'rdf']
+            formats = ['parquet', 'postgresql', 'postgresql_jsonb',
+                      'memgraph', 'memgraph_m1', 'oxigraph', 'oxigraph_o1']
 
-        # Résoudre l'alias
+        # Parser le profil
+        scale, duration_days = self._parse_profile(profile_name)
         resolved_profile = ALIASES.get(profile_name, profile_name)
-        profile = get_profile(resolved_profile)
-        estimated_size = self._estimate_size_gb(profile)
+        estimated_size = self._estimate_size_gb(scale, duration_days)
 
         # Créer le répertoire d'export
         export_subdir = self.export_dir / f"{resolved_profile}_seed{seed}"
-        export_subdir.mkdir(exist_ok=True)
+        if export_subdir.exists():
+            shutil.rmtree(export_subdir)
+        export_subdir.mkdir(parents=True)
 
-        print(f"[i] Generating dataset {profile_name}")
-        print(f"    Scale: {profile.points:,} points, {profile.floors} floors, {profile.spaces} spaces")
-        print(f"    Duration: {profile.duration_days} days of timeseries")
+        print(f"[i] Generating dataset {profile_name} (v2)")
+        print(f"    Scale: {scale}")
+        print(f"    Duration: {duration_days} days")
         print(f"    Estimated size: ~{estimated_size:.1f} GB")
         print(f"    Output: {export_subdir}")
 
-        # Décider du mode: streaming si > 10 GB estimés
-        use_streaming = estimated_size > 10
+        # Mode streaming pour gros datasets
+        use_streaming = estimated_size >= STREAMING_THRESHOLD_GB
         if use_streaming:
-            print(f"    Mode: STREAMING (dataset trop gros pour RAM)")
+            print(f"    Mode: STREAMING (dataset > {STREAMING_THRESHOLD_GB} GB)")
         else:
             print(f"    Mode: Standard (RAM)")
         print()
 
         start_time = time_module.time()
 
-        if use_streaming:
-            return self._generate_streaming(
-                profile, seed, export_subdir, formats, estimated_size, start_time
-            )
-        else:
-            return self._generate_standard(
-                profile, seed, export_subdir, formats, start_time
-            )
-
-    def _generate_standard(self, profile, seed: int, export_subdir: Path,
-                          formats: list, start_time: float) -> Tuple[Path, Summary]:
-        """Génération standard: tout en RAM puis export."""
-        import time as time_module
-
-        # Phase 1: Générer le dataset en RAM
-        print(f"    [1/2] Generating data...", end=" ", flush=True)
-        dataset, summary = generate_dataset(profile, seed)
-        gen_time = time_module.time() - start_time
-        print(f"done ({gen_time:.1f}s)")
-
-        print(f"          - Nodes: {summary.node_count:,}")
-        print(f"          - Edges: {summary.edge_count:,}")
-        print(f"          - Timeseries points: {len(dataset.timeseries):,}")
-        print()
-
-        # Phase 2: Exporter directement sur disque
-        print(f"    [2/2] Exporting to disk...")
-
-        if 'postgres' in formats:
-            print(f"          - PostgreSQL CSV...", end=" ", flush=True)
-            export_postgres(dataset, export_subdir)
-            print("done")
-
-        if 'graph' in formats:
-            print(f"          - Property Graph JSON...", end=" ", flush=True)
-            export_property_graph(dataset, export_subdir)
-            print("done")
-
-        if 'rdf' in formats:
-            print(f"          - RDF JSON-LD...", end=" ", flush=True)
-            export_rdf(dataset, export_subdir)
-            print("done")
-
-        total_time = time_module.time() - start_time
-        total_size_mb = sum(f.stat().st_size for f in export_subdir.rglob('*') if f.is_file()) / (1024*1024)
-
-        print()
-        print(f"[OK] Dataset exported in {total_time:.1f}s ({total_size_mb:.1f} MB on disk)")
-        print(f"     Location: {export_subdir}")
-
-        return export_subdir, summary
-
-    def _generate_streaming(self, profile, seed: int, export_subdir: Path,
-                           formats: list, estimated_size: float,
-                           start_time: float) -> Tuple[Path, Summary]:
-        """Génération streaming: graphe en RAM, timeseries par chunks sur disque.
-
-        Cette méthode permet de générer des datasets de plusieurs centaines de GB
-        sans exploser la RAM.
-        """
-        import time as time_module
-        from random import Random
-
-        rng = Random(seed)
-
         # =====================================================================
-        # PHASE 1: Générer le graphe (nodes + edges) - tient en RAM
+        # PHASE 1: Générer le graphe avec generator_v2
         # =====================================================================
-        print(f"    [1/4] Generating graph structure...")
+        print(f"    [1/3] Generating graph structure...")
         graph_start = time_module.time()
 
-        graph_data, summary, ts_point_info = generate_graph_only(profile, seed)
-        nodes = graph_data['nodes']
-        edges = graph_data['edges']
-        measures = graph_data['measures']
+        generator = DatasetGeneratorV2(
+            profile_name=scale,
+            config_path=CONFIG_DIR,
+            exploration_path=EXPLORATION_DIR if EXPLORATION_DIR.exists() else None,
+            seed=seed
+        )
+        dataset = generator.generate()
 
         graph_time = time_module.time() - graph_start
         print(f"          Done in {graph_time:.1f}s")
-        print(f"          - Nodes: {summary.node_count:,}")
-        print(f"          - Edges: {summary.edge_count:,}")
-        print(f"          - Points for timeseries: {len(ts_point_info):,}")
+        print(f"          - Nodes: {len(dataset.nodes):,}")
+        print(f"          - Edges: {len(dataset.edges):,}")
+        print(f"          - Points: {len(dataset.points):,}")
         print()
 
         # =====================================================================
-        # PHASE 2: Exporter le graphe sur disque
+        # PHASE 2: Exporter vers Parquet (format pivot)
         # =====================================================================
-        print(f"    [2/4] Exporting graph to disk...")
+        print(f"    [2/3] Exporting to Parquet pivot...")
+        parquet_start = time_module.time()
+
+        parquet_dir = export_subdir / "parquet"
+
+        if use_streaming:
+            exporter_v2.export_parquet_streaming(
+                dataset, parquet_dir, duration_days=duration_days
+            )
+        else:
+            exporter_v2.export_parquet(
+                dataset, parquet_dir, duration_days=duration_days
+            )
+
+        parquet_time = time_module.time() - parquet_start
+        print(f"          Done in {parquet_time:.1f}s")
+        print()
+
+        # =====================================================================
+        # PHASE 3: Exporter vers les formats cibles
+        # =====================================================================
+        print(f"    [3/3] Exporting to target formats...")
         export_start = time_module.time()
 
-        # Export nodes
-        if 'postgres' in formats:
-            self._export_nodes_csv(nodes, export_subdir)
-            self._export_edges_csv(edges, measures, export_subdir)
-            print(f"          - PostgreSQL CSV (nodes, edges): done")
+        target_mapping = {
+            'postgresql': ('postgresql', 'P1'),
+            'postgresql_jsonb': ('postgresql_jsonb', 'P2'),
+            'memgraph': ('memgraph', 'M2'),
+            'memgraph_m1': ('memgraph_m1', 'M1'),
+            'oxigraph': ('oxigraph', 'O2'),
+            'oxigraph_o1': ('oxigraph_o1', 'O1'),
+        }
 
-        if 'graph' in formats:
-            self._export_nodes_json(nodes, export_subdir)
-            self._export_edges_json(edges, measures, export_subdir)
-            print(f"          - Property Graph JSON (nodes, edges): done")
+        for fmt in formats:
+            if fmt == 'parquet':
+                continue  # Already done
 
-        if 'rdf' in formats:
-            self._export_graph_rdf(nodes, edges, measures, export_subdir)
-            print(f"          - RDF JSON-LD (graph): done")
+            if fmt not in target_mapping:
+                print(f"          - {fmt}: skipped (unknown)")
+                continue
 
-        # Libérer la mémoire du graphe
-        del nodes, edges, graph_data
-        gc.collect()
+            target, scenario = target_mapping[fmt]
+            output_dir = export_subdir / scenario.lower()
+
+            try:
+                print(f"          - {scenario} ({target})...", end=" ", flush=True)
+                exporter_v2.export_for_target(parquet_dir, target, output_dir)
+                print("done")
+            except Exception as e:
+                print(f"failed: {e}")
 
         export_time = time_module.time() - export_start
         print(f"          Done in {export_time:.1f}s")
         print()
 
         # =====================================================================
-        # PHASE 3: Générer et exporter les timeseries par CHUNKS
+        # FINALISATION
         # =====================================================================
-        print(f"    [3/4] Generating timeseries (streaming)...")
-        ts_start = time_module.time()
 
-        # Calculer le nombre de points par chunk pour ~2GB de données
-        # Environ 70 bytes par sample JSON, on veut ~2GB par chunk
-        samples_per_point = (profile.duration_days * 24 * 60) // 15  # Moyenne 15min
-        bytes_per_point = samples_per_point * 70
-        chunk_target_bytes = 2 * 1024 * 1024 * 1024  # 2 GB
-        points_per_chunk = max(100, chunk_target_bytes // max(1, bytes_per_point))
+        # Libérer la mémoire
+        del dataset
+        gc.collect()
 
-        total_points = len(ts_point_info)
-        num_chunks = (total_points + points_per_chunk - 1) // points_per_chunk
-        total_samples = 0
-
-        print(f"          - {total_points:,} points in {num_chunks} chunks (~{points_per_chunk:,} points/chunk)")
-
-        # Ouvrir les fichiers en mode append pour les timeseries
-        ts_csv_path = export_subdir / "timeseries.csv"
-        ts_chunks_path = export_subdir / "timeseries_chunks.json"
-
-        # Écrire les headers
-        with open(ts_csv_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(["time", "point_id", "value"])
-
-        # Clear le fichier chunks
-        ts_chunks_path.write_text("")
-
-        for chunk_idx in range(num_chunks):
-            chunk_start = chunk_idx * points_per_chunk
-            chunk_end = min(chunk_start + points_per_chunk, total_points)
-            chunk_points = ts_point_info[chunk_start:chunk_end]
-
-            # Générer les timeseries pour ce chunk
-            chunk_timeseries = self._generate_timeseries_chunk(
-                chunk_points, profile, seed + chunk_idx, rng
-            )
-
-            # Écrire immédiatement sur disque
-            chunk_samples = 0
-            if 'postgres' in formats:
-                chunk_samples = self._append_timeseries_csv(chunk_timeseries, ts_csv_path)
-
-            if 'graph' in formats:
-                self._append_timeseries_chunks_json(chunk_timeseries, ts_chunks_path)
-
-            total_samples += chunk_samples
-
-            # Libérer la mémoire
-            del chunk_timeseries
-            gc.collect()
-
-            # Afficher la progression
-            progress_pct = (chunk_idx + 1) / num_chunks * 100
-            elapsed = time_module.time() - ts_start
-            rate = total_samples / elapsed if elapsed > 0 else 0
-            size_so_far = total_samples * 70 / (1024 * 1024 * 1024)  # GB estimé
-
-            print(f"\r          - Chunk {chunk_idx + 1}/{num_chunks} "
-                  f"({progress_pct:.0f}%) - {size_so_far:.1f}/{estimated_size:.0f} GB "
-                  f"- {rate/1e6:.1f}M samples/s", end="", flush=True)
-
-        ts_time = time_module.time() - ts_start
-        print(f"\n          Done in {ts_time:.1f}s - {total_samples:,} samples total")
-        print()
-
-        # Mettre à jour le summary avec le nombre de samples
-        summary.timeseries_samples = total_samples
-
-        # =====================================================================
-        # PHASE 4: Finalisation
-        # =====================================================================
-        print(f"    [4/4] Finalizing...")
+        # Calculer le fingerprint
+        fingerprint = exporter_v2.compute_fingerprint(parquet_dir)
+        fingerprint["profile"] = resolved_profile
+        fingerprint["seed"] = seed
+        fingerprint["duration_days"] = duration_days
+        exporter_v2.save_fingerprint(fingerprint, export_subdir)
 
         total_time = time_module.time() - start_time
-        total_size_mb = sum(f.stat().st_size for f in export_subdir.rglob('*') if f.is_file()) / (1024*1024)
+        total_size_mb = sum(
+            f.stat().st_size for f in export_subdir.rglob('*') if f.is_file()
+        ) / (1024 * 1024)
 
-        print()
-        print(f"[OK] Dataset exported in {total_time:.1f}s ({total_size_mb/1024:.1f} GB on disk)")
+        # Summary
+        summary = {
+            "profile": resolved_profile,
+            "scale": scale,
+            "duration_days": duration_days,
+            "seed": seed,
+            "node_count": fingerprint["counts"]["nodes"],
+            "edge_count": fingerprint["counts"]["edges"],
+            "timeseries_count": fingerprint["counts"].get("timeseries", 0),
+            "node_types": fingerprint["counts"]["node_types"],
+            "edge_types": fingerprint["counts"]["edge_types"],
+            "generation_time_s": total_time,
+            "size_mb": total_size_mb,
+        }
+
+        print(f"[OK] Dataset exported in {total_time:.1f}s ({total_size_mb:.1f} MB on disk)")
         print(f"     Location: {export_subdir}")
+        print(f"     Fingerprint: {fingerprint['struct_hash'][:8]}...{fingerprint.get('ts_hash', 'N/A')[:8] if fingerprint.get('ts_hash') else 'N/A'}")
 
-        return export_subdir, summary
-
-    def _generate_timeseries_chunk(self, point_info: List[Tuple[Node, str]],
-                                   profile, seed: int, rng) -> List[TimeseriesChunk]:
-        """Génère les timeseries pour un chunk de points.
-
-        Seuls les points avec mesures continues (fréquence > 0) sont générés.
-        Les événements rares (alarmes, états, accès) sont ignorés.
-        """
-        from datetime import datetime, timedelta
-
-        timeseries = []
-        start_time = int((datetime.now() - timedelta(days=profile.duration_days)).timestamp())
-        end_time = int(datetime.now().timestamp())
-
-        for point, quantity in point_info:
-            if not quantity:
-                continue
-
-            frequency_minutes = _get_sampling_frequency(quantity)
-
-            # Skip event-based quantities (frequency = 0)
-            if frequency_minutes == 0:
-                continue
-
-            values = _generate_values(quantity, profile.duration_days, frequency_minutes, rng)
-
-            chunk = TimeseriesChunk(
-                point_id=point.id,
-                start_time=start_time,
-                end_time=end_time,
-                frequency_seconds=frequency_minutes * 60,
-                values=values
-            )
-            timeseries.append(chunk)
-
-        return timeseries
-
-    def _export_nodes_csv(self, nodes: List[Node], out_dir: Path) -> None:
-        """Export nodes en CSV PostgreSQL."""
-        nodes_path = out_dir / "nodes.csv"
-        with nodes_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["id", "type", "name", "building_id", "data"])
-            for node in nodes:
-                building_id = node.properties.get("building_id", 0)
-                data = json.dumps(node.properties)
-                writer.writerow([node.id, node.type.value, node.name, building_id, data])
-
-    def _export_edges_csv(self, edges, measures, out_dir: Path) -> None:
-        """Export edges en CSV PostgreSQL."""
-        edges_path = out_dir / "edges.csv"
-        with edges_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["src_id", "dst_id", "rel_type"])
-            for edge in edges:
-                writer.writerow([edge.src, edge.dst, edge.rel.value])
-            for measure in measures:
-                writer.writerow([measure.src, measure.quantity, "MEASURES"])
-
-    def _export_nodes_json(self, nodes: List[Node], out_dir: Path) -> None:
-        """Export nodes en JSON lines."""
-        nodes_path = out_dir / "nodes.json"
-        with nodes_path.open("w", encoding="utf-8") as f:
-            for node in nodes:
-                json.dump({
-                    "id": node.id,
-                    "type": node.type.value,
-                    "name": node.name,
-                    "building_id": node.properties.get("building_id", 0),
-                    "properties": node.properties
-                }, f)
-                f.write("\n")
-
-    def _export_edges_json(self, edges, measures, out_dir: Path) -> None:
-        """Export edges en JSON lines."""
-        edges_path = out_dir / "edges.json"
-        with edges_path.open("w", encoding="utf-8") as f:
-            for edge in edges:
-                json.dump({"src": edge.src, "dst": edge.dst, "rel": edge.rel.value}, f)
-                f.write("\n")
-            for measure in measures:
-                json.dump({"src": measure.src, "dst": measure.quantity, "rel": "MEASURES"}, f)
-                f.write("\n")
-
-    def _export_graph_rdf(self, nodes, edges, measures, out_dir: Path) -> None:
-        """Export graphe en RDF JSON-LD (sans timeseries)."""
-        from basetype_benchmark.dataset.model import RelationType
-
-        predicate_map = {
-            "CONTAINS": "contains", "LOCATED_IN": "locatedIn", "HAS_PART": "hasPart",
-            "HAS_POINT": "hasPoint", "CONTROLS": "controls", "FEEDS": "feeds",
-            "SERVES": "serves", "OCCUPIES": "occupies",
-        }
-
-        graph = {node.id: {"id": node.id, "type": node.type.value, "name": node.name} for node in nodes}
-
-        for edge in edges:
-            pred = predicate_map.get(edge.rel.value)
-            if pred and edge.src in graph:
-                graph[edge.src].setdefault(pred, []).append({"id": edge.dst})
-
-        for measure in measures:
-            if measure.src in graph:
-                graph[measure.src].setdefault("measures", []).append({"@value": measure.quantity})
-
-        context = {
-            "@base": "http://example.org/id/",
-            "id": "@id", "type": "@type",
-            "name": "http://example.org/name",
-            "contains": "http://example.org/CONTAINS",
-            "locatedIn": "http://example.org/LOCATED_IN",
-            "hasPart": "http://example.org/HAS_PART",
-            "hasPoint": "http://example.org/HAS_POINT",
-            "controls": "http://example.org/CONTROLS",
-            "feeds": "http://example.org/FEEDS",
-            "serves": "http://example.org/SERVES",
-            "occupies": "http://example.org/OCCUPIES",
-            "measures": "http://example.org/MEASURES",
-        }
-
-        data = {"@context": context, "@graph": list(graph.values())}
-        out_path = out_dir / "graph.jsonld"
-        out_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-
-    def _append_timeseries_csv(self, timeseries: List[TimeseriesChunk], csv_path: Path) -> int:
-        """Append timeseries au fichier CSV (mode streaming)."""
-        total_samples = 0
-        with csv_path.open("a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            for chunk in timeseries:
-                current_time = chunk.start_time
-                for value in chunk.values:
-                    ts = datetime.fromtimestamp(current_time, tz=timezone.utc).isoformat()
-                    writer.writerow([ts, chunk.point_id, value])
-                    current_time += chunk.frequency_seconds
-                    total_samples += 1
-        return total_samples
-
-    def _append_timeseries_chunks_json(self, timeseries: List[TimeseriesChunk], json_path: Path) -> None:
-        """Append timeseries chunks au fichier JSON (mode streaming)."""
-        with json_path.open("a", encoding="utf-8") as f:
-            for chunk in timeseries:
-                chunk_node = {
-                    "id": f"chunk_{chunk.point_id}_{chunk.start_time}",
-                    "type": "TimeseriesChunk",
-                    "point_id": chunk.point_id,
-                    "start_time": chunk.start_time,
-                    "end_time": chunk.end_time,
-                    "frequency_seconds": chunk.frequency_seconds,
-                    "values": chunk.values
-                }
-                json.dump(chunk_node, f)
-                f.write("\n")
-
-                chunk_edge = {
-                    "src": chunk.point_id,
-                    "dst": f"chunk_{chunk.point_id}_{chunk.start_time}",
-                    "rel": "HAS_CHUNK"
-                }
-                json.dump(chunk_edge, f)
-                f.write("\n")
+        return export_subdir, summary, fingerprint
 
     def is_exported(self, profile_name: str, seed: int = DEFAULT_SEED) -> bool:
         """Vérifie si un dataset a déjà été exporté sur disque."""
         resolved_profile = ALIASES.get(profile_name, profile_name)
         export_subdir = self.export_dir / f"{resolved_profile}_seed{seed}"
-        return export_subdir.exists() and any(export_subdir.glob("*.csv"))
+        # Vérifie la présence du fingerprint comme indicateur de complétion
+        return (export_subdir / "fingerprint.json").exists()
 
     def get_export_path(self, profile_name: str, seed: int = DEFAULT_SEED) -> Path:
         """Retourne le chemin d'export pour un profil."""
         resolved_profile = ALIASES.get(profile_name, profile_name)
         return self.export_dir / f"{resolved_profile}_seed{seed}"
+
+    def get_scenario_path(
+        self,
+        profile_name: str,
+        scenario: str,
+        seed: int = DEFAULT_SEED
+    ) -> Path:
+        """Retourne le chemin d'export pour un scénario spécifique.
+
+        Args:
+            profile_name: Nom du profil (ex: 'small-1w')
+            scenario: Code scénario (P1, P2, M1, M2, O1, O2)
+            seed: Graine
+
+        Returns:
+            Path vers le répertoire du scénario
+        """
+        export_path = self.get_export_path(profile_name, seed)
+        return export_path / scenario.lower()
 
     def list_exported_datasets(self) -> list:
         """Liste les datasets exportés sur disque."""
@@ -483,13 +303,27 @@ class DatasetManager:
 
         datasets = []
         for subdir in self.export_dir.iterdir():
-            if subdir.is_dir() and any(subdir.glob("*.csv")):
-                size_mb = sum(f.stat().st_size for f in subdir.rglob('*') if f.is_file()) / (1024*1024)
-                datasets.append({
-                    'name': subdir.name,
-                    'path': subdir,
-                    'size_mb': size_mb,
-                })
+            if subdir.is_dir():
+                fingerprint_path = subdir / "fingerprint.json"
+                if fingerprint_path.exists():
+                    with open(fingerprint_path) as f:
+                        fp = json.load(f)
+
+                    size_mb = sum(
+                        f.stat().st_size for f in subdir.rglob('*') if f.is_file()
+                    ) / (1024 * 1024)
+
+                    datasets.append({
+                        'name': subdir.name,
+                        'path': subdir,
+                        'size_mb': size_mb,
+                        'profile': fp.get('profile', subdir.name),
+                        'seed': fp.get('seed', 42),
+                        'nodes': fp['counts']['nodes'],
+                        'edges': fp['counts']['edges'],
+                        'timeseries': fp['counts'].get('timeseries', 0),
+                        'fingerprint': fp['struct_hash'][:8],
+                    })
 
         return sorted(datasets, key=lambda x: x['name'])
 
@@ -507,19 +341,60 @@ class DatasetManager:
             return None
 
         export_path = self.get_export_path(profile_name, seed)
-        resolved_profile = ALIASES.get(profile_name, profile_name)
-        profile = get_profile(resolved_profile)
+        fingerprint_path = export_path / "fingerprint.json"
 
-        size_mb = sum(f.stat().st_size for f in export_path.rglob('*') if f.is_file()) / (1024*1024)
+        with open(fingerprint_path) as f:
+            fp = json.load(f)
+
+        size_mb = sum(
+            f.stat().st_size for f in export_path.rglob('*') if f.is_file()
+        ) / (1024 * 1024)
+
+        # Lister les scénarios disponibles
+        scenarios = []
+        for scenario in ['p1', 'p2', 'm1', 'm2', 'o1', 'o2']:
+            if (export_path / scenario).exists():
+                scenarios.append(scenario.upper())
 
         return {
-            'profile': resolved_profile,
+            'profile': fp.get('profile', profile_name),
             'export_path': export_path,
             'size_mb': size_mb,
-            'points': profile.points,
-            'duration_days': profile.duration_days,
-            'seed': seed
+            'nodes': fp['counts']['nodes'],
+            'edges': fp['counts']['edges'],
+            'timeseries': fp['counts'].get('timeseries', 0),
+            'duration_days': fp.get('duration_days'),
+            'seed': fp.get('seed', seed),
+            'fingerprint': fp['struct_hash'],
+            'scenarios': scenarios,
         }
+
+    def verify_export(self, profile_name: str, seed: int = DEFAULT_SEED) -> bool:
+        """Vérifie l'intégrité d'un export via fingerprint.
+
+        Args:
+            profile_name: Nom du profil
+            seed: Graine
+
+        Returns:
+            True si l'export est valide
+        """
+        export_path = self.get_export_path(profile_name, seed)
+        parquet_dir = export_path / "parquet"
+        fingerprint_path = export_path / "fingerprint.json"
+
+        if not fingerprint_path.exists() or not parquet_dir.exists():
+            return False
+
+        with open(fingerprint_path) as f:
+            stored_fp = json.load(f)
+
+        current_fp = exporter_v2.compute_fingerprint(parquet_dir)
+
+        return (
+            stored_fp['struct_hash'] == current_fp['struct_hash'] and
+            stored_fp.get('ts_hash') == current_fp.get('ts_hash')
+        )
 
 
 def main():
@@ -534,9 +409,10 @@ def main():
         print("  list                              - Liste les datasets exportés")
         print("  info <profile> [seed]             - Infos sur un dataset")
         print("  delete <profile> [seed]           - Supprime un dataset")
+        print("  verify <profile> [seed]           - Vérifie l'intégrité")
         print()
-        print("Profiles disponibles: small-1w, small-1m, ..., large-1y")
-        print("Alias: laptop, desktop, server, cluster")
+        print("Profiles: small-2d, small-1w, small-1m, small-6m, small-1y")
+        print("          medium-2d, ..., large-1y")
         return
 
     manager = DatasetManager()
@@ -545,8 +421,8 @@ def main():
     if command == 'generate':
         profile = sys.argv[2]
         seed = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_SEED
-        export_path, summary = manager.generate_and_export(profile, seed)
-        print(f"[OK] Dataset: {summary.node_count} nodes, {summary.edge_count} edges")
+        export_path, summary, fingerprint = manager.generate_and_export(profile, seed)
+        print(f"\n[OK] Dataset: {summary['node_count']} nodes, {summary['edge_count']} edges")
 
     elif command == 'list':
         datasets = manager.list_exported_datasets()
@@ -556,6 +432,8 @@ def main():
             print(f"Exported datasets ({len(datasets)}):")
             for ds in datasets:
                 print(f"  {ds['name']}: {ds['size_mb']:.1f} MB")
+                print(f"    Nodes: {ds['nodes']:,}, Edges: {ds['edges']:,}, TS: {ds['timeseries']:,}")
+                print(f"    Fingerprint: {ds['fingerprint']}")
 
     elif command == 'info':
         profile = sys.argv[2]
@@ -563,10 +441,14 @@ def main():
         info = manager.get_export_info(profile, seed)
         if info:
             print(f"Profile: {info['profile']}")
-            print(f"Points: {info['points']:,}")
+            print(f"Nodes: {info['nodes']:,}")
+            print(f"Edges: {info['edges']:,}")
+            print(f"Timeseries: {info['timeseries']:,}")
             print(f"Duration: {info['duration_days']} days")
             print(f"Seed: {info['seed']}")
             print(f"Size: {info['size_mb']:.1f} MB")
+            print(f"Scenarios: {', '.join(info['scenarios'])}")
+            print(f"Fingerprint: {info['fingerprint']}")
             print(f"Path: {info['export_path']}")
         else:
             print(f"Dataset {profile} not found")
@@ -578,6 +460,14 @@ def main():
             print(f"[OK] Deleted {profile}")
         else:
             print(f"Dataset {profile} not found")
+
+    elif command == 'verify':
+        profile = sys.argv[2]
+        seed = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_SEED
+        if manager.verify_export(profile, seed):
+            print(f"[OK] Dataset {profile} is valid")
+        else:
+            print(f"[ERR] Dataset {profile} is invalid or missing")
 
 
 if __name__ == "__main__":

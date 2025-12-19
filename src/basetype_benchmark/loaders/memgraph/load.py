@@ -114,6 +114,15 @@ def iter_json_lines(path: Path) -> Iterable[Dict[str, str]]:
             yield json.loads(line)
 
 
+def iter_csv_rows(path: Path) -> Iterable[Dict[str, str]]:
+    """Iterate over CSV file rows as dictionaries."""
+    import csv
+    with path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            yield row
+
+
 def load_constraints(session) -> None:
     """Create indexes and constraints for efficient loading.
 

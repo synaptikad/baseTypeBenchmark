@@ -1,0 +1,38 @@
+# config/profiles/medium.yaml
+# Profile MEDIUM - 3 bâtiments, ~245k points
+
+profile: medium
+seed: 42
+
+buildings: 3
+floors:
+  - type: basement
+    count: 1
+  - type: ground
+    count: 1
+  - type: standard
+    count: 10
+  - type: rooftop
+    count: 1
+
+tenants: 10
+meters:
+  main: 3
+  sub_per_main: 5
+
+targets:
+  spaces: 430
+  equipments: 6500
+  points: 245000
+  meters: 18
+
+# Durées disponibles pour timeseries
+durations:
+  - name: 1w
+    days: 7
+  - name: 1m
+    days: 30
+  - name: 6m
+    days: 180
+  - name: 1y
+    days: 365

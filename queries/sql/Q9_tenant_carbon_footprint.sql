@@ -1,5 +1,6 @@
 -- Q9: Tenant Carbon Footprint
 -- Benchmark: Complex aggregation with carbon factor calculation
+-- Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END - time range
 -- Pattern: Energy → Carbon conversion
 
 WITH tenant_energy AS (
@@ -16,7 +17,7 @@ WITH tenant_energy AS (
     JOIN edges e3 ON e3.src_id = eq.id AND e3.rel_type = 'HAS_POINT'
     JOIN nodes p ON p.id = e3.dst_id AND p.type = 'Point'
     JOIN edges e4 ON e4.src_id = p.id AND e4.rel_type = 'MEASURES' AND e4.dst_id = 'Power'
-    WHERE t.type = 'Tenant'
+    WHERE t.id = '$TENANT_ID'
 ),
 energy_consumption AS (
     SELECT
@@ -26,7 +27,8 @@ energy_consumption AS (
         SUM(ts.value) / 1000.0 as total_kwh  -- Convert W to kWh
     FROM tenant_energy te
     JOIN timeseries ts ON ts.point_id = te.point_id
-    WHERE ts.time >= NOW() - INTERVAL '30 days'
+    WHERE ts.time >= '$DATE_START'::timestamptz
+      AND ts.time < '$DATE_END'::timestamptz
     GROUP BY te.tenant_id, te.tenant_name, te.building_id
 )
 SELECT

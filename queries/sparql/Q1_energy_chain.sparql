@@ -1,16 +1,19 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-# Q1: Energy Chain - Traverse equipment → meter → point
+# Q1: Energy Chain - Traverse from meter through FEEDS chain
 # Benchmark: RDF property path traversal
+# Parameter: $METER_ID - starting meter for energy chain traversal
 
-SELECT ?building_id ?type (COUNT(DISTINCT ?target) AS ?node_count)
+SELECT ?target ?type ?name ?depth
 WHERE {
-  ?eq rdf:type btb:Equipment ;
-      btb:building_id ?building_id .
+  # Start from specified meter
+  BIND(<http://basetype.benchmark/$METER_ID> AS ?meter)
 
-  ?eq (btb:feeds|btb:hasPoint|btb:measures)+ ?target .
+  # Traverse FEEDS chain (1-10 hops)
+  ?meter btb:feeds+ ?target .
   ?target rdf:type ?type .
+
+  OPTIONAL { ?target btb:name ?name }
 }
-GROUP BY ?building_id ?type
-ORDER BY ?building_id DESC(?node_count)
+ORDER BY ?type

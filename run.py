@@ -31,6 +31,11 @@ DIM = "\033[2m"
 RESET = "\033[0m"
 
 
+# Detect if we're on Linux (EC2) for extended monitoring
+IS_LINUX = sys.platform.startswith('linux')
+CYAN = "\033[96m"
+
+
 def print_header(title: str):
     print(f"\n{'=' * 60}")
     print(f"  {title}")
@@ -224,9 +229,10 @@ def start_containers(containers: List[str]) -> bool:
 
 
 def check_dataset(profile: str, seed: int = 42) -> bool:
-    """Check if dataset has been exported to disk."""
+    """Check if dataset has been exported to disk (V2 format)."""
     export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{profile}_seed{seed}"
-    return export_dir.exists() and any(export_dir.glob("*.csv"))
+    # V2 format uses fingerprint.json as completion marker
+    return (export_dir / "fingerprint.json").exists()
 
 
 def get_available_profiles() -> List[str]:
@@ -235,12 +241,87 @@ def get_available_profiles() -> List[str]:
     export_dir = Path("src/basetype_benchmark/dataset/exports")
     if export_dir.exists():
         for subdir in export_dir.iterdir():
-            if subdir.is_dir() and any(subdir.glob("*.csv")):
+            if subdir.is_dir() and (subdir / "fingerprint.json").exists():
                 # Extract profile name from directory name (e.g., "small-1w_seed42" -> "small-1w")
                 name = subdir.name.rsplit("_seed", 1)[0]
                 if name not in available:
                     available.append(name)
     return sorted(available)
+
+
+def get_scenario_files(export_dir: Path, scenario: str) -> dict:
+    """Get file paths for a specific scenario from V2 export structure.
+
+    V2 export structure:
+        exports/{profile}_seed{seed}/
+        ├── parquet/          # Pivot format
+        ├── p1/               # PostgreSQL relational
+        ├── p2/               # PostgreSQL JSONB
+        ├── m1/               # Memgraph chunks
+        ├── m2/               # Memgraph + TimescaleDB
+        ├── o1/               # Oxigraph chunks
+        ├── o2/               # Oxigraph + TimescaleDB
+        └── fingerprint.json
+
+    Args:
+        export_dir: Base export directory (e.g., exports/small-1w_seed42)
+        scenario: Scenario code (P1, P2, M1, M2, O1, O2)
+
+    Returns:
+        Dict with file paths for nodes, edges, timeseries, etc.
+    """
+    scenario_lower = scenario.lower()
+    scenario_dir = export_dir / scenario_lower
+
+    # Fallback to old structure if V2 not available
+    if not scenario_dir.exists():
+        # Old V1 structure: all files in root
+        return {
+            "nodes": export_dir / "nodes.csv",
+            "edges": export_dir / "edges.csv",
+            "timeseries": export_dir / "timeseries.csv",
+            "graph": export_dir / "graph.jsonld",
+            "chunks": export_dir / "timeseries_chunks.json",
+        }
+
+    # V2 structure by scenario
+    if scenario in ("P1",):
+        return {
+            "nodes": scenario_dir / "pg_nodes.csv",
+            "edges": scenario_dir / "pg_edges.csv",
+            "timeseries": scenario_dir / "pg_timeseries.csv",
+        }
+    elif scenario in ("P2",):
+        return {
+            "nodes": scenario_dir / "pg_jsonb_nodes.csv",
+            "edges": scenario_dir / "pg_jsonb_edges.csv",
+            "timeseries": scenario_dir / "pg_timeseries.csv",
+        }
+    elif scenario in ("M1",):
+        return {
+            "nodes": scenario_dir / "mg_nodes.csv",
+            "edges": scenario_dir / "mg_edges.csv",
+            "chunks": scenario_dir / "mg_chunks.csv",
+        }
+    elif scenario in ("M2",):
+        return {
+            "nodes": scenario_dir / "mg_nodes.csv",
+            "edges": scenario_dir / "mg_edges.csv",
+            "timeseries": scenario_dir / "timeseries.csv",
+        }
+    elif scenario in ("O1",):
+        return {
+            "graph": scenario_dir / "graph.nt",
+            "chunks": scenario_dir / "chunks.nt",
+            "aggregates": scenario_dir / "aggregates.nt",
+        }
+    elif scenario in ("O2",):
+        return {
+            "graph": scenario_dir / "graph.nt",
+            "timeseries": scenario_dir / "timeseries.csv",
+        }
+    else:
+        raise ValueError(f"Unknown scenario: {scenario}")
 
 
 # =============================================================================
@@ -353,10 +434,11 @@ def workflow_dataset():
             from basetype_benchmark.dataset.dataset_manager import DatasetManager
 
             manager = DatasetManager()
-            # Génère et exporte directement sur disque (pas de cache pickle)
-            export_path, summary = manager.generate_and_export(profile, int(seed))
+            # Génère via V2 (generator_v2 + exporter_v2) et exporte 6 formats
+            export_path, summary, fingerprint = manager.generate_and_export(profile, int(seed))
             print()
             print_ok(f"Dataset ready at: {export_path}")
+            print_info(f"Fingerprint: {fingerprint['struct_hash'][:8]}...{fingerprint.get('ts_hash', 'N/A')[:8] if fingerprint.get('ts_hash') else 'N/A'}")
 
         except ImportError as e:
             print_err(f"Import error: {e}")
@@ -827,25 +909,185 @@ def is_performance_plateau(prev_p95: float, curr_p95: float, threshold_pct: floa
 # BENCHMARK EXECUTION ENGINE
 # =============================================================================
 
-# Queries by scenario
+# Queries by scenario - SYMMETRIC: all 13 queries on all 6 configurations
+# Q1-Q5: Graph traversal (native for all)
+# Q6-Q7: Timeseries aggregation
+#   - P1/P2/M2/O2: time_bucket (TimescaleDB)
+#   - M1: UNWIND dechunking (stress-test)
+#   - O1: Daily aggregates (pre-computed)
+# Q8-Q12: Hybrid graph+TS (all scenarios)
+# Q13: DOW filter + dechunking (stress-test M1/O1)
 QUERIES_BY_SCENARIO = {
-    "P1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
-    "P2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
-    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via chunks
-    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via TimescaleDB
-    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via RDF chunks
-    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q8"],  # Structure + timeseries via TimescaleDB
+    "P1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "P2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Q6/Q7 via dechunking
+    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Hybrid: graph + TimescaleDB
+    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Q6/Q7 via daily aggregates
+    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Hybrid: graph + TimescaleDB
 }
 
-# Benchmark protocol
+# Benchmark protocol - proportional to profile (realistic workload simulation)
+# A large building (campus/hospital) receives more queries than a small one
+PROTOCOL_CONFIG = {
+    "small": {"n_warmup": 3, "n_runs": 10, "n_variants": 3},
+    "medium": {"n_warmup": 3, "n_runs": 30, "n_variants": 5},
+    "large": {"n_warmup": 3, "n_runs": 100, "n_variants": 10},
+}
+
+# Legacy defaults (used when profile not specified)
 N_WARMUP = 3
 N_RUNS = 10
 
 QUERIES_DIR = Path(__file__).parent / "queries"
 
+# Query parameters specification
+QUERY_PARAMS = {
+    "Q1": ["meter_id"],
+    "Q2": ["equipment_id"],
+    "Q3": ["space_id"],
+    "Q4": ["floor_id"],
+    "Q5": [],  # Global scan, no params
+    "Q6": ["point_id", "date_start", "date_end"],
+    "Q7": ["building_id", "date_start", "date_end"],
+    "Q8": ["tenant_id", "date_start", "date_end"],
+    "Q9": ["tenant_id", "date_start", "date_end"],
+    "Q10": ["zone_id", "date_start", "date_end"],
+    "Q11": ["building_id"],
+    "Q12": ["building_id", "date_start", "date_end"],
+    "Q13": ["space_type", "date_start", "date_end"],
+}
 
-def load_query(scenario: str, query_id: str) -> Optional[str]:
-    """Load query text for a scenario."""
+
+def get_protocol_config(profile: str) -> Dict:
+    """Get protocol configuration for a profile."""
+    # Extract scale from profile (e.g., 'small-2d' -> 'small')
+    scale = profile.split("-")[0] if "-" in profile else profile
+    return PROTOCOL_CONFIG.get(scale, PROTOCOL_CONFIG["small"])
+
+
+def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: int = 42) -> List[Dict]:
+    """Generate parameter variants for a query (deterministic).
+
+    Args:
+        query_id: Q1, Q2, etc.
+        profile: small-2d, medium-1w, etc.
+        dataset_info: Dict with available IDs (meters, floors, tenants, etc.)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of parameter dicts for each variant
+    """
+    import random
+    rng = random.Random(seed + hash(query_id))
+
+    config = get_protocol_config(profile)
+    n_variants = config["n_variants"]
+    params = QUERY_PARAMS.get(query_id, [])
+
+    # No params = single empty variant
+    if not params:
+        return [{}]
+
+    variants = []
+
+    # Generate date ranges (sliding windows)
+    ts_end = dataset_info.get("ts_end", int(time.time()))
+
+    for i in range(n_variants):
+        variant = {}
+
+        for param in params:
+            if param == "meter_id":
+                meters = dataset_info.get("meters", ["meter_default"])
+                variant[param] = rng.choice(meters) if meters else "meter_default"
+
+            elif param == "equipment_id":
+                equipment = dataset_info.get("equipment", ["eq_default"])
+                variant[param] = rng.choice(equipment) if equipment else "eq_default"
+
+            elif param == "space_id":
+                spaces = dataset_info.get("spaces", ["space_default"])
+                variant[param] = rng.choice(spaces) if spaces else "space_default"
+
+            elif param == "floor_id":
+                floors = dataset_info.get("floors", ["floor_default"])
+                variant[param] = rng.choice(floors) if floors else "floor_default"
+
+            elif param == "building_id":
+                buildings = dataset_info.get("buildings", ["bldg_default"])
+                variant[param] = rng.choice(buildings) if buildings else "bldg_default"
+
+            elif param == "tenant_id":
+                tenants = dataset_info.get("tenants", ["tenant_default"])
+                variant[param] = rng.choice(tenants) if tenants else "tenant_default"
+
+            elif param == "zone_id":
+                zones = dataset_info.get("zones", ["zone_default"])
+                variant[param] = rng.choice(zones) if zones else "zone_default"
+
+            elif param == "point_id":
+                points = dataset_info.get("points", ["point_default"])
+                variant[param] = rng.choice(points) if points else "point_default"
+
+            elif param == "space_type":
+                space_types = ["office_open", "office_closed", "meeting_large", "conference"]
+                variant[param] = rng.choice(space_types)
+
+            elif param == "date_start":
+                # Sliding window: offset by variant index
+                window_days = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
+                offset_days = i * 7  # Each variant shifts by 1 week
+                variant[param] = ts_end - (window_days + offset_days) * 86400
+
+            elif param == "date_end":
+                offset_days = i * 7
+                variant[param] = ts_end - offset_days * 86400
+
+        variants.append(variant)
+
+    return variants
+
+
+def substitute_params(query_text: str, params: Dict) -> str:
+    """Substitute $PARAM placeholders in query text.
+
+    Args:
+        query_text: Query with $PARAM placeholders
+        params: Dict of param_name -> value
+
+    Returns:
+        Query with substituted values
+    """
+    result = query_text
+    for key, value in params.items():
+        placeholder = f"${key.upper()}"
+        if isinstance(value, str):
+            # String values: replace placeholder directly (quotes already in query)
+            result = result.replace(placeholder, value)
+        else:
+            result = result.replace(placeholder, str(value))
+
+    # Also handle $CURRENT_TS for Cypher/SPARQL
+    if "$CURRENT_TS" in result:
+        result = result.replace("$CURRENT_TS", str(int(time.time())))
+    if "$CURRENT_DATE" in result:
+        from datetime import datetime
+        result = result.replace("$CURRENT_DATE", datetime.now().strftime("%Y-%m-%d"))
+
+    return result
+
+
+def load_query(scenario: str, query_id: str, params: Optional[Dict] = None) -> Optional[str]:
+    """Load query text for a scenario, optionally substituting parameters.
+
+    Args:
+        scenario: P1, P2, M1, M2, O1, O2
+        query_id: Q1, Q2, ..., Q13
+        params: Optional dict of parameters to substitute
+
+    Returns:
+        Query text with parameters substituted, or None if not found
+    """
     if scenario.startswith("P"):
         query_dir = QUERIES_DIR / "sql"
         ext = "sql"
@@ -860,7 +1102,10 @@ def load_query(scenario: str, query_id: str) -> Optional[str]:
 
     # Find query file
     for f in query_dir.glob(f"{query_id}_*.{ext}"):
-        return f.read_text(encoding="utf-8")
+        query_text = f.read_text(encoding="utf-8")
+        if params:
+            query_text = substitute_params(query_text, params)
+        return query_text
     return None
 
 
@@ -882,18 +1127,336 @@ def compute_stats(latencies: List[float]) -> Dict:
     }
 
 
-def run_scenario_benchmark(scenario: str, export_dir: Path) -> Dict:
+def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
+    """Extract available IDs from dataset for query parameterization.
+
+    Reads the nodes file to extract meters, equipment, spaces, floors, etc.
+    for generating query variants with realistic parameters.
+
+    Args:
+        export_dir: Base export directory
+        scenario: Scenario code (P1, P2, M1, M2, O1, O2)
+
+    Returns:
+        Dict with lists of available IDs by type
+    """
+    import csv
+
+    files = get_scenario_files(export_dir, scenario)
+    nodes_file = files.get("nodes")
+
+    info = {
+        "meters": [],
+        "equipment": [],
+        "spaces": [],
+        "floors": [],
+        "buildings": [],
+        "tenants": [],
+        "zones": [],
+        "points": [],
+        "ts_end": int(time.time()),
+    }
+
+    if not nodes_file or not nodes_file.exists():
+        print_warn(f"Nodes file not found for dataset info extraction")
+        return info
+
+    try:
+        with open(nodes_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                node_id = row.get("id", row.get("node_id", ""))
+                node_type = row.get("type", row.get("node_type", "")).lower()
+
+                if "meter" in node_type:
+                    info["meters"].append(node_id)
+                elif "equipment" in node_type or "ahu" in node_type or "vav" in node_type:
+                    info["equipment"].append(node_id)
+                elif "space" in node_type or "room" in node_type:
+                    info["spaces"].append(node_id)
+                elif "floor" in node_type:
+                    info["floors"].append(node_id)
+                elif "building" in node_type:
+                    info["buildings"].append(node_id)
+                elif "tenant" in node_type or "organization" in node_type:
+                    info["tenants"].append(node_id)
+                elif "zone" in node_type:
+                    info["zones"].append(node_id)
+                elif "point" in node_type or "sensor" in node_type:
+                    info["points"].append(node_id)
+
+        # Limit to avoid too many options
+        for key in info:
+            if isinstance(info[key], list) and len(info[key]) > 100:
+                info[key] = info[key][:100]
+
+    except Exception as e:
+        print_warn(f"Error extracting dataset info: {e}")
+
+    return info
+
+
+def run_query_benchmark(
+    query_id: str,
+    query_text: str,
+    execute_fn,
+    container_name: str,
+    n_warmup: int,
+    n_runs: int,
+    variant_idx: int = 0,
+    total_variants: int = 1,
+    params: Dict = None,
+    extended_metrics: bool = True
+) -> Dict:
+    """Run benchmark for a single query with warmup, measured runs, and resource monitoring.
+
+    This is a helper to reduce duplication across P/M/O benchmark functions.
+
+    Args:
+        query_id: Query identifier (e.g., "Q1")
+        query_text: The query string to execute
+        execute_fn: Callable that executes the query and returns row count
+                   Signature: execute_fn(query_text) -> int (row count)
+        container_name: Docker container name for resource monitoring
+        n_warmup: Number of warmup iterations
+        n_runs: Number of measured runs
+        variant_idx: Current variant index (for display)
+        total_variants: Total number of variants (for display)
+        params: Parameters used for this variant (for logging)
+        extended_metrics: If True and on Linux, collect extended metrics (CPU breakdown, energy)
+
+    Returns:
+        Dict with latencies_ms, rows, stats, resources, params
+    """
+    # Display progress with variant info
+    if total_variants > 1:
+        print(f"    {query_id} [{variant_idx+1}/{total_variants}]...", end=" ", flush=True)
+    else:
+        print(f"    {query_id}...", end=" ", flush=True)
+
+    # Drop caches before query
+    drop_caches()
+
+    # Warmup (ignore results)
+    for _ in range(n_warmup):
+        try:
+            execute_fn(query_text)
+        except Exception:
+            pass
+
+    # Measured runs with resource monitoring
+    # Use ExtendedResourceMonitor on Linux for detailed metrics
+    if IS_LINUX and extended_metrics:
+        try:
+            from basetype_benchmark.benchmark.resource_monitor import ExtendedResourceMonitor
+            query_monitor = ExtendedResourceMonitor(container_name, interval_s=0.2)
+        except ImportError:
+            query_monitor = ResourceMonitor(container_name, interval_s=0.2)
+    else:
+        query_monitor = ResourceMonitor(container_name, interval_s=0.2)
+
+    query_monitor.start()
+
+    latencies = []
+    rows = 0
+    for run_idx in range(n_runs):
+        if run_idx > 0:
+            drop_caches()
+        try:
+            t0 = time.perf_counter()
+            rows = execute_fn(query_text)
+            latencies.append((time.perf_counter() - t0) * 1000)  # ms
+        except Exception as e:
+            print_warn(f"Query error: {e}")
+
+    query_resources = query_monitor.stop()
+
+    # Remove raw samples to reduce result size (keep for extended monitor if needed)
+    if "samples" in query_resources and query_resources.get("sample_count", 0) > 100:
+        del query_resources["samples"]
+
+    stats = compute_stats(latencies)
+
+    # Build result with extended or basic resources
+    result = {
+        "latencies_ms": latencies,
+        "rows": rows,
+        "stats": stats,
+        "resources": query_resources,
+        "params": params or {}
+    }
+
+    # Display output based on monitor type
+    if isinstance(query_resources.get("cpu"), dict):
+        # Extended monitor format
+        cpu_info = query_resources.get("cpu", {})
+        mem_info = query_resources.get("memory", {})
+        io_info = query_resources.get("io", {})
+        energy_info = query_resources.get("energy", {})
+
+        mem_max = mem_info.get("used_mb", {}).get("max", 0)
+        cpu_avg = cpu_info.get("total_pct", {}).get("avg", 0)
+        iowait = cpu_info.get("iowait_pct", {}).get("avg", 0)
+
+        display = f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms rows={rows}"
+        display += f" (RAM:{mem_max:.0f}MB CPU:{cpu_avg:.1f}%"
+        if iowait > 0.1:
+            display += f" IO:{iowait:.1f}%"
+        if energy_info.get("available") and energy_info.get("total_wh", 0) > 0:
+            display += f" E:{energy_info['total_wh']*1000:.2f}mWh"
+        display += ")"
+        print(display)
+    else:
+        # Basic monitor format (backward compatible)
+        mem_max = query_resources.get('mem_mb', {}).get('max', 0)
+        cpu_avg = query_resources.get('cpu_pct', {}).get('avg', 0)
+        print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms rows={rows} "
+              f"(RAM:{mem_max:.0f}MB CPU:{cpu_avg:.1f}%)")
+
+    return result
+
+
+def run_query_with_variants(
+    query_id: str,
+    scenario: str,
+    execute_fn,
+    container_name: str,
+    n_warmup: int,
+    n_runs: int,
+    profile: str,
+    dataset_info: Dict,
+    seed: int = 42
+) -> Dict:
+    """Run benchmark for a query with multiple parameter variants.
+
+    For queries with parameters (Q1-Q4, Q6-Q13), generates n_variants different
+    parameter sets based on the profile (small=3, medium=5, large=10).
+
+    Args:
+        query_id: Query identifier (e.g., "Q1")
+        scenario: Scenario code for query loading
+        execute_fn: Query execution function
+        container_name: Docker container for monitoring
+        n_warmup: Warmup iterations per variant
+        n_runs: Measured runs per variant
+        profile: Profile name for protocol config
+        dataset_info: Dict with available IDs for parameterization
+        seed: Random seed for reproducibility
+
+    Returns:
+        Dict with aggregated results across all variants
+    """
+    # Get variants for this query
+    variants = get_query_variants(query_id, profile, dataset_info, seed)
+    n_variants = len(variants)
+
+    # Get base query text
+    base_query = load_query(scenario, query_id)
+    if not base_query:
+        print_warn(f"Query {query_id} not found, skipping")
+        return None
+
+    # Check if query has parameters
+    has_params = bool(QUERY_PARAMS.get(query_id, []))
+
+    if has_params and n_variants > 1:
+        protocol = get_protocol_config(profile)
+        print(f"\n    {CYAN}{query_id}{RESET}: {n_variants} variants × {n_runs} runs × {n_warmup} warmup")
+
+    all_results = []
+
+    for i, params in enumerate(variants):
+        # Substitute parameters in query
+        query_text = substitute_params(base_query, params) if params else base_query
+
+        result = run_query_benchmark(
+            query_id=query_id,
+            query_text=query_text,
+            execute_fn=execute_fn,
+            container_name=container_name,
+            n_warmup=n_warmup,
+            n_runs=n_runs,
+            variant_idx=i,
+            total_variants=n_variants if has_params else 1,
+            params=params
+        )
+        all_results.append(result)
+
+    # Aggregate results across variants
+    if len(all_results) == 1:
+        return all_results[0]
+
+    # Combine latencies from all variants
+    all_latencies = []
+    total_rows = 0
+    for r in all_results:
+        all_latencies.extend(r["latencies_ms"])
+        total_rows += r["rows"]
+
+    # Aggregate resource usage (max of maxes, avg of avgs)
+    combined_resources = {
+        "mem_mb": {
+            "max": max(r["resources"]["mem_mb"]["max"] for r in all_results),
+            "avg": sum(r["resources"]["mem_mb"]["avg"] for r in all_results) / len(all_results),
+        },
+        "cpu_pct": {
+            "max": max(r["resources"]["cpu_pct"]["max"] for r in all_results),
+            "avg": sum(r["resources"]["cpu_pct"]["avg"] for r in all_results) / len(all_results),
+        }
+    }
+
+    combined_stats = compute_stats(all_latencies)
+
+    # Print summary for multi-variant queries
+    print(f"    {GREEN}→ {query_id} combined{RESET}: p50={combined_stats['p50']:.1f}ms "
+          f"p95={combined_stats['p95']:.1f}ms ({n_variants} variants, {len(all_latencies)} total runs)")
+
+    return {
+        "latencies_ms": all_latencies,
+        "rows": total_rows,
+        "stats": combined_stats,
+        "resources": combined_resources,
+        "variants": all_results,
+        "n_variants": n_variants
+    }
+
+
+def run_scenario_benchmark(scenario: str, export_dir: Path, profile: str = "small") -> Dict:
     """Run benchmark for a single scenario using existing loaders.
 
     Args:
         scenario: P1, P2, M1, M2, O1, O2
         export_dir: Path to exported dataset
+        profile: Profile name (e.g., 'small-2d') for protocol config
 
     Returns:
         Dict with benchmark results
     """
+    # Get protocol config based on profile scale
+    protocol = get_protocol_config(profile)
+    n_warmup = protocol["n_warmup"]
+    n_runs = protocol["n_runs"]
+    n_variants = protocol["n_variants"]
+
+    # Display benchmark protocol info
+    print_info(f"Benchmark Protocol: {n_variants} variants × {n_runs} runs + {n_warmup} warmup per query")
+
+    # Collect system info for benchmark context (on Linux/EC2)
+    system_info = {}
+    if IS_LINUX:
+        try:
+            from basetype_benchmark.benchmark.resource_monitor import get_system_info
+            system_info = get_system_info()
+            if system_info.get("ec2", {}).get("is_ec2"):
+                print_info(f"Running on EC2: {system_info['ec2'].get('instance_type', 'unknown')}")
+        except ImportError:
+            pass
+
     result = {
         "scenario": scenario,
+        "profile": profile,
+        "protocol": {"n_warmup": n_warmup, "n_runs": n_runs, "n_variants": n_variants},
+        "system_info": system_info,
         "status": "pending",
         "load_time_s": 0.0,
         "queries": {},
@@ -904,11 +1467,11 @@ def run_scenario_benchmark(scenario: str, export_dir: Path) -> Dict:
 
     try:
         if scenario in ["P1", "P2"]:
-            result = _run_postgres_benchmark(scenario, export_dir, result)
+            result = _run_postgres_benchmark(scenario, export_dir, result, n_warmup, n_runs, profile)
         elif scenario in ["M1", "M2"]:
-            result = _run_memgraph_benchmark(scenario, export_dir, result)
+            result = _run_memgraph_benchmark(scenario, export_dir, result, n_warmup, n_runs, profile)
         elif scenario in ["O1", "O2"]:
-            result = _run_oxigraph_benchmark(scenario, export_dir, result)
+            result = _run_oxigraph_benchmark(scenario, export_dir, result, n_warmup, n_runs, profile)
         else:
             result["status"] = "error"
             result["error"] = f"Unknown scenario: {scenario}"
@@ -923,7 +1486,9 @@ def run_scenario_benchmark(scenario: str, export_dir: Path) -> Dict:
     return result
 
 
-def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
+def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
+                            n_warmup: int = N_WARMUP, n_runs: int = N_RUNS,
+                            profile: str = "small") -> Dict:
     """Run PostgreSQL benchmark (P1 or P2)."""
     from basetype_benchmark.loaders.postgres.load import (
         get_connection, clear_database, load_p1, load_p2
@@ -943,11 +1508,8 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         load_monitor.start()
         load_start = time.time()
 
-        # The loaders expect JSON files, but we have CSV - need adapter
-        if scenario == "P1":
-            load_result = _load_postgres_from_csv(conn, export_dir, "relational")
-        else:
-            load_result = _load_postgres_from_csv(conn, export_dir, "jsonb")
+        # Load using V2 file structure
+        load_result = _load_postgres_from_csv(conn, export_dir, scenario)
 
         result["load_time_s"] = time.time() - load_start
         result["load_resources"] = load_monitor.stop()
@@ -959,65 +1521,39 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                  f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
                  f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
-        # Execute queries with resource monitoring
+        # Define executor for PostgreSQL queries
+        def pg_execute(query: str) -> int:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(query)
+                    data = cur.fetchall()
+                    conn.commit()
+                    return len(data)
+            except Exception:
+                conn.rollback()
+                raise
+
+        # Extract dataset info for query parameterization
+        dataset_info = extract_dataset_info(export_dir, scenario)
+        print_info(f"Dataset info: {len(dataset_info['meters'])} meters, "
+                   f"{len(dataset_info['equipment'])} equipment, "
+                   f"{len(dataset_info['spaces'])} spaces")
+
+        # Execute queries with variants
         queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
         for query_id in queries_to_run:
-            query_text = load_query(scenario, query_id)
-            if not query_text:
-                print_warn(f"Query {query_id} not found, skipping")
-                continue
-
-            print(f"    {query_id}...", end=" ", flush=True)
-
-            # Drop caches before query (if root)
-            drop_caches()
-
-            # Warmup
-            for _ in range(N_WARMUP):
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute(query_text)
-                        cur.fetchall()
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-
-            # Measured runs with resource monitoring
-            query_monitor = ResourceMonitor(container_name, interval_s=0.2)
-            query_monitor.start()
-
-            latencies = []
-            rows = 0
-            for run_idx in range(N_RUNS):
-                # Drop caches between runs for fair measurement
-                if run_idx > 0:
-                    drop_caches()
-                try:
-                    t0 = time.perf_counter()
-                    with conn.cursor() as cur:
-                        cur.execute(query_text)
-                        data = cur.fetchall()
-                        rows = len(data)
-                    conn.commit()
-                    latencies.append((time.perf_counter() - t0) * 1000)  # ms
-                except Exception as e:
-                    conn.rollback()
-                    print_warn(f"Query error: {e}")
-
-            query_resources = query_monitor.stop()
-            # Remove raw samples
-            if "samples" in query_resources:
-                del query_resources["samples"]
-
-            stats = compute_stats(latencies)
-            result["queries"][query_id] = {
-                "latencies_ms": latencies,
-                "rows": rows,
-                "stats": stats,
-                "resources": query_resources
-            }
-            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms "
-                  f"(RAM:{query_resources['mem_mb']['max']:.0f}MB CPU:{query_resources['cpu_pct']['avg']:.1f}%)")
+            query_result = run_query_with_variants(
+                query_id=query_id,
+                scenario=scenario,
+                execute_fn=pg_execute,
+                container_name=container_name,
+                n_warmup=n_warmup,
+                n_runs=n_runs,
+                profile=profile,
+                dataset_info=dataset_info
+            )
+            if query_result:
+                result["queries"][query_id] = query_result
 
         result["status"] = "completed"
 
@@ -1027,9 +1563,19 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
     return result
 
 
-def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
-    """Load PostgreSQL from CSV files."""
+def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
+    """Load PostgreSQL from CSV files (V2 format).
+
+    Args:
+        conn: Database connection
+        export_dir: Base export directory (e.g., exports/small-1w_seed42)
+        scenario: Scenario code (P1 or P2)
+    """
+    import csv
     from psycopg2.extras import execute_batch
+
+    # Get file paths for this scenario
+    files = get_scenario_files(export_dir, scenario)
 
     cur = conn.cursor()
 
@@ -1038,16 +1584,31 @@ def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
     cur.execute("DROP TABLE IF EXISTS edges CASCADE")
     cur.execute("DROP TABLE IF EXISTS nodes CASCADE")
 
-    # Nodes table
-    cur.execute("""
-        CREATE TABLE nodes (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            name TEXT,
-            building_id INTEGER DEFAULT 0,
-            data JSONB DEFAULT '{}'
-        )
-    """)
+    # Nodes table - schema depends on P1 (relational) vs P2 (JSONB)
+    if scenario == "P1":
+        cur.execute("""
+            CREATE TABLE nodes (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                domain TEXT,
+                equipment_type TEXT,
+                space_type TEXT,
+                building_id TEXT,
+                floor_id TEXT,
+                space_id TEXT,
+                data JSONB DEFAULT '{}'
+            )
+        """)
+    else:  # P2 - JSONB schema
+        cur.execute("""
+            CREATE TABLE nodes (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                name TEXT,
+                properties JSONB DEFAULT '{}'
+            )
+        """)
 
     # Edges table (no FK for performance)
     cur.execute("""
@@ -1076,7 +1637,9 @@ def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
 
     # Create indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
+    if scenario == "P1":
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_domain ON nodes(domain)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_src_rel ON edges(src_id, rel_type)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst_rel ON edges(dst_id, rel_type)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
@@ -1084,38 +1647,66 @@ def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
     conn.commit()
 
     # Load nodes from CSV
-    import csv
-    nodes_file = export_dir / "nodes.csv"
+    nodes_file = files["nodes"]
     if nodes_file.exists():
         with open(nodes_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             batch = []
             for row in reader:
-                batch.append((
-                    row['id'],
-                    row['type'],
-                    row.get('name', ''),
-                    int(row['building_id']) if row.get('building_id') else 0,
-                    row.get('data', '{}')
-                ))
+                if scenario == "P1":
+                    batch.append((
+                        row['id'],
+                        row['type'],
+                        row.get('name', ''),
+                        row.get('domain', ''),
+                        row.get('equipment_type', ''),
+                        row.get('space_type', ''),
+                        row.get('building_id', ''),
+                        row.get('floor_id', ''),
+                        row.get('space_id', ''),
+                        row.get('data', '{}')
+                    ))
+                else:  # P2
+                    batch.append((
+                        row['id'],
+                        row['type'],
+                        row.get('name', ''),
+                        row.get('properties', '{}')
+                    ))
                 if len(batch) >= 1000:
-                    execute_batch(cur, """
-                        INSERT INTO nodes (id, type, name, building_id, data)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (id) DO NOTHING
-                    """, batch)
+                    if scenario == "P1":
+                        execute_batch(cur, """
+                            INSERT INTO nodes (id, type, name, domain, equipment_type, space_type,
+                                             building_id, floor_id, space_id, data)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                        """, batch)
+                    else:
+                        execute_batch(cur, """
+                            INSERT INTO nodes (id, type, name, properties)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                        """, batch)
                     conn.commit()
                     batch.clear()
             if batch:
-                execute_batch(cur, """
-                    INSERT INTO nodes (id, type, name, building_id, data)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
-                """, batch)
+                if scenario == "P1":
+                    execute_batch(cur, """
+                        INSERT INTO nodes (id, type, name, domain, equipment_type, space_type,
+                                         building_id, floor_id, space_id, data)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                    """, batch)
+                else:
+                    execute_batch(cur, """
+                        INSERT INTO nodes (id, type, name, properties)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                    """, batch)
                 conn.commit()
 
     # Load edges from CSV
-    edges_file = export_dir / "edges.csv"
+    edges_file = files["edges"]
     if edges_file.exists():
         with open(edges_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -1139,7 +1730,7 @@ def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
                 conn.commit()
 
     # Load timeseries from CSV (use COPY for performance)
-    ts_file = export_dir / "timeseries.csv"
+    ts_file = files["timeseries"]
     if ts_file.exists():
         with open(ts_file, 'r', encoding='utf-8') as f:
             cur.copy_expert(
@@ -1152,11 +1743,201 @@ def _load_postgres_from_csv(conn, export_dir: Path, schema_type: str) -> Dict:
     return {"nodes": True, "edges": True, "timeseries": True}
 
 
-def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
-    """Run Memgraph benchmark (M1 or M2)."""
+# =============================================================================
+# MEMGRAPH CSV LOADERS (V2 FORMAT)
+# =============================================================================
+
+def _load_memgraph_nodes_csv(session, nodes_file: Path) -> int:
+    """Load nodes from CSV into Memgraph using batched Cypher.
+
+    CSV format (V2): id,type,name,properties
+    """
+    import csv
+    import json
+
+    batch = []
+    total = 0
+    batch_size = 5000
+    t0 = time.time()
+
+    with open(nodes_file, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            node = {
+                'id': row['id'],
+                'type': row['type'],
+                'name': row.get('name', '')
+            }
+            # Parse properties if present
+            if row.get('properties'):
+                try:
+                    props = json.loads(row['properties'])
+                    node.update(props)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            batch.append(node)
+
+            if len(batch) >= batch_size:
+                session.run(
+                    "UNWIND $batch AS row "
+                    "CREATE (n:Node {id: row.id, type: row.type, name: row.name})",
+                    batch=batch
+                )
+                total += len(batch)
+                if total % 10000 == 0:
+                    print(f"      {total} nodes...", flush=True)
+                batch.clear()
+
+        if batch:
+            session.run(
+                "UNWIND $batch AS row "
+                "CREATE (n:Node {id: row.id, type: row.type, name: row.name})",
+                batch=batch
+            )
+            total += len(batch)
+
+    elapsed = time.time() - t0
+    print(f"      Loaded {total:,} nodes in {elapsed:.1f}s")
+    return total
+
+
+def _load_memgraph_edges_csv(session, edges_file: Path) -> int:
+    """Load edges from CSV into Memgraph using batched Cypher.
+
+    CSV format (V2): src_id,dst_id,rel_type
+    """
+    import csv
+
+    # Group edges by relationship type for efficient loading
+    edges_by_type = {}
+    total = 0
+    batch_size = 1000  # Smaller batch for edges (MATCH is expensive)
+    t0 = time.time()
+
+    with open(edges_file, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rel_type = row['rel_type']
+            if rel_type not in edges_by_type:
+                edges_by_type[rel_type] = []
+            edges_by_type[rel_type].append({
+                'src': row['src_id'],
+                'dst': row['dst_id']
+            })
+
+    # Load each relationship type
+    for rel_type, edges in edges_by_type.items():
+        for i in range(0, len(edges), batch_size):
+            batch = edges[i:i + batch_size]
+            session.run(
+                "UNWIND $batch AS row "
+                "MATCH (s:Node {id: row.src}) "
+                "MATCH (d:Node {id: row.dst}) "
+                f"CREATE (s)-[:{rel_type}]->(d)",
+                batch=batch
+            )
+            total += len(batch)
+            if total % 10000 == 0:
+                print(f"      {total} edges...", flush=True)
+
+    elapsed = time.time() - t0
+    print(f"      Loaded {total:,} edges in {elapsed:.1f}s")
+    return total
+
+
+def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
+    """Load timeseries chunks from CSV into Memgraph.
+
+    CSV format (V2): point_id,chunk_idx,start_ts,freq_sec,values
+    Creates TimeseriesChunk nodes linked to Point nodes via HAS_CHUNK.
+    """
+    import csv
+    import json
+
+    batch_nodes = []
+    batch_edges = []
+    total = 0
+    batch_size = 2000
+    t0 = time.time()
+
+    with open(chunks_file, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            chunk_id = f"chunk_{row['point_id']}_{row['chunk_idx']}"
+
+            # Parse values array
+            try:
+                values = json.loads(row['values'])
+            except (json.JSONDecodeError, TypeError):
+                values = []
+
+            batch_nodes.append({
+                'id': chunk_id,
+                'point_id': row['point_id'],
+                'start_ts': int(row['start_ts']),
+                'freq_sec': int(row['freq_sec']),
+                'values': values
+            })
+            batch_edges.append({
+                'src': row['point_id'],
+                'dst': chunk_id
+            })
+
+            if len(batch_nodes) >= batch_size:
+                # Create chunk nodes
+                session.run(
+                    "UNWIND $batch AS row "
+                    "CREATE (c:TimeseriesChunk {id: row.id, point_id: row.point_id, "
+                    "start_ts: row.start_ts, freq_sec: row.freq_sec, values: row.values})",
+                    batch=batch_nodes
+                )
+                # Create HAS_CHUNK edges
+                session.run(
+                    "UNWIND $batch AS row "
+                    "MATCH (p:Node {id: row.src}) "
+                    "MATCH (c:TimeseriesChunk {id: row.dst}) "
+                    "CREATE (p)-[:HAS_CHUNK]->(c)",
+                    batch=batch_edges
+                )
+                total += len(batch_nodes)
+                if total % 10000 == 0:
+                    print(f"      {total} chunks...", flush=True)
+                batch_nodes.clear()
+                batch_edges.clear()
+
+        if batch_nodes:
+            session.run(
+                "UNWIND $batch AS row "
+                "CREATE (c:TimeseriesChunk {id: row.id, point_id: row.point_id, "
+                "start_ts: row.start_ts, freq_sec: row.freq_sec, values: row.values})",
+                batch=batch_nodes
+            )
+            session.run(
+                "UNWIND $batch AS row "
+                "MATCH (p:Node {id: row.src}) "
+                "MATCH (c:TimeseriesChunk {id: row.dst}) "
+                "CREATE (p)-[:HAS_CHUNK]->(c)",
+                batch=batch_edges
+            )
+            total += len(batch_nodes)
+
+    elapsed = time.time() - t0
+    print(f"      Loaded {total:,} chunks in {elapsed:.1f}s")
+    return total
+
+
+def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
+                            n_warmup: int = N_WARMUP, n_runs: int = N_RUNS,
+                            profile: str = "small") -> Dict:
+    """Run Memgraph benchmark (M1 or M2).
+
+    Uses CSV loading via driver for V2 format.
+    M1: Graph + timeseries chunks as array nodes
+    M2: Graph + TimescaleDB for timeseries
+    """
     from basetype_benchmark.loaders.memgraph.load import (
-        get_driver, load_constraints, load_nodes, load_edges, load_timeseries_chunks,
-        LoadingTimeout, LoadingStalled
+        get_driver, load_constraints, LoadingTimeout, LoadingStalled
     )
 
     container_name = "btb_memgraph"
@@ -1170,40 +1951,45 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         result["error"] = f"Connection failed: {e}"
         return result
 
+    # Get file paths for this scenario (V2 format)
+    files = get_scenario_files(export_dir, scenario)
+
     try:
         # Clear and load with resource monitoring
         print_info("Clearing database...")
         with driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
 
-        print_info("Loading data...")
+        print_info(f"Loading data ({scenario})...")
         load_monitor = ResourceMonitor(container_name, interval_s=1.0)
         load_monitor.start()
         load_start = time.time()
 
+        # Get file paths
+        nodes_file = files.get("nodes")
+        edges_file = files.get("edges")
+        chunks_file = files.get("chunks")
+
         with driver.session() as session:
             load_constraints(session)
 
-            nodes_file = export_dir / "nodes.json"
-            edges_file = export_dir / "edges.json"
-            chunks_file = export_dir / "timeseries_chunks.json"
-
-            if nodes_file.exists():
-                load_nodes(session, nodes_file, batch_size=5000)
+            # Load nodes from CSV
+            if nodes_file and nodes_file.exists():
+                _load_memgraph_nodes_csv(session, nodes_file)
             else:
                 load_monitor.stop()
-                print_warn("nodes.json not found - need to regenerate dataset with graph format")
+                print_warn(f"Nodes file not found: {nodes_file}")
                 result["status"] = "error"
-                result["error"] = "nodes.json not found - regenerate dataset"
+                result["error"] = f"Nodes file not found - regenerate dataset"
                 return result
 
-            if edges_file.exists():
-                load_edges(session, edges_file, batch_size=5000)
+            # Load edges from CSV
+            if edges_file and edges_file.exists():
+                _load_memgraph_edges_csv(session, edges_file)
 
-            # M1: Memgraph standalone avec timeseries comme chunks (nœuds array)
-            # M2: Memgraph + TimescaleDB (hybride) - chunks aussi pour requêtes de structure
-            if scenario in ["M1", "M2"] and chunks_file.exists():
-                load_timeseries_chunks(session, chunks_file, batch_size=5000)
+            # M1: Load timeseries chunks as graph nodes
+            if scenario == "M1" and chunks_file and chunks_file.exists():
+                _load_memgraph_chunks_csv(session, chunks_file)
 
         result["load_time_s"] = time.time() - load_start
         result["load_resources"] = load_monitor.stop()
@@ -1243,58 +2029,33 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         driver.close()
         return result
 
-    # Execute queries with resource monitoring
+    # Define executor for Memgraph queries
+    def mg_execute(query: str) -> int:
+        with driver.session() as session:
+            records = list(session.run(query))
+            return len(records)
+
+    # Extract dataset info for query parameterization
+    dataset_info = extract_dataset_info(export_dir, scenario)
+    print_info(f"Dataset info: {len(dataset_info['meters'])} meters, "
+               f"{len(dataset_info['equipment'])} equipment, "
+               f"{len(dataset_info['spaces'])} spaces")
+
+    # Execute queries with variants
     queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
     for query_id in queries_to_run:
-        query_text = load_query(scenario, query_id)
-        if not query_text:
-            print_warn(f"Query {query_id} not found, skipping")
-            continue
-
-        print(f"    {query_id}...", end=" ", flush=True)
-
-        # Drop caches before query
-        drop_caches()
-
-        # Warmup
-        for _ in range(N_WARMUP):
-            try:
-                with driver.session() as session:
-                    list(session.run(query_text))
-            except Exception:
-                pass
-
-        # Measured runs with resource monitoring
-        query_monitor = ResourceMonitor(container_name, interval_s=0.2)
-        query_monitor.start()
-
-        latencies = []
-        rows = 0
-        for run_idx in range(N_RUNS):
-            if run_idx > 0:
-                drop_caches()
-            try:
-                t0 = time.perf_counter()
-                with driver.session() as session:
-                    records = list(session.run(query_text))
-                    rows = len(records)
-                latencies.append((time.perf_counter() - t0) * 1000)  # ms
-            except Exception as e:
-                print_warn(f"Query error: {e}")
-
-        query_resources = query_monitor.stop()
-        if "samples" in query_resources:
-            del query_resources["samples"]
-
-        stats = compute_stats(latencies)
-        result["queries"][query_id] = {
-            "latencies_ms": latencies,
-            "rows": rows,
-            "stats": stats,
-            "resources": query_resources
-        }
-        print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms "
-              f"(RAM:{query_resources['mem_mb']['max']:.0f}MB CPU:{query_resources['cpu_pct']['avg']:.1f}%)")
+        query_result = run_query_with_variants(
+            query_id=query_id,
+            scenario=scenario,
+            execute_fn=mg_execute,
+            container_name=container_name,
+            n_warmup=n_warmup,
+            n_runs=n_runs,
+            profile=profile,
+            dataset_info=dataset_info
+        )
+        if query_result:
+            result["queries"][query_id] = query_result
 
     result["status"] = "completed"
     driver.close()
@@ -1302,10 +2063,17 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
     return result
 
 
-def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Dict:
-    """Run Oxigraph benchmark (O1 or O2)."""
+def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
+                            n_warmup: int = N_WARMUP, n_runs: int = N_RUNS,
+                            profile: str = "small") -> Dict:
+    """Run Oxigraph benchmark (O1 or O2).
+
+    V2 format uses N-Triples instead of JSON-LD:
+    - O1: graph.nt + chunks.nt + aggregates.nt (all timeseries in RDF)
+    - O2: graph.nt + TimescaleDB for timeseries
+    """
     from basetype_benchmark.loaders.oxigraph.load import (
-        wait_for_oxigraph, clear_store, load_jsonld, count_triples
+        wait_for_oxigraph, clear_store, load_ntriples, load_ntriples_streaming, count_triples
     )
     import requests
 
@@ -1316,6 +2084,9 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
     wait_for_oxigraph(endpoint)
 
     try:
+        # Get V2 file paths for this scenario
+        files = get_scenario_files(export_dir, scenario)
+
         # Clear and load with resource monitoring
         print_info("Clearing store...")
         clear_store(endpoint)
@@ -1325,15 +2096,46 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
         load_monitor.start()
         load_start = time.time()
 
-        jsonld_file = export_dir / "graph.jsonld"
-        if not jsonld_file.exists():
-            load_monitor.stop()
-            print_warn("graph.jsonld not found - need to regenerate dataset with rdf format")
-            result["status"] = "error"
-            result["error"] = "graph.jsonld not found - regenerate dataset"
-            return result
+        # V2 format: N-Triples files
+        graph_file = files.get("graph")
+        if not graph_file or not graph_file.exists():
+            # Fallback: check for V1 JSON-LD format
+            jsonld_file = export_dir / "graph.jsonld"
+            if jsonld_file.exists():
+                from basetype_benchmark.loaders.oxigraph.load import load_jsonld
+                print_info("Using legacy JSON-LD format...")
+                load_jsonld(endpoint, jsonld_file)
+            else:
+                load_monitor.stop()
+                print_warn("graph.nt not found - need to regenerate dataset")
+                result["status"] = "error"
+                result["error"] = "graph.nt not found - regenerate dataset with V2 exporter"
+                return result
+        else:
+            # V2: Load N-Triples (use streaming for large files > 100MB)
+            file_size_mb = graph_file.stat().st_size / (1024 * 1024)
+            if file_size_mb > 100:
+                print_info(f"Loading graph.nt ({file_size_mb:.1f} MB) with streaming...")
+                load_ntriples_streaming(endpoint, graph_file)
+            else:
+                load_ntriples(endpoint, graph_file)
 
-        load_jsonld(endpoint, jsonld_file)
+            # O1 scenario: also load chunks and aggregates
+            if scenario == "O1":
+                chunks_file = files.get("chunks")
+                if chunks_file and chunks_file.exists():
+                    print_info("Loading chunks.nt...")
+                    chunks_size_mb = chunks_file.stat().st_size / (1024 * 1024)
+                    if chunks_size_mb > 100:
+                        load_ntriples_streaming(endpoint, chunks_file)
+                    else:
+                        load_ntriples(endpoint, chunks_file)
+
+                aggregates_file = files.get("aggregates")
+                if aggregates_file and aggregates_file.exists():
+                    print_info("Loading aggregates.nt...")
+                    load_ntriples(endpoint, aggregates_file)
+
         result["load_time_s"] = time.time() - load_start
         result["load_resources"] = load_monitor.stop()
         if "samples" in result["load_resources"]:
@@ -1344,67 +2146,40 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
                  f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
                  f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
-        # Execute queries with resource monitoring
+        # Define executor for SPARQL queries
+        def sparql_execute(query: str) -> int:
+            resp = requests.get(
+                f"{endpoint}/query",
+                params={"query": query},
+                headers={"Accept": "application/sparql-results+json"},
+                timeout=60
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return len(data.get("results", {}).get("bindings", []))
+            return 0
+
+        # Extract dataset info for query parameterization
+        dataset_info = extract_dataset_info(export_dir, scenario)
+        print_info(f"Dataset info: {len(dataset_info['meters'])} meters, "
+                   f"{len(dataset_info['equipment'])} equipment, "
+                   f"{len(dataset_info['spaces'])} spaces")
+
+        # Execute queries with variants
         queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
         for query_id in queries_to_run:
-            query_text = load_query(scenario, query_id)
-            if not query_text:
-                print_warn(f"Query {query_id} not found, skipping")
-                continue
-
-            print(f"    {query_id}...", end=" ", flush=True)
-
-            # Drop caches before query
-            drop_caches()
-
-            # Warmup
-            for _ in range(N_WARMUP):
-                try:
-                    requests.get(
-                        f"{endpoint}/query",
-                        params={"query": query_text},
-                        timeout=60
-                    )
-                except Exception:
-                    pass
-
-            # Measured runs with resource monitoring
-            query_monitor = ResourceMonitor(container_name, interval_s=0.2)
-            query_monitor.start()
-
-            latencies = []
-            rows = 0
-            for run_idx in range(N_RUNS):
-                if run_idx > 0:
-                    drop_caches()
-                try:
-                    t0 = time.perf_counter()
-                    resp = requests.get(
-                        f"{endpoint}/query",
-                        params={"query": query_text},
-                        headers={"Accept": "application/sparql-results+json"},
-                        timeout=60
-                    )
-                    latencies.append((time.perf_counter() - t0) * 1000)  # ms
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        rows = len(data.get("results", {}).get("bindings", []))
-                except Exception as e:
-                    print_warn(f"Query error: {e}")
-
-            query_resources = query_monitor.stop()
-            if "samples" in query_resources:
-                del query_resources["samples"]
-
-            stats = compute_stats(latencies)
-            result["queries"][query_id] = {
-                "latencies_ms": latencies,
-                "rows": rows,
-                "stats": stats,
-                "resources": query_resources
-            }
-            print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms "
-                  f"(RAM:{query_resources['mem_mb']['max']:.0f}MB CPU:{query_resources['cpu_pct']['avg']:.1f}%)")
+            query_result = run_query_with_variants(
+                query_id=query_id,
+                scenario=scenario,
+                execute_fn=sparql_execute,
+                container_name=container_name,
+                n_warmup=n_warmup,
+                n_runs=n_runs,
+                profile=profile,
+                dataset_info=dataset_info
+            )
+            if query_result:
+                result["queries"][query_id] = query_result
 
         result["status"] = "completed"
 
@@ -1419,15 +2194,23 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict) -> Di
 # WORKFLOW: BENCHMARK (RAM-Gradient Protocol)
 # =============================================================================
 
-def run_ram_gradient_benchmark(scenario: str, export_dir: Path, scale: str, results_dir: Path) -> Dict:
+def run_ram_gradient_benchmark(scenario: str, export_dir: Path, profile: str, results_dir: Path) -> Dict:
     """Run RAM-Gradient benchmark for a scenario.
 
     Protocol:
     - P1/P2: Start from min RAM, iterate up until performance plateau
     - M/O: Start from min RAM, escalate on OOM, continue to plateau
 
+    Args:
+        scenario: P1, P2, M1, M2, O1, O2
+        export_dir: Path to exported dataset
+        profile: Profile name (e.g., 'small-2d') for protocol config and RAM strategy
+        results_dir: Directory for results
+
     Returns dict with results per RAM level.
     """
+    # Extract scale from profile (e.g., 'small-2d' -> 'small')
+    scale = profile.split("-")[0] if "-" in profile else profile
     strategy = get_ram_strategy(scenario, scale)
     containers = SCENARIOS[scenario]["containers"]
     main_container = f"btb_{containers[0]}"
@@ -1450,7 +2233,7 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, scale: str, resu
 
         try:
             # Run benchmark at this RAM level
-            bench_result = run_scenario_benchmark(scenario, export_dir)
+            bench_result = run_scenario_benchmark(scenario, export_dir, profile)
 
             # Check for OOM (kernel kill)
             if check_container_oom(main_container):
@@ -1669,11 +2452,16 @@ def workflow_benchmark():
     print(f"Available durations: {', '.join(configs['durations'])}")
     print(f"Total configurations: {len(configs['profiles'])}\n")
 
+    # Check for resumable campaigns
+    resumable = _find_resumable_campaigns()
+
     # Mode selection
-    print(f"  F. {BOLD}FULL{RESET} - Run ALL configurations sequentially")
-    print(f"       ({len(configs['profiles'])} profiles x 6 engines x RAM gradient)")
-    print(f"  S. {BOLD}SELECT{RESET} - Choose specific configurations")
-    print(f"  Q. {BOLD}QUICK{RESET} - Single profile, all engines, single RAM")
+    print(f"  {BOLD}F{RESET}. FULL CAMPAIGN - All configurations automatically")
+    print(f"     {DIM}{len(configs['profiles'])} profiles x 6 scenarios x {len(RAM_LEVELS)} RAM levels = {len(configs['profiles']) * 6 * len(RAM_LEVELS)} runs{RESET}")
+    print(f"  {BOLD}S{RESET}. SELECT - Choose profiles, scenarios, RAM levels")
+    print(f"  {BOLD}Q{RESET}. QUICK TEST - Single profile, all scenarios, single RAM")
+    if resumable:
+        print(f"  {BOLD}R{RESET}. RESUME - Continue interrupted campaign ({len(resumable)} found)")
     print(f"\n  0. Back\n")
 
     mode = prompt("Select mode", "S").upper()
@@ -1684,6 +2472,8 @@ def workflow_benchmark():
         _run_full_benchmark(master_dir, configs)
     elif mode == "Q":
         _run_quick_benchmark(master_dir, configs)
+    elif mode == "R" and resumable:
+        _run_resume_benchmark(resumable)
     else:
         _run_selective_benchmark(master_dir, configs)
 
@@ -1719,7 +2509,7 @@ def _run_full_benchmark(master_dir: Path, configs: Dict):
             profile_results = {}
             for engine in engines:
                 print(f"\n{BOLD}Engine: {engine} ({SCENARIOS[engine]['name']}){RESET}")
-                ram_results = run_ram_gradient_benchmark(engine, export_dir, scale, results_dir)
+                ram_results = run_ram_gradient_benchmark(engine, export_dir, profile, results_dir)
                 profile_results[engine] = ram_results
 
                 # Save intermediate
@@ -1794,7 +2584,7 @@ def _run_quick_benchmark(master_dir: Path, configs: Dict):
             continue
 
         try:
-            result = run_scenario_benchmark(engine, export_dir)
+            result = run_scenario_benchmark(engine, export_dir, profile)
             result["ram_gb"] = ram_level
             all_results[engine] = result
 
@@ -1914,7 +2704,7 @@ def _run_selective_benchmark(master_dir: Path, configs: Dict):
 
                 # Custom RAM gradient with selected levels
                 ram_results = _run_custom_ram_gradient(
-                    engine, export_dir, scale, ram_levels, results_dir
+                    engine, export_dir, profile, ram_levels, results_dir
                 )
                 profile_results[engine] = ram_results
 
@@ -1943,9 +2733,189 @@ def _run_selective_benchmark(master_dir: Path, configs: Dict):
     input("\nPress Enter...")
 
 
-def _run_custom_ram_gradient(scenario: str, export_dir: Path, scale: str,
+def _find_resumable_campaigns() -> List[Dict]:
+    """Find incomplete benchmark campaigns that can be resumed.
+
+    Returns:
+        List of campaign info dicts with path, mode, completed, total
+    """
+    results_base = Path("benchmark_results")
+    if not results_base.exists():
+        return []
+
+    resumable = []
+
+    for campaign_dir in sorted(results_base.iterdir(), reverse=True):
+        if not campaign_dir.is_dir():
+            continue
+
+        summary_file = campaign_dir / "summary.json"
+        if not summary_file.exists():
+            # Check for partial results (individual JSON files)
+            json_files = list(campaign_dir.glob("*.json"))
+            if json_files:
+                # Incomplete campaign without summary
+                resumable.append({
+                    "path": campaign_dir,
+                    "mode": campaign_dir.name.split("_")[0],  # full, selective, quick
+                    "completed_files": len(json_files),
+                    "status": "incomplete",
+                    "timestamp": campaign_dir.name
+                })
+        else:
+            # Has summary - check if complete
+            try:
+                with open(summary_file) as f:
+                    summary = json.load(f)
+
+                # Check for missing results
+                if "results" in summary and "profiles" in summary.get("results", {}):
+                    profiles = summary.get("profiles", [])
+                    engines = summary.get("engines", list(SCENARIOS.keys()))
+                    ram_levels = summary.get("ram_levels", RAM_LEVELS)
+
+                    expected = len(profiles) * len(engines)
+                    actual = len(list(campaign_dir.glob("*_*.json"))) - 1  # -1 for summary
+
+                    if actual < expected:
+                        resumable.append({
+                            "path": campaign_dir,
+                            "mode": summary.get("mode", "unknown"),
+                            "profiles": profiles,
+                            "engines": engines,
+                            "ram_levels": ram_levels,
+                            "completed": actual,
+                            "total": expected,
+                            "status": "partial",
+                            "timestamp": summary.get("timestamp", "")
+                        })
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    return resumable[:5]  # Return last 5 resumable campaigns
+
+
+def _run_resume_benchmark(resumable: List[Dict]):
+    """Resume an interrupted benchmark campaign."""
+    print_header("RESUME BENCHMARK")
+
+    print("Found incomplete campaigns:\n")
+    for i, campaign in enumerate(resumable, 1):
+        path = campaign["path"]
+        mode = campaign["mode"]
+        status = campaign["status"]
+
+        if status == "partial":
+            progress = f"{campaign['completed']}/{campaign['total']} complete"
+        else:
+            progress = f"{campaign['completed_files']} files found"
+
+        print(f"  {i}. {path.name}")
+        print(f"     Mode: {mode}, Status: {status}, Progress: {progress}")
+
+    print(f"\n  0. Back\n")
+
+    choice = prompt("Select campaign to resume", "1")
+    if choice == "0":
+        return
+
+    try:
+        campaign = resumable[int(choice) - 1]
+    except (ValueError, IndexError):
+        print_err("Invalid choice")
+        return
+
+    campaign_dir = campaign["path"]
+
+    # Detect what's already done
+    completed = set()
+    for json_file in campaign_dir.glob("*_*.json"):
+        if json_file.name == "summary.json":
+            continue
+        # Parse filename: profile_engine.json
+        parts = json_file.stem.rsplit("_", 1)
+        if len(parts) == 2:
+            completed.add((parts[0], parts[1]))  # (profile, engine)
+
+    print(f"\nAlready completed: {len(completed)} configurations")
+
+    # Load campaign config
+    summary_file = campaign_dir / "summary.json"
+    if summary_file.exists():
+        with open(summary_file) as f:
+            summary = json.load(f)
+        profiles = summary.get("profiles", [])
+        engines = summary.get("engines", list(SCENARIOS.keys()))
+        ram_levels = summary.get("ram_levels", RAM_LEVELS)
+    else:
+        print_warn("No summary found, using defaults")
+        profiles = []
+        engines = list(SCENARIOS.keys())
+        ram_levels = RAM_LEVELS
+
+    # Find what's missing
+    missing = []
+    for profile in profiles:
+        for engine in engines:
+            if (profile, engine) not in completed:
+                missing.append((profile, engine))
+
+    if not missing:
+        print_ok("Campaign is complete!")
+        input("\nPress Enter...")
+        return
+
+    print(f"Remaining: {len(missing)} configurations")
+    print(f"  Profiles: {set(p for p, e in missing)}")
+    print(f"  Engines: {set(e for p, e in missing)}")
+
+    if not prompt_yes_no("\nContinue campaign?"):
+        return
+
+    # Get master dataset
+    master_info = get_master_dataset()
+    if not master_info:
+        print_err("No master dataset found")
+        return
+
+    master_profile, master_dir = master_info
+
+    # Resume execution
+    for profile, engine in missing:
+        print_header(f"RESUMING: {profile} x {engine}")
+
+        try:
+            export_dir = ensure_dataset_extracted(master_dir, profile)
+
+            ram_results = _run_custom_ram_gradient(
+                engine, export_dir, profile, ram_levels, campaign_dir
+            )
+
+            with open(campaign_dir / f"{profile}_{engine}.json", 'w') as f:
+                json.dump(ram_results, f, indent=2, default=str)
+
+            print_ok(f"Completed: {profile} x {engine}")
+
+        except Exception as e:
+            print_err(f"Failed: {profile} x {engine}: {e}")
+
+    # Update summary
+    print_header("RESUME COMPLETE")
+    print(f"Results in: {campaign_dir}")
+    input("\nPress Enter...")
+
+
+def _run_custom_ram_gradient(scenario: str, export_dir: Path, profile: str,
                              ram_levels: List[int], results_dir: Path) -> Dict:
-    """Run benchmark with custom RAM levels (not auto-escalation)."""
+    """Run benchmark with custom RAM levels (not auto-escalation).
+
+    Args:
+        scenario: P1, P2, M1, M2, O1, O2
+        export_dir: Path to exported dataset
+        profile: Profile name (e.g., 'small-2d') for protocol config
+        ram_levels: List of RAM sizes to test (in GB)
+        results_dir: Directory for results
+    """
     containers = SCENARIOS[scenario]["containers"]
     main_container = f"btb_{containers[0]}"
 
@@ -1959,7 +2929,7 @@ def _run_custom_ram_gradient(scenario: str, export_dir: Path, scale: str,
             continue
 
         try:
-            result = run_scenario_benchmark(scenario, export_dir)
+            result = run_scenario_benchmark(scenario, export_dir, profile)
 
             if check_container_oom(main_container):
                 print_warn(f"OOM at {ram_gb}GB")

@@ -41,114 +41,16 @@ Ce benchmark fournit des mesures empiriques pour eclairer ce choix architectural
 
 ---
 
-## Positionnement
+## Scenarios compares
 
-### Ontologies batimentaires de reference
-
-Ce travail s'appuie sur les standards etablis :
-
-- **Haystack v4** (Project Haystack) : modele semantique par tags pour les equipements techniques
-- **Brick Schema** (Berkeley) : ontologie formelle pour les metadonnees batimentaires
-- **RealEstateCore** (REC) : ontologie de jumeau numerique pour l'immobilier
-
-### Limites des benchmarks existants
-
-| Benchmark | Focus | Limitation pour le batiment |
-|-----------|-------|----------------------------|
-| LDBC SNB | Reseaux sociaux | Pas de donnees temporelles, topologie differente |
-| gMark | Requetes synthetiques | Agnostique du domaine, pas de series temporelles |
-| TPC-H/DS | Charges analytiques | Pas de traversees de graphe |
-
-Aucun de ces benchmarks ne teste la contrainte RAM comme variable experimentale.
-
-### Specificites du domaine batimentaire
-
-- **Ratio structure/temporel** : 1:1000 a 1:3000 (peu de noeuds, beaucoup de mesures)
-- **Traversees bornees** : les requetes depassent rarement 5-10 sauts
-- **Requetes hybrides** : combinent navigation dans le graphe et agregation de series temporelles
-- **Temps reel et historique** : charges operationnelles et analytiques
-
-### Apport de ce benchmark
-
-- **Domaine-specifique** : adapte aux patterns de donnees batimentaires
-- **Reproductible** : generation deterministe, seed fixe, protocole documente
-- **Equitable** : pas de tuning opportuniste, configurations par defaut
-- **RAM comme variable experimentale** : premier benchmark batimentaire avec analyse parametrique cout-memoire
-
----
-
-## Methodologie
-
-### Scenarios compares
-
-| ID | Nom | Structure | Series temporelles |
-|----|-----|-----------|-------------------|
-| P1 | PostgreSQL Relationnel | Tables SQL | Hypertables (TimescaleDB) |
-| P2 | PostgreSQL JSONB | Documents JSONB | Hypertables (TimescaleDB) |
-| M1 | Memgraph Standalone | Property Graph (Cypher) | Tableaux en memoire |
-| M2 | Memgraph + TimescaleDB | Property Graph (Cypher) | Hypertables (externe) |
-| O1 | Oxigraph Standalone | Triplets RDF (SPARQL) | Litteraux RDF |
-| O2 | Oxigraph + TimescaleDB | Triplets RDF (SPARQL) | Hypertables (externe) |
-
-### Dataset synthetique
-
-**Modele de donnees** (inspire de Haystack/Brick/REC) :
-
-```
-Site -> Building -> Floor -> Space -> Equipment -> Point
-                                   -> Meter (arbre FEEDS)
-                                   -> Tenant (OCCUPIES)
-```
-
-**Profils de volumetrie** :
-
-| Echelle | Points | Etages | Description |
-|---------|--------|--------|-------------|
-| small | 50k | 25 | Batiment tertiaire standard |
-| medium | 100k | 50 | Petit campus |
-| large | 500k | 100 | Campus universitaire |
-
-**Durees des series temporelles** :
-
-| Duree | Jours | Cas d'usage |
-|-------|-------|-------------|
-| 2d | 2 | Tests rapides |
-| 1w | 7 | Debogage operationnel |
-| 1m | 30 | Analyse mensuelle |
-| 6m | 180 | Patterns saisonniers |
-| 1y | 365 | Reporting annuel |
-
-### Requetes benchmark (Q1-Q12)
-
-| Requete | Nature | Bornes | Moteurs |
-|---------|--------|--------|---------|
-| Q1-Q5 | Traversees structurelles | <= 10 sauts | Tous |
-| Q6-Q7 | Agregations temporelles | N/A | PostgreSQL uniquement |
-| Q8-Q12 | Hybride (graphe + temporel) | <= 5 + agregation | Tous |
-
-### Protocole RAM-Gradient
-
-Contribution methodologique : la RAM est traitee comme variable independante.
-
-```
-Pour chaque profil (small, medium, large) :
-  Pour chaque allocation RAM (2, 4, 8, 16, 32, 64, 128, 256 Go) :
-    Pour chaque scenario (P1, P2, M1, M2, O1, O2) :
-      1. Limiter le container : docker run --memory={RAM}g
-      2. Charger les donnees (mesurer succes/OOM)
-      3. Si succes : executer Q1-Q12
-      4. Enregistrer : latences, OOM, RAM utilisee
-```
-
-### Metriques collectees
-
-| Metrique | Description | Unite |
-|----------|-------------|-------|
-| Latence p50/p95 | Temps de reponse | ms |
-| RAM steady-state | Memoire au repos | Mo |
-| RAM peak | Memoire maximale | Mo |
-| RAM_min | Plus petite allocation sans OOM ni degradation > 20% | Go |
-| Efficience | Performance / RAM utilisee | - |
+| ID | Nom | Structure | Series temporelles | Containers |
+|----|-----|-----------|-------------------|------------|
+| P1 | PostgreSQL Relationnel | Tables SQL | Hypertables (TimescaleDB) | timescaledb |
+| P2 | PostgreSQL JSONB | Documents JSONB | Hypertables (TimescaleDB) | timescaledb |
+| M1 | Memgraph Standalone | Property Graph (Cypher) | Chunks en memoire | memgraph |
+| M2 | Memgraph + TimescaleDB | Property Graph (Cypher) | Hypertables (externe) | memgraph + timescaledb |
+| O1 | Oxigraph Standalone | Triplets RDF (SPARQL) | Chunks RDF | oxigraph |
+| O2 | Oxigraph + TimescaleDB | Triplets RDF (SPARQL) | Hypertables (externe) | oxigraph + timescaledb |
 
 ---
 
@@ -156,201 +58,266 @@ Pour chaque profil (small, medium, large) :
 
 ### Prerequis
 
-- Ubuntu/Debian (teste sur Ubuntu 24.04)
-- Acces sudo
-- Instance cloud recommandee : 256 Go RAM, 32 vCPU (ex: AWS r8g.8xlarge)
-- Stockage : 500 Go minimum pour les datasets large-1y
+- Docker et Docker Compose
+- Python 3.10+
+- Instance cloud recommandee : 256 Go RAM, 32 vCPU (ex: AWS m8g.16xlarge)
 
-### Installation rapide (nouvelle machine)
-
-```bash
-# Telecharger et lancer le script d'installation interactif
-curl -sLO https://raw.githubusercontent.com/synaptikad/baseTypeBenchmark/main/init.sh
-bash init.sh
-```
-
-Le script guide l'utilisateur a travers toutes les etapes :
-1. Installation des dependances systeme (Docker, Python, Make)
-2. Configuration des permissions Docker
-3. Clonage du repository
-4. Creation d'un environnement virtuel Python et installation des dependances
-5. Proposition de lancer le workflow interactif
-
-### Installation manuelle
+### Installation rapide
 
 ```bash
-# Dependances systeme
-sudo apt update && sudo apt install -y make docker.io docker-compose-v2 python3-pip python3-venv python3-full git
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Cloner et installer
+# Cloner le repository
 git clone https://github.com/synaptikad/baseTypeBenchmark.git
 cd baseTypeBenchmark
+
+# Creer l'environnement virtuel
 python3 -m venv .venv
 source .venv/bin/activate
+
+# Installer les dependances
 pip install -e .
 pip install -r requirements.txt
-```
-
-### Demarrage rapide
-
-```bash
-# Activer l'environnement virtuel
-source .venv/bin/activate
 
 # Lancer le menu interactif
 python run.py
+```
 
-# Ou commandes directes
-python run.py test      # Test rapide (small-2d, scenario P1)
-python run.py list      # Lister les profils disponibles
-python run.py matrix    # Afficher la matrice de faisabilite RAM
+### Scripts de deploiement cloud
+
+Des scripts de setup sont disponibles pour differents providers :
+
+```bash
+# AWS EC2 (m8g.16xlarge Graviton4)
+curl -sSL https://raw.githubusercontent.com/.../deploy/aws_setup.sh | sudo bash
+
+# Hetzner CCX63
+bash deploy/hetzner_setup.sh
+
+# OVH B3-256
+bash deploy/ovh_setup.sh
 ```
 
 ---
 
 ## Utilisation
 
-### Operations sur les datasets
+### Menu principal interactif
 
 ```bash
-# Lister les profils avec estimations
-python -m basetype_benchmark.cli list
-
-# Details d'un profil
-python -m basetype_benchmark.cli info small-1w
-
-# Generation interactive
-python -m basetype_benchmark.cli generate
-
-# Generation directe
-python -m basetype_benchmark.cli generate --profile small-1w --seed 42
-
-# Verification d'integrite
-python -m basetype_benchmark.cli verify
+python run.py
 ```
 
-### Operations de benchmark
+Affiche le menu :
 
-```bash
-# Matrice de faisabilite RAM
-python -m basetype_benchmark.cli matrix
+```
+============================================================
+  BASETYPE BENCHMARK
+============================================================
+Available datasets: small-1w, medium-1m
+On disk: 2 datasets, 1250.5 MB
 
-# Execution interactive
-python -m basetype_benchmark.cli run
+  1. Purge Datasets
+  2. Generate Dataset
+  3. Run Benchmark
+  4. Publish Results
+  0. Exit
 
-# Publication des resultats
-python -m basetype_benchmark.cli publish
+Select [2]:
 ```
 
-### Contraintes RAM par scenario
+### Generation de dataset
 
-La commande `matrix` affiche les combinaisons scenario/profil realisables :
+Option **2. Generate Dataset** :
 
-- **P1/P2** (PostgreSQL) : stockage disque, fonctionnel avec 2-4 Go
-- **M1** (Memgraph standalone) : in-memory, necessite environ 3x la taille du dataset
-- **M2** (Memgraph+TimescaleDB) : hybride, 2-5 Go
-- **O1/O2** (Oxigraph) : stockage disque, 1-4 Go
+1. Choisir la source : Generation locale ou HuggingFace Hub
+2. Selectionner le profil "master" (ex: `large-1y`)
+3. Le generateur cree tous les formats (CSV, JSON, N-Triples)
 
-M1 atteint ses limites sur `large-6m` (~394 Go requis) et `large-1y` (~800 Go requis).
+Les sous-profils (ex: `small-1w` depuis `large-1y`) sont extraits automatiquement pendant le benchmark.
 
-### Systeme de checkpoints
+### Execution du benchmark
 
-Les benchmarks supportent la reprise apres interruption :
+Option **3. Run Benchmark** :
 
-```python
-from basetype_benchmark.benchmark.checkpoint import CheckpointManager
+```
+============================================================
+  BENCHMARK EXECUTION
+============================================================
+Master dataset: large-1y
+Available scales: small, medium, large
+Available durations: 1w, 1m, 6m, 1y
+Total configurations: 12
 
-manager = CheckpointManager("benchmark_results")
-latest = manager.find_latest_session()
-manager.load_session(latest)
+  F. FULL CAMPAIGN - All configurations automatically
+     12 profiles x 6 scenarios x 7 RAM levels = 504 runs
+  S. SELECT - Choose profiles, scenarios, RAM levels
+  Q. QUICK TEST - Single profile, all scenarios, single RAM
+  R. RESUME - Continue interrupted campaign (2 found)
 
-progress = manager.get_progress()
-print(f"Progression : {progress['completed']}/{progress['total']}")
+  0. Back
 ```
 
-### Conteneurs Docker
+| Mode | Description |
+|------|-------------|
+| **F (Full)** | Execute toutes les combinaisons automatiquement |
+| **S (Select)** | Choix fin des profils, scenarios et niveaux RAM |
+| **Q (Quick)** | Test rapide : 1 profil, 6 scenarios, 1 niveau RAM |
+| **R (Resume)** | Reprend une campagne interrompue |
 
-```bash
-# Demarrer tous les moteurs
-docker-compose up -d
+### Mode SELECT (selection fine)
 
-# Demarrer un moteur specifique
-docker-compose up -d timescaledb memgraph oxigraph
+Permet de choisir :
 
-# Verifier le statut
-docker-compose ps
-```
+1. **Scales** : small, medium, large (ou tous)
+2. **Durations** : 1w, 1m, 6m, 1y (ou toutes)
+3. **Scenarios** : P1, P2, M1, M2, O1, O2 (ou tous)
+4. **Niveaux RAM** : 4, 8, 16, 32, 64, 128, 256 GB (ou tous)
 
-### Variables d'environnement
+### Mode RESUME (reprise)
 
-| Variable | Description | Defaut |
-|----------|-------------|--------|
-| BENCH_SEED | Graine aleatoire | 42 |
-| BENCH_SCALE_MODE | Profil par defaut | small |
-| BENCH_N_RUNS | Repetitions de mesure | 10 |
-| BENCH_N_WARMUP | Iterations de warmup | 3 |
-| BENCH_TIMEOUT_S | Timeout des requetes | 30 |
+Detecte automatiquement les campagnes interrompues et permet de les reprendre :
+
+- Affiche la progression (ex: "15/36 complete")
+- Ne re-execute que les combinaisons manquantes
+- Conserve les resultats deja obtenus
 
 ---
 
-## Dataset
+## Profils de donnees
 
-Le dataset synthetique est disponible sur HuggingFace Hub pour garantir la reproductibilite :
+### Echelles (scales)
 
-**Repository** : `synaptikad/basetype-benchmark` (lien a confirmer apres publication)
+| Scale | Batiments | Espaces | Equipements | Points |
+|-------|-----------|---------|-------------|--------|
+| small | 1 | ~120 | ~1 800 | ~70 000 |
+| medium | 3 | ~430 | ~6 500 | ~245 000 |
+| large | 12 | ~2 600 | ~39 000 | ~1 500 000 |
 
-### Chargement du dataset
+### Durees (durations)
 
-```python
-from basetype_benchmark.dataset.huggingface import load_benchmark_data
+| Duration | Jours | Cas d'usage |
+|----------|-------|-------------|
+| 1w | 7 | Tests rapides |
+| 1m | 30 | Analyse mensuelle |
+| 6m | 180 | Patterns saisonniers |
+| 1y | 365 | Reporting annuel |
 
-data = load_benchmark_data(scale="medium", duration="1m")
-print(f"Noeuds : {len(data['nodes'])}")
-print(f"Aretes : {len(data['edges'])}")
-print(f"Series temporelles : {len(data['timeseries'])}")
-```
+### Combinaisons (profils)
 
-### Publication
-
-Le token HuggingFace est demande de maniere interactive lors de la publication (jamais stocke dans les fichiers) :
-
-```bash
-python -m basetype_benchmark.cli publish
-```
+12 profils disponibles : `small-1w`, `small-1m`, `small-6m`, `small-1y`, `medium-1w`, etc.
 
 ---
 
-## Structure du repository
+## Niveaux RAM testes
+
+Le benchmark teste chaque scenario avec differentes allocations memoire :
+
+```
+RAM_LEVELS = [4, 8, 16, 32, 64, 128, 256]  # GB
+```
+
+Pour chaque combinaison (profil, scenario, RAM) :
+
+1. Demarre le container avec `--memory={RAM}g`
+2. Charge les donnees
+3. Execute les 13 requetes (Q1-Q13)
+4. Enregistre latences, RAM utilisee, OOM eventuel
+
+---
+
+## Requetes benchmark (Q1-Q13)
+
+| # | Nom | Nature | Description |
+|---|-----|--------|-------------|
+| Q1 | Chaine energetique | Traversee FEEDS | Parcours arbre compteurs |
+| Q2 | Impact fonctionnel | Traversee HAS_PART + SERVES | Espaces impactes par panne |
+| Q3 | Services spatiaux | Lookup SERVES | Equipements servant un espace |
+| Q4 | Inventaire temperature | Multi-hop | Points temp par etage |
+| Q5 | Equipements orphelins | Scan global | Equipements sans relation |
+| Q6 | Agregation horaire | Time-series | Moyennes horaires |
+| Q7 | Derive top 20 | Time-series | Points les plus instables |
+| Q8 | Energie tenant | Hybride | Consommation par locataire |
+| Q9 | Empreinte carbone | Hybride | CO2 par tenant |
+| Q10 | Analyse securite | Traversee | Points d'acces par zone |
+| Q11 | Impact IT | Traversee | Equipements dependant d'un rack |
+| Q12 | Analytics complet | Multi-domaine | Vue consolidee |
+| Q13 | Confort vendredis | Stress-test | DOW filter + dechunking |
+
+---
+
+## Structure du projet
 
 ```
 BaseTypeBenchmark/
+├── run.py                      # Point d'entree principal (menu interactif)
+├── config/
+│   ├── profiles/               # small.yaml, medium.yaml, large.yaml
+│   ├── space_types.yaml        # Types d'espaces et domaines
+│   └── equipment_distribution.yaml
+├── docker/
+│   ├── docker-compose.yml      # TimescaleDB, Memgraph, Oxigraph
+│   └── .env
+├── queries/
+│   ├── sql/                    # Q1-Q13 pour PostgreSQL
+│   ├── cypher/                 # Q1-Q13 pour Memgraph
+│   └── sparql/                 # Q1-Q13 pour Oxigraph
 ├── src/basetype_benchmark/
-│   ├── dataset/           # Generation de donnees
-│   │   ├── config.py      # Profils de volumetrie
-│   │   ├── generator.py   # Generateur synthetique
-│   │   └── huggingface.py # Integration HuggingFace
-│   ├── benchmark/         # Framework de benchmark
-│   │   ├── runner.py      # Orchestration
-│   │   ├── checkpoint.py  # Reprise apres interruption
-│   │   └── ram_config.py  # Matrice de faisabilite RAM
-│   ├── loaders/           # Chargeurs par moteur
-│   └── queries/           # Requetes SQL/Cypher/SPARQL
-├── deploy/                # Scripts de deploiement
-├── docker-compose.yml
-├── run.py                 # Point d'entree principal
-└── pyproject.toml
+│   ├── dataset/                # Generation et export
+│   │   ├── generator_v2.py     # Generateur synthetique
+│   │   ├── exporter_v2.py      # Export multi-format
+│   │   └── huggingface.py      # Integration HuggingFace
+│   ├── benchmark/              # Monitoring et metriques
+│   │   ├── resource_monitor.py # CPU, RAM, I/O, energie
+│   │   └── checkpoint.py       # Reprise apres interruption
+│   └── loaders/                # Chargement par moteur
+│       ├── postgres/
+│       ├── memgraph/
+│       └── oxigraph/
+├── deploy/                     # Scripts cloud (AWS, Hetzner, OVH)
+└── docs_private/               # Article academique
 ```
+
+---
+
+## Resultats
+
+Les resultats sont sauvegardes dans `benchmark_results/` :
+
+```
+benchmark_results/
+├── full_20250119_143022/
+│   ├── small-1w_P1.json
+│   ├── small-1w_P2.json
+│   ├── ...
+│   └── summary.json
+```
+
+Chaque fichier JSON contient :
+- Latences par requete (p50, p95, min, max)
+- RAM utilisee (steady-state, peak)
+- CPU moyen
+- Statut OOM
+
+---
+
+## Metriques collectees
+
+| Categorie | Metrique | Description |
+|-----------|----------|-------------|
+| Performance | p50, p95 | Latences en ms |
+| Memoire | RAM steady-state | Usage median |
+| Memoire | RAM peak | Maximum observe |
+| CPU | CPU moyen | % utilisation |
+| I/O | IOPS read/write | Operations par seconde |
+| Energie | RAPL (Linux) | Consommation CPU/DRAM |
 
 ---
 
 ## Limites methodologiques
 
 - Tuning volontairement limite (configurations par defaut)
-- Environnement Docker (overhead constant mais comparable entre moteurs)
-- Representations alternatives non evaluees (DuckDB, ClickHouse, etc.)
-- Seed unique (reproductibilite privilegiee sur la diversite)
+- Environnement Docker (overhead constant mais comparable)
+- Seed unique (42) pour reproductibilite
+- Pas de benchmark de concurrence (single-thread)
 
 ---
 
@@ -361,7 +328,6 @@ BaseTypeBenchmark/
 3. RealEstateCore. https://realestatecore.io/
 4. TrendForce. DRAM Contract Prices. 2025.
 5. Berkeley Lab. United States Data Center Energy Usage Report. December 2024.
-6. LDBC Council. Social Network Benchmark. https://ldbcouncil.org/
 
 ---
 

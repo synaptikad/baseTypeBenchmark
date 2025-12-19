@@ -160,15 +160,10 @@ sudo -u $MAIN_USER DATA_DIR=$DATA_DIR bash -c '
 source .venv/bin/activate
 export PYTHONPATH=$DATA_DIR/baseTypeBenchmark/src
 
-echo "  Generating small-1w..."
-python -c "
-from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator
-g = BuildingGraphGenerator()
-g.generate_from_profile(\"small-1w\")
-g.export_all(\"data/small-1w\")
-" 2>/dev/null || echo "  small-1w generation skipped or failed"
-
-echo "  Dataset generation complete"
+echo "  Setup complete. Use run.py to generate datasets and run benchmarks."
+echo "  Example: python run.py"
+echo ""
+echo "  Dataset generation will be done interactively via the menu."
 '
 
 # =============================================================================

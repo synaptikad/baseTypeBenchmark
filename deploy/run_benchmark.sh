@@ -108,117 +108,78 @@ show_system_info() {
 # =============================================================================
 
 phase_validate() {
-    log "🧪 PHASE: VALIDATE (quick tests ~15 min)"
+    log "PHASE: VALIDATE (quick tests ~15 min)"
     echo ""
 
-    # Test PostgreSQL with small-1w
-    log "Testing PostgreSQL RAM validation..."
-    python test_ram_validation.py
+    # Launch interactive benchmark runner
+    log "Launching interactive benchmark runner..."
+    log "Select 'Generate Dataset' then 'Run Benchmark' with small-1w profile"
+    python run.py
 
     success "Validation complete!"
 }
 
 phase_small() {
-    log "📊 PHASE: SMALL-1W (full benchmark ~2-4h)"
+    log "PHASE: SMALL-1W (full benchmark ~2-4h)"
     echo ""
 
-    # RAM levels for small dataset
-    RAM_LEVELS="2048,4096,8192,16384,32768"
+    log "Running benchmark on small-1w profile..."
+    log "Use the interactive menu to:"
+    log "  1. Generate Dataset (small-1w)"
+    log "  2. Run Benchmark (all 6 scenarios: P1, P2, M1, M2, O1, O2)"
+    python run.py
 
-    log "Testing PostgreSQL concurrent..."
-    python test_ram_concurrent.py --full-matrix --duration 60
-
-    log "Testing all scenarios..."
-    for scenario in P1 P2 M1 M2 O1 O2; do
-        log "  Scenario $scenario..."
-        python -c "
-from basetype_benchmark.benchmark.full_orchestrator import BenchmarkOrchestrator, Scenario
-orch = BenchmarkOrchestrator()
-orch.run_scenario(Scenario.$scenario, 'small-1w', [4096, 8192, 16384])
-" 2>&1 || warn "Scenario $scenario failed"
-    done
-
-    success "Small benchmark complete! Results in benchmark_results/"
+    success "Small benchmark complete! Results in data/results/"
 }
 
 phase_medium() {
-    log "📊 PHASE: MEDIUM-10W (full benchmark ~4-8h)"
+    log "PHASE: MEDIUM (full benchmark ~4-8h)"
     echo ""
 
-    # Check dataset exists
-    if [ ! -d "data/medium-10w" ]; then
-        log "Generating medium-10w dataset..."
-        python -c "
-from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator
-g = BuildingGraphGenerator()
-g.generate_from_profile('medium-10w')
-g.export_all('data/medium-10w')
-"
-    fi
+    log "Running benchmark on medium profile..."
+    log "Use the interactive menu to:"
+    log "  1. Generate Dataset (medium-1m)"
+    log "  2. Run Benchmark (all 6 scenarios: P1, P2, M1, M2, O1, O2)"
+    python run.py
 
-    log "Testing all scenarios on medium-10w..."
-    for scenario in P1 P2 M1 M2 O1 O2; do
-        log "  Scenario $scenario..."
-        python -c "
-from basetype_benchmark.benchmark.full_orchestrator import BenchmarkOrchestrator, Scenario
-orch = BenchmarkOrchestrator()
-orch.run_scenario(Scenario.$scenario, 'medium-10w', [8192, 16384, 32768, 65536])
-" 2>&1 || warn "Scenario $scenario failed"
-    done
-
-    success "Medium benchmark complete! Results in benchmark_results/"
+    success "Medium benchmark complete! Results in data/results/"
 }
 
 phase_large() {
-    log "📊 PHASE: LARGE-100W (full benchmark ~12-24h)"
+    log "PHASE: LARGE (full benchmark ~12-24h)"
     echo ""
 
-    # Check dataset exists
-    if [ ! -d "data/large-100w" ]; then
-        log "Generating large-100w dataset (this may take a while)..."
-        python -c "
-from basetype_benchmark.data_generator.graph_builder import BuildingGraphGenerator
-g = BuildingGraphGenerator()
-g.generate_from_profile('large-100w')
-g.export_all('data/large-100w')
-"
-    fi
+    log "Running benchmark on large profile..."
+    log "Use the interactive menu to:"
+    log "  1. Generate Dataset (large-1m or large-1y)"
+    log "  2. Run Benchmark (all 6 scenarios: P1, P2, M1, M2, O1, O2)"
+    python run.py
 
-    log "Testing all scenarios on large-100w..."
-    for scenario in P1 P2 M1 M2 O1 O2; do
-        log "  Scenario $scenario..."
-        python -c "
-from basetype_benchmark.benchmark.full_orchestrator import BenchmarkOrchestrator, Scenario
-orch = BenchmarkOrchestrator()
-orch.run_scenario(Scenario.$scenario, 'large-100w', [32768, 65536, 131072])
-" 2>&1 || warn "Scenario $scenario failed"
-    done
-
-    success "Large benchmark complete! Results in benchmark_results/"
+    success "Large benchmark complete! Results in data/results/"
 }
 
 phase_all() {
-    log "🚀 PHASE: ALL (complete benchmark suite ~24-48h)"
+    log "PHASE: ALL (complete benchmark suite ~24-48h)"
     echo ""
 
-    phase_validate
-    echo ""
-
-    phase_small
-    echo ""
-
-    phase_medium
-    echo ""
-
-    phase_large
-    echo ""
+    log "For complete benchmark suite, use the interactive menu:"
+    log "  1. Generate all datasets (small, medium, large)"
+    log "  2. Run benchmarks on each profile"
+    log ""
+    log "Profiles available:"
+    log "  - small-1w, small-1m, small-6m, small-1y"
+    log "  - medium-1w, medium-1m, medium-6m, medium-1y"
+    log "  - large-1w, large-1m, large-6m, large-1y"
+    log ""
+    log "Scenarios: P1, P2 (PostgreSQL), M1, M2 (Memgraph), O1, O2 (Oxigraph)"
+    python run.py
 
     success "Complete benchmark suite finished!"
-    log "Results saved in benchmark_results/"
+    log "Results saved in data/results/"
 }
 
 phase_publish() {
-    log "📤 PHASE: PUBLISH (dataset to HuggingFace Hub)"
+    log "PHASE: PUBLISH (dataset to HuggingFace Hub)"
     echo ""
 
     # Check HF_TOKEN
@@ -235,8 +196,9 @@ phase_publish() {
 
     success "HF_TOKEN configured"
 
-    log "Generating and publishing large-1y dataset..."
-    python src/scripts/publish_to_huggingface.py --profile=large-1y
+    log "Publishing dataset to HuggingFace..."
+    log "Use the interactive menu option 'Publish Results'"
+    python run.py
 
     success "Dataset published to HuggingFace!"
 }

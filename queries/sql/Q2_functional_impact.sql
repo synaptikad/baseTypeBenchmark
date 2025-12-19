@@ -1,9 +1,10 @@
 -- Q2: Functional Impact Analysis
 -- What spaces are affected if equipment X fails?
 -- Benchmark: Reverse traversal (impact analysis pattern)
+-- Parameter: $EQUIPMENT_ID - equipment to analyze for impact
 
 WITH RECURSIVE impact_analysis AS (
-    -- Start from a single equipment (use subquery to avoid LIMIT in CTE base)
+    -- Start from specified equipment
     SELECT
         n.id,
         n.type,
@@ -12,7 +13,7 @@ WITH RECURSIVE impact_analysis AS (
         1 as hop_distance,
         ARRAY[n.id] as impact_path
     FROM nodes n
-    WHERE n.id = (SELECT id FROM nodes WHERE type = 'Equipment' ORDER BY id LIMIT 1)
+    WHERE n.id = '$EQUIPMENT_ID'
 
     UNION ALL
 

@@ -1,0 +1,91 @@
+# config/space_types.yaml
+# 15 types d'espaces avec domaines associés
+
+space_types:
+  office_open:
+    name: "Bureau open space"
+    domains: [HVAC, Lighting, IT, FireSafety]
+
+  office_closed:
+    name: "Bureau fermé"
+    domains: [HVAC, Lighting, Security, FireSafety]
+
+  meeting_small:
+    name: "Petite salle réunion"
+    domains: [AV, HVAC, Security, Lighting]
+
+  meeting_large:
+    name: "Grande salle réunion"
+    domains: [AV, HVAC, Lighting]
+
+  conference:
+    name: "Salle de conférence"
+    domains: [AV, HVAC, Lighting, Security]
+
+  corridor:
+    name: "Circulation"
+    domains: [FireSafety, Lighting, Security]
+
+  lobby:
+    name: "Hall d'accueil"
+    domains: [Elevator, AV, Security, Lighting, HVAC]
+
+  restroom:
+    name: "Sanitaires"
+    domains: [Plumbing, Lighting, FireSafety]
+
+  kitchen:
+    name: "Cuisine/Cafétéria"
+    domains: [Elevator, FireSafety, Lighting, HVAC, Electrical]
+
+  technical_elec:
+    name: "Local électrique (TGBT)"
+    domains: [Electrical, Security, FireSafety]
+
+  technical_hvac:
+    name: "Local CVC"
+    domains: [HVAC, Plumbing, Electrical, FireSafety]
+
+  technical_it:
+    name: "Local serveur/IT"
+    domains: [IT, Security, Electrical, FireSafety, HVAC]
+
+  parking:
+    name: "Parking"
+    domains: [Parking, FireSafety, HVAC, Lighting, Security]
+
+  storage:
+    name: "Stockage"
+    domains: [FireSafety, HVAC, Security]
+
+  vertical:
+    name: "Circulation verticale"
+    domains: [Elevator, Plumbing, FireSafety]
+
+# Distribution par type d'étage
+floor_distribution:
+  basement:
+    parking: 1
+    technical_elec: 1
+    technical_hvac: 1
+    storage: 2
+
+  ground:
+    lobby: 1
+    office_open: 2
+    meeting_small: 2
+    restroom: 1
+    technical_elec: 1
+    corridor: 1
+
+  standard:
+    office_open: 3
+    office_closed: 4
+    meeting_small: 2
+    meeting_large: 1
+    corridor: 1
+    restroom: 1
+    storage: 1
+
+  rooftop:
+    technical_hvac: 1

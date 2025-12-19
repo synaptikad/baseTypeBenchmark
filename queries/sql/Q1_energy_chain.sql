@@ -1,9 +1,10 @@
--- Q1: Energy Chain - Traverse equipment → meter → point → timeseries
+-- Q1: Energy Chain - Traverse from meter through FEEDS chain
 -- Benchmark: Graph traversal + JOIN performance (structural query)
+-- Parameter: $METER_ID - starting meter for energy chain traversal
 -- Priority: Query execution performance (exploitation)
 
 WITH RECURSIVE energy_chain AS (
-    -- Start from equipment nodes
+    -- Start from specified meter
     SELECT
         n.id,
         n.type,
@@ -12,11 +13,11 @@ WITH RECURSIVE energy_chain AS (
         1 as depth,
         ARRAY[n.id] as path
     FROM nodes n
-    WHERE n.type = 'Equipment'
+    WHERE n.id = '$METER_ID'
 
     UNION ALL
 
-    -- Follow FEEDS, HAS_POINT, MEASURES relationships
+    -- Follow FEEDS relationships downstream (up to 10 hops per spec)
     SELECT
         child.id,
         child.type,
@@ -27,15 +28,15 @@ WITH RECURSIVE energy_chain AS (
     FROM energy_chain ec
     JOIN edges e ON e.src_id = ec.id
     JOIN nodes child ON child.id = e.dst_id
-    WHERE ec.depth < 4
-      AND e.rel_type IN ('FEEDS', 'HAS_POINT', 'MEASURES')
+    WHERE ec.depth < 10
+      AND e.rel_type = 'FEEDS'
       AND NOT child.id = ANY(ec.path)
 )
 SELECT
-    building_id,
+    id,
     type,
-    COUNT(*) as node_count,
-    MAX(depth) as max_depth
+    name,
+    depth,
+    path
 FROM energy_chain
-GROUP BY building_id, type
-ORDER BY building_id, node_count DESC;
+ORDER BY depth, type;

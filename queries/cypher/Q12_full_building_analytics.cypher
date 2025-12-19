@@ -1,7 +1,8 @@
 // Q12: Full Building Analytics Dashboard
+// Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END (for TS query)
 // Building-level KPIs aggregation
 
-MATCH (n:Node)
+MATCH (n:Node {building_id: '$BUILDING_ID'})
 WITH n.building_id AS building_id, n.type AS type, count(*) AS cnt
 WITH building_id,
      sum(CASE WHEN type = 'Floor' THEN cnt ELSE 0 END) AS floor_count,
@@ -16,5 +17,4 @@ RETURN building_id,
        equipment_count,
        point_count,
        tenant_count,
-       total_nodes
-ORDER BY building_id;
+       total_nodes;

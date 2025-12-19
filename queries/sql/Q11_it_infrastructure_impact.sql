@@ -1,5 +1,6 @@
 -- Q11: IT Infrastructure Impact Analysis
 -- Benchmark: Network/IT equipment dependency analysis
+-- Parameter: $BUILDING_ID - building to analyze
 -- Pattern: Server room → IT equipment → Network
 
 WITH it_equipment AS (
@@ -10,6 +11,7 @@ WITH it_equipment AS (
         n.building_id
     FROM nodes n
     WHERE n.type = 'Equipment'
+      AND n.building_id = '$BUILDING_ID'
       AND (n.name ILIKE '%server%'
            OR n.name ILIKE '%network%'
            OR n.name ILIKE '%switch%'
@@ -26,7 +28,7 @@ FROM nodes sp
 JOIN edges e ON e.src_id = sp.id AND e.rel_type = 'CONTAINS'
 JOIN it_equipment it ON it.id = e.dst_id
 WHERE sp.type = 'Space'
+  AND sp.building_id = '$BUILDING_ID'
 GROUP BY sp.id, sp.name, sp.building_id
 HAVING COUNT(DISTINCT it.id) > 0
-ORDER BY it_equipment_count DESC
-LIMIT 20;
+ORDER BY it_equipment_count DESC;

@@ -2,26 +2,29 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 # Q10: Security Access Analysis
+# Parameters: $ZONE_ID - zone to analyze, $DATE_START/$DATE_END (for event TS)
 
-SELECT ?zone_id ?zone_name ?building_id
-       (COUNT(DISTINCT ?ap) AS ?access_point_count)
-       (COUNT(DISTINCT ?eq) AS ?security_equipment_count)
+SELECT ?zone_id ?zone_name ?building_id ?ap_id ?ap_name ?eq_id ?eq_name
 WHERE {
-  ?zone rdf:type btb:Zone ;
-        btb:id ?zone_id ;
+  # Start from specified zone
+  BIND(<http://basetype.benchmark/$ZONE_ID> AS ?zone)
+
+  ?zone btb:id ?zone_id ;
         btb:name ?zone_name ;
         btb:building_id ?building_id .
 
   OPTIONAL {
     ?zone btb:contains ?ap .
-    ?ap rdf:type btb:AccessPoint .
+    ?ap rdf:type btb:AccessPoint ;
+        btb:id ?ap_id ;
+        btb:name ?ap_name .
   }
 
   OPTIONAL {
     ?zone ?rel ?eq .
-    ?eq rdf:type btb:Equipment .
+    ?eq rdf:type btb:Equipment ;
+        btb:id ?eq_id ;
+        btb:name ?eq_name .
   }
 }
-GROUP BY ?zone_id ?zone_name ?building_id
-ORDER BY DESC(?access_point_count) DESC(?security_equipment_count)
-LIMIT 50
+ORDER BY ?ap_name ?eq_name

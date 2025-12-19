@@ -1,17 +1,20 @@
--- Q7: Sensor Drift Detection - Top 20 drifting sensors
+-- Q7: Sensor Drift Detection - Top 20 drifting sensors in building
 -- Benchmark: Statistical analysis over time (anomaly detection)
--- Pattern: Variance analysis
+-- Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END - time range
 
 WITH sensor_stats AS (
     SELECT
-        point_id,
-        AVG(value) as mean_value,
-        STDDEV(value) as std_value,
+        t.point_id,
+        AVG(t.value) as mean_value,
+        STDDEV(t.value) as std_value,
         COUNT(*) as sample_count,
-        MAX(value) - MIN(value) as range_value
-    FROM timeseries
-    WHERE time >= NOW() - INTERVAL '7 days'
-    GROUP BY point_id
+        MAX(t.value) - MIN(t.value) as range_value
+    FROM timeseries t
+    JOIN nodes p ON p.id = t.point_id
+    WHERE p.building_id = '$BUILDING_ID'
+      AND t.time >= '$DATE_START'::timestamptz
+      AND t.time < '$DATE_END'::timestamptz
+    GROUP BY t.point_id
     HAVING COUNT(*) > 100
 ),
 drift_score AS (

@@ -1,0 +1,38 @@
+# config/profiles/small.yaml
+# Profile SMALL - 1 bâtiment, ~70k points
+
+profile: small
+seed: 42
+
+buildings: 1
+floors:
+  - type: basement
+    count: 1
+  - type: ground
+    count: 1
+  - type: standard
+    count: 8
+  - type: rooftop
+    count: 1
+
+tenants: 3
+meters:
+  main: 1
+  sub_per_main: 5
+
+targets:
+  spaces: 120
+  equipments: 1800
+  points: 70000
+  meters: 6
+
+# Durées disponibles pour timeseries
+durations:
+  - name: 1w
+    days: 7
+  - name: 1m
+    days: 30
+  - name: 6m
+    days: 180
+  - name: 1y
+    days: 365

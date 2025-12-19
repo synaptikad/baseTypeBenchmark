@@ -1,5 +1,6 @@
 -- Q8: Tenant Energy Consumption
 -- Benchmark: Multi-hop traversal + timeseries aggregation (hybrid query)
+-- Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END - time range
 -- Pattern: Tenant → Spaces → Equipment → Points → Timeseries
 
 WITH tenant_points AS (
@@ -15,7 +16,7 @@ WITH tenant_points AS (
     JOIN edges e3 ON e3.src_id = eq.id AND e3.rel_type = 'HAS_POINT'
     JOIN nodes p ON p.id = e3.dst_id AND p.type = 'Point'
     JOIN edges e4 ON e4.src_id = p.id AND e4.rel_type = 'MEASURES' AND e4.dst_id = 'Power'
-    WHERE t.type = 'Tenant'
+    WHERE t.id = '$TENANT_ID'
 )
 SELECT
     tp.tenant_id,
@@ -25,6 +26,7 @@ SELECT
     COUNT(DISTINCT tp.point_id) as point_count
 FROM tenant_points tp
 JOIN timeseries ts ON ts.point_id = tp.point_id
-WHERE ts.time >= NOW() - INTERVAL '30 days'
+WHERE ts.time >= '$DATE_START'::timestamptz
+  AND ts.time < '$DATE_END'::timestamptz
 GROUP BY tp.tenant_id, tp.tenant_name
 ORDER BY total_energy DESC;

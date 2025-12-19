@@ -1,0 +1,52 @@
+# Q6: Timeseries Hourly Aggregation - Using pre-computed daily aggregates (O1)
+# Benchmark: Query daily aggregates instead of raw values
+# Pattern: O1 stores daily aggregates to avoid full dechunking
+# Parameters: $POINT_ID - point to query, $DATE_START/$DATE_END (xsd:date)
+# NOTE: Returns daily granularity (not hourly) - demonstrates aggregate trade-off
+
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX brick: <https://brickschema.org/schema/Brick#>
+PREFIX ts: <http://example.org/ts/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX btb: <http://basetype-benchmark.org/>
+
+# O1 uses pre-computed daily aggregates (ts:DailyAggregate)
+# This avoids the expensive dechunking required by M1
+# Trade-off: daily granularity only, not hourly
+
+SELECT ?date ?avg_value ?min_value ?max_value ?sample_count
+WHERE {
+    # Start from specified point
+    BIND(<http://basetype.benchmark/$POINT_ID> AS ?point)
+
+    # Get daily aggregates for this point
+    ?agg rdf:type ts:DailyAggregate ;
+         ts:forPoint ?point ;
+         ts:date ?date ;
+         ts:avgValue ?avg_value ;
+         ts:minValue ?min_value ;
+         ts:maxValue ?max_value ;
+         ts:sampleCount ?sample_count .
+
+    # Filter to date range
+    FILTER (?date >= "$DATE_START"^^xsd:date && ?date < "$DATE_END"^^xsd:date)
+}
+ORDER BY DESC(?date)
+
+# ALTERNATIVE: Full dechunking version (expensive, for comparison)
+# Uncomment to test raw chunk processing like M1
+#
+# SELECT ?point ?hour_bucket (AVG(?value) AS ?avg_value)
+#        (MIN(?value) AS ?min_value) (MAX(?value) AS ?max_value)
+#        (COUNT(*) AS ?sample_count)
+# WHERE {
+#     ?point rdf:type brick:Point ;
+#            ts:hasChunk ?chunk .
+#     ?chunk ts:startTs ?start_ts ;
+#            ts:freqSec ?freq_sec ;
+#            ts:values ?values_json .
+#     # POST-PROCESSING REQUIRED: Parse JSON, reconstruct timestamps
+#     # SPARQL cannot natively parse JSON arrays
+# }
+# GROUP BY ?point ?hour_bucket

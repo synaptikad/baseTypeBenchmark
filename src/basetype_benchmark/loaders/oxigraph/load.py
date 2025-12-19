@@ -73,6 +73,100 @@ def load_jsonld(endpoint: str, jsonld_path: Path) -> float:
     return elapsed
 
 
+def load_ntriples(endpoint: str, nt_path: Path, timeout: int = 600) -> float:
+    """Load N-Triples file into Oxigraph via HTTP POST.
+
+    Args:
+        endpoint: Oxigraph HTTP endpoint (e.g., http://localhost:7878)
+        nt_path: Path to .nt file
+        timeout: Request timeout in seconds (default 10 min for large files)
+
+    Returns:
+        Elapsed time in seconds
+    """
+    payload = nt_path.read_bytes()
+    t0 = time.perf_counter()
+    response = requests.post(
+        f"{endpoint}/store",
+        headers={"Content-Type": "application/n-triples"},
+        data=payload,
+        timeout=timeout
+    )
+    if response.status_code not in [200, 201, 204]:
+        response.raise_for_status()
+    elapsed = time.perf_counter() - t0
+    size_mb = len(payload) / (1024 * 1024)
+    print(f"Ingestion Oxigraph: {size_mb:.1f} MB N-Triples chargés en {elapsed:.2f}s")
+    return elapsed
+
+
+def load_ntriples_streaming(endpoint: str, nt_path: Path, chunk_size: int = 10 * 1024 * 1024) -> float:
+    """Load large N-Triples file in chunks for streaming.
+
+    For very large files (>100MB), this prevents memory issues.
+
+    Args:
+        endpoint: Oxigraph HTTP endpoint
+        nt_path: Path to .nt file
+        chunk_size: Size of each chunk in bytes (default 10MB)
+
+    Returns:
+        Total elapsed time in seconds
+    """
+    t0 = time.perf_counter()
+    total_bytes = 0
+
+    with open(nt_path, 'rb') as f:
+        buffer = b''
+        chunk_num = 0
+
+        while True:
+            data = f.read(chunk_size)
+            if not data:
+                break
+
+            buffer += data
+
+            # Find last complete line
+            last_newline = buffer.rfind(b'\n')
+            if last_newline == -1:
+                continue
+
+            # Send complete lines
+            to_send = buffer[:last_newline + 1]
+            buffer = buffer[last_newline + 1:]
+
+            response = requests.post(
+                f"{endpoint}/store",
+                headers={"Content-Type": "application/n-triples"},
+                data=to_send,
+                timeout=300
+            )
+            if response.status_code not in [200, 201, 204]:
+                response.raise_for_status()
+
+            total_bytes += len(to_send)
+            chunk_num += 1
+            if chunk_num % 10 == 0:
+                print(f"      {total_bytes / (1024*1024):.1f} MB loaded...", flush=True)
+
+        # Send remaining buffer
+        if buffer:
+            response = requests.post(
+                f"{endpoint}/store",
+                headers={"Content-Type": "application/n-triples"},
+                data=buffer,
+                timeout=300
+            )
+            if response.status_code not in [200, 201, 204]:
+                response.raise_for_status()
+            total_bytes += len(buffer)
+
+    elapsed = time.perf_counter() - t0
+    print(f"Ingestion Oxigraph: {total_bytes / (1024*1024):.1f} MB N-Triples chargés en {elapsed:.2f}s (streaming)")
+    return elapsed
+
+
 def count_triples(endpoint: str) -> int:
     """Count total triples in the store.
 

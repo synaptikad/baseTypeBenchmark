@@ -1,5 +1,6 @@
 -- Q12: Full Building Analytics Dashboard
 -- Benchmark: Complex multi-dimensional aggregation (dashboard pattern)
+-- Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END - time range
 -- Pattern: Building-level KPIs
 
 WITH building_stats AS (
@@ -8,6 +9,7 @@ WITH building_stats AS (
         n.type,
         COUNT(*) as count
     FROM nodes n
+    WHERE n.building_id = '$BUILDING_ID'
     GROUP BY n.building_id, n.type
 ),
 building_pivot AS (
@@ -30,7 +32,9 @@ building_ts_stats AS (
         COUNT(*) as sample_count
     FROM timeseries ts
     JOIN nodes n ON n.id = ts.point_id
-    WHERE ts.time >= NOW() - INTERVAL '24 hours'
+    WHERE n.building_id = '$BUILDING_ID'
+      AND ts.time >= '$DATE_START'::timestamptz
+      AND ts.time < '$DATE_END'::timestamptz
     GROUP BY n.building_id
 )
 SELECT
@@ -41,9 +45,8 @@ SELECT
     bp.point_count,
     bp.tenant_count,
     bp.total_nodes,
-    COALESCE(bts.active_points, 0) as active_points_24h,
-    COALESCE(bts.sample_count, 0) as samples_24h,
-    ROUND(COALESCE(bts.avg_value, 0)::numeric, 2) as avg_value_24h
+    COALESCE(bts.active_points, 0) as active_points,
+    COALESCE(bts.sample_count, 0) as samples,
+    ROUND(COALESCE(bts.avg_value, 0)::numeric, 2) as avg_value
 FROM building_pivot bp
-LEFT JOIN building_ts_stats bts ON bts.building_id = bp.building_id
-ORDER BY bp.building_id;
+LEFT JOIN building_ts_stats bts ON bts.building_id = bp.building_id;
