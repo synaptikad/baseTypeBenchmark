@@ -998,7 +998,7 @@ def get_protocol_config(profile: str) -> Dict:
     return PROTOCOL_CONFIG.get(scale, PROTOCOL_CONFIG["small"])
 
 
-def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: int = 42) -> List[Dict]:
+def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: int = 42, scenario: str = "P1") -> List[Dict]:
     """Generate parameter variants for a query (deterministic).
 
     Args:
@@ -1006,6 +1006,7 @@ def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: in
         profile: small-2d, medium-1w, etc.
         dataset_info: Dict with available IDs (meters, floors, tenants, etc.)
         seed: Random seed for reproducibility
+        scenario: P1/P2 (SQL), M1/M2 (Cypher), O1/O2 (SPARQL) - affects date format
 
     Returns:
         List of parameter dicts for each variant
@@ -1016,6 +1017,20 @@ def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: in
     config = get_protocol_config(profile)
     n_variants = config["n_variants"]
     params = QUERY_PARAMS.get(query_id, [])
+
+    # Determine date format based on scenario
+    # P1/P2 (SQL): ISO 8601 for ::timestamptz
+    # M1/M2 (Cypher): Unix timestamp (integer)
+    # O1/O2 (SPARQL): xsd:date format (YYYY-MM-DD)
+    scenario_upper = scenario.upper()
+    if scenario_upper in ("P1", "P2"):
+        date_format = "iso"  # 2024-01-15T00:00:00+00:00
+    elif scenario_upper in ("M1", "M2"):
+        date_format = "unix"  # 1705276800
+    elif scenario_upper in ("O1", "O2"):
+        date_format = "xsd_date"  # 2024-01-15
+    else:
+        date_format = "iso"  # Default to ISO
 
     # No params = single empty variant
     if not params:
@@ -1068,18 +1083,29 @@ def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: in
 
             elif param == "date_start":
                 # Sliding window: offset by variant index
-                # Return ISO format for SQL compatibility
                 from datetime import datetime, timezone
                 window_days = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
                 offset_days = i * 7  # Each variant shifts by 1 week
                 ts = ts_end - (window_days + offset_days) * 86400
-                variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                # Format based on scenario
+                if date_format == "unix":
+                    variant[param] = ts  # Integer for Cypher
+                elif date_format == "xsd_date":
+                    variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                else:  # iso
+                    variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
             elif param == "date_end":
                 from datetime import datetime, timezone
                 offset_days = i * 7
                 ts = ts_end - offset_days * 86400
-                variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                # Format based on scenario
+                if date_format == "unix":
+                    variant[param] = ts  # Integer for Cypher
+                elif date_format == "xsd_date":
+                    variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                else:  # iso
+                    variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
         variants.append(variant)
 
@@ -1410,8 +1436,8 @@ def run_query_with_variants(
     Returns:
         Dict with aggregated results across all variants
     """
-    # Get variants for this query
-    variants = get_query_variants(query_id, profile, dataset_info, seed)
+    # Get variants for this query (pass scenario for correct date format)
+    variants = get_query_variants(query_id, profile, dataset_info, seed, scenario)
     n_variants = len(variants)
 
     # Get base query text
