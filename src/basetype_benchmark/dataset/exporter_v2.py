@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from .generator_v2 import (
     Dataset, Node, Edge, Point, TSChunk, DailyAggregate,
@@ -607,13 +608,24 @@ def compute_fingerprint(parquet_dir: Path) -> dict:
         (node_ids + edge_keys).encode("utf-8")
     ).hexdigest()[:16]
 
-    # Timeseries hash
+    # Timeseries hash (true streaming via PyArrow row groups)
+    # Note: Hash is order-dependent. We process row groups sequentially and
+    # sort within each group. For deterministic results, the parquet file
+    # should be written with consistent row group ordering.
     ts_hash = None
     if ts_path.exists():
-        ts_df = pd.read_parquet(ts_path)
-        ts_sorted = ts_df.sort_values(["point_id", "timestamp"])
-        ts_values = ts_sorted["value"].round(6).astype(str).str.cat(sep="\n")
-        ts_hash = hashlib.sha256(ts_values.encode("utf-8")).hexdigest()[:16]
+        hasher = hashlib.sha256()
+        pf = pq.ParquetFile(ts_path)
+        for batch in pf.iter_batches(
+            batch_size=100_000,
+            columns=["point_id", "timestamp", "value"]
+        ):
+            # Convert batch to pandas, sort within batch, hash rows
+            df = batch.to_pandas().sort_values(["point_id", "timestamp"])
+            for row in df.itertuples(index=False):
+                line = f"{row.point_id}|{row.timestamp}|{round(row.value, 6)}\n"
+                hasher.update(line.encode("utf-8"))
+        ts_hash = hasher.hexdigest()[:16]
 
     return {
         "version": "2.0",

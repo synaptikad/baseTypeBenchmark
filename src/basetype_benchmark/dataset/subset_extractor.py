@@ -402,13 +402,21 @@ class SubsetExtractor:
         return kept_ids
 
     def _get_cutoff_date(self, max_days: int) -> datetime:
-        """Calcule la date de coupure pour les timeseries."""
-        # Les donnees sont generees jusqu'a "maintenant", on garde les N derniers jours
-        return datetime.now() - timedelta(days=max_days)
+        """Calcule la date de coupure pour les timeseries.
+
+        The dataset starts at 2024-01-01 and spans source_duration days.
+        We keep the LAST max_days from the dataset's end date.
+        """
+        # Dataset baseline (same as generator_v2.py)
+        dataset_start = datetime(2024, 1, 1)
+        source_days = DURATION_DAYS.get(self.source_duration, 365)
+        dataset_end = dataset_start + timedelta(days=source_days)
+        # Cutoff = end - max_days (keep last max_days)
+        return dataset_end - timedelta(days=max_days)
 
     def _get_cutoff_timestamp(self, max_days: int) -> int:
         """Calcule le timestamp de coupure pour les chunks."""
-        cutoff = datetime.now() - timedelta(days=max_days)
+        cutoff = self._get_cutoff_date(max_days)
         return int(cutoff.timestamp())
 
     def _parse_timestamp(self, ts_str: str) -> Optional[datetime]:
