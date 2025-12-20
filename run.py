@@ -1458,6 +1458,121 @@ def compute_stats(latencies: List[float]) -> Dict:
     }
 
 
+def print_query_result(query_id: str, query_result: Dict, query_type: str = "graph") -> None:
+    """Print result for a single query after execution.
+
+    Args:
+        query_id: Query identifier (e.g., "Q1")
+        query_result: Dict with stats, latencies, etc.
+        query_type: Type of query for display (graph, hybrid, ts_direct)
+    """
+    if not query_result or "stats" not in query_result:
+        print(f"    {RED}✗ {query_id}: FAILED{RESET}")
+        return
+
+    stats = query_result["stats"]
+    p50 = stats.get("p50", 0)
+    p95 = stats.get("p95", 0)
+    n_runs = len(query_result.get("latencies_ms", []))
+    rows = query_result.get("rows", 0)
+
+    # Format type indicator
+    type_indicator = ""
+    if query_type == "hybrid":
+        breakdown = query_result.get("breakdown", {})
+        graph_ms = breakdown.get("graph_ms", {}).get("avg", 0)
+        ts_ms = breakdown.get("ts_ms", {}).get("avg", 0)
+        type_indicator = f" {DIM}[graph:{graph_ms:.0f}ms + ts:{ts_ms:.0f}ms]{RESET}"
+    elif query_type == "ts_direct":
+        type_indicator = f" {DIM}[ts_direct]{RESET}"
+
+    # Color based on p95 performance
+    if p95 < 100:
+        color = GREEN
+    elif p95 < 1000:
+        color = YELLOW
+    else:
+        color = RED
+
+    print(f"    {color}✓ {query_id}{RESET}: p50={p50:>7.1f}ms  p95={p95:>7.1f}ms  "
+          f"({n_runs} runs, {rows} rows){type_indicator}")
+
+
+def print_benchmark_summary(scenario: str, result: Dict) -> None:
+    """Print summary table after all queries complete.
+
+    Args:
+        scenario: Scenario code (P1, P2, M1, M2, O1, O2)
+        result: Complete benchmark result dict
+    """
+    queries = result.get("queries", {})
+    if not queries:
+        return
+
+    print(f"\n    {BOLD}{'─' * 60}{RESET}")
+    print(f"    {BOLD}Summary: {scenario}{RESET}")
+    print(f"    {BOLD}{'─' * 60}{RESET}")
+
+    # Header
+    print(f"    {'Query':<6} {'p50':>10} {'p95':>10} {'min':>10} {'max':>10} {'runs':>6}")
+    print(f"    {'─' * 6} {'─' * 10} {'─' * 10} {'─' * 10} {'─' * 10} {'─' * 6}")
+
+    all_p50 = []
+    all_p95 = []
+
+    for qid in sorted(queries.keys(), key=lambda x: int(x[1:]) if x[1:].isdigit() else 0):
+        q = queries[qid]
+        stats = q.get("stats", {})
+        p50 = stats.get("p50", 0)
+        p95 = stats.get("p95", 0)
+        min_lat = stats.get("min", 0)
+        max_lat = stats.get("max", 0)
+        n_runs = len(q.get("latencies_ms", []))
+
+        all_p50.append(p50)
+        all_p95.append(p95)
+
+        # Format with units
+        def fmt_ms(v):
+            if v >= 1000:
+                return f"{v/1000:>7.2f}s"
+            return f"{v:>7.1f}ms"
+
+        print(f"    {qid:<6} {fmt_ms(p50):>10} {fmt_ms(p95):>10} {fmt_ms(min_lat):>10} {fmt_ms(max_lat):>10} {n_runs:>6}")
+
+    # Footer with averages
+    print(f"    {'─' * 6} {'─' * 10} {'─' * 10} {'─' * 10} {'─' * 10} {'─' * 6}")
+    if all_p50:
+        avg_p50 = sum(all_p50) / len(all_p50)
+        avg_p95 = sum(all_p95) / len(all_p95)
+
+        def fmt_ms(v):
+            if v >= 1000:
+                return f"{v/1000:>7.2f}s"
+            return f"{v:>7.1f}ms"
+
+        print(f"    {'AVG':<6} {fmt_ms(avg_p50):>10} {fmt_ms(avg_p95):>10}")
+
+    # Resource metrics
+    query_metrics = result.get("query_metrics", {})
+    if query_metrics:
+        print(f"\n    {BOLD}Resources (query phase):{RESET}")
+        peak_mb = query_metrics.get("memory_peak_mb", 0)
+        cpu_sec = query_metrics.get("cpu_time_sec", 0)
+
+        if "total_memory_peak_mb" in query_metrics:
+            # Hybrid scenario
+            graph_peak = query_metrics.get("memory_peak_mb", 0)
+            ts_peak = query_metrics.get("ts_memory_peak_mb", 0)
+            total_peak = query_metrics.get("total_memory_peak_mb", 0)
+            print(f"    RAM peak: {total_peak:.0f} MB (graph: {graph_peak:.0f} MB + TS: {ts_peak:.0f} MB)")
+        else:
+            print(f"    RAM peak: {peak_mb:.0f} MB")
+        print(f"    CPU time: {cpu_sec:.2f}s")
+
+    print(f"    {BOLD}{'─' * 60}{RESET}\n")
+
+
 def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
     """Extract available IDs from dataset for query parameterization.
 
@@ -1873,17 +1988,9 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
         # Snapshot before queries (for CPU delta calculation)
         metrics_before = CGroupMetricsSnapshot(container_name)
 
-        print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
+        print(f"\n    {BOLD}Running {total_queries} queries...{RESET}")
 
         for qi, query_id in enumerate(queries_to_run):
-            # Update progress line
-            elapsed = time.time() - query_start_time
-            avg_per_query = elapsed / (qi + 1) if qi > 0 else 0
-            eta = avg_per_query * (total_queries - qi - 1) if qi > 0 else 0
-            print(f"\r    {BOLD}Queries: {qi+1}/{total_queries}{RESET} | "
-                  f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
-                  end="", flush=True)
-
             query_result = run_query_with_variants(
                 query_id=query_id,
                 scenario=scenario,
@@ -1896,8 +2003,10 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
             )
             if query_result:
                 result["queries"][query_id] = query_result
+                print_query_result(query_id, query_result, "graph")
             else:
                 errors_count += 1
+                print(f"    {RED}✗ {query_id}: FAILED{RESET}")
 
         # Snapshot after queries
         metrics_after = CGroupMetricsSnapshot(container_name)
@@ -1906,14 +2015,15 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
         # Store query phase metrics
         result["query_metrics"] = query_metrics
 
-        # Final progress with resource metrics
+        # Total elapsed time
         total_elapsed = time.time() - query_start_time
-        peak_mb = query_metrics["memory_peak_mb"]
-        cpu_sec = query_metrics["cpu_time_sec"]
-        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
-              f"(RAM peak: {peak_mb:.0f}MB, CPU: {cpu_sec:.2f}s){RESET}   ")
+        result["query_elapsed_s"] = total_elapsed
+
         if errors_count > 0:
             print_warn(f"{errors_count} query errors")
+
+        # Print summary table
+        print_benchmark_summary(scenario, result)
 
         result["status"] = "completed"
 
@@ -2740,19 +2850,13 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
     metrics_before_graph = CGroupMetricsSnapshot(container_name)
     metrics_before_ts = CGroupMetricsSnapshot(ts_container) if scenario == "M2" else None
 
-    print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
+    print(f"\n    {BOLD}Running {total_queries} queries...{RESET}")
 
     for qi, query_id in enumerate(queries_to_run):
-        # Update progress line
-        elapsed = time.time() - query_start_time
-        avg_per_query = elapsed / (qi + 1) if qi > 0 else 0
-        eta = avg_per_query * (total_queries - qi - 1) if qi > 0 else 0
-        print(f"\r    {BOLD}Queries: {qi+1}/{total_queries}{RESET} | "
-              f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
-              end="", flush=True)
+        query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
 
         # M2 hybrid execution for timeseries queries
-        if scenario == "M2" and ts_conn and HYBRID_QUERY_TYPE.get(query_id) in ("ts_direct", "hybrid"):
+        if scenario == "M2" and ts_conn and query_type in ("ts_direct", "hybrid"):
             query_result = run_hybrid_query_m2(
                 query_id=query_id,
                 scenario=scenario,
@@ -2777,10 +2881,14 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                 profile=profile,
                 dataset_info=dataset_info
             )
+            query_type = "graph"
+
         if query_result:
             result["queries"][query_id] = query_result
+            print_query_result(query_id, query_result, query_type)
         else:
             errors_count += 1
+            print(f"    {RED}✗ {query_id}: FAILED{RESET}")
 
     # Snapshot after queries
     metrics_after_graph = CGroupMetricsSnapshot(container_name)
@@ -2798,20 +2906,15 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
     # Store query phase metrics
     result["query_metrics"] = query_metrics
 
-    # Final progress with resource metrics
+    # Total elapsed time
     total_elapsed = time.time() - query_start_time
-    if scenario == "M2" and "total_memory_peak_mb" in query_metrics:
-        peak_mb = query_metrics["total_memory_peak_mb"]
-        cpu_sec = query_metrics["total_cpu_time_sec"]
-        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
-              f"(RAM peak: {peak_mb:.0f}MB [graph+TS], CPU: {cpu_sec:.2f}s){RESET}   ")
-    else:
-        peak_mb = query_metrics["memory_peak_mb"]
-        cpu_sec = query_metrics["cpu_time_sec"]
-        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
-              f"(RAM peak: {peak_mb:.0f}MB, CPU: {cpu_sec:.2f}s){RESET}   ")
+    result["query_elapsed_s"] = total_elapsed
+
     if errors_count > 0:
         print_warn(f"{errors_count} query errors")
+
+    # Print summary table
+    print_benchmark_summary(scenario, result)
 
     result["status"] = "completed"
     driver.close()
@@ -2971,19 +3074,13 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
         metrics_before_graph = CGroupMetricsSnapshot(container_name)
         metrics_before_ts = CGroupMetricsSnapshot(ts_container) if scenario == "O2" else None
 
-        print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
+        print(f"\n    {BOLD}Running {total_queries} queries...{RESET}")
 
         for qi, query_id in enumerate(queries_to_run):
-            # Update progress line
-            elapsed = time.time() - query_start_time
-            avg_per_query = elapsed / (qi + 1) if qi > 0 else 0
-            eta = avg_per_query * (total_queries - qi - 1) if qi > 0 else 0
-            print(f"\r    {BOLD}Queries: {qi+1}/{total_queries}{RESET} | "
-                  f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
-                  end="", flush=True)
+            query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
 
             # O2 hybrid execution for timeseries queries
-            if scenario == "O2" and ts_conn and HYBRID_QUERY_TYPE.get(query_id) in ("ts_direct", "hybrid"):
+            if scenario == "O2" and ts_conn and query_type in ("ts_direct", "hybrid"):
                 query_result = run_hybrid_query_o2(
                     query_id=query_id,
                     scenario=scenario,
@@ -3008,10 +3105,14 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                     profile=profile,
                     dataset_info=dataset_info
                 )
+                query_type = "graph"
+
             if query_result:
                 result["queries"][query_id] = query_result
+                print_query_result(query_id, query_result, query_type)
             else:
                 errors_count += 1
+                print(f"    {RED}✗ {query_id}: FAILED{RESET}")
 
         # Snapshot after queries
         metrics_after_graph = CGroupMetricsSnapshot(container_name)
@@ -3029,20 +3130,15 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
         # Store query phase metrics
         result["query_metrics"] = query_metrics
 
-        # Final progress with resource metrics
+        # Total elapsed time
         total_elapsed = time.time() - query_start_time
-        if scenario == "O2" and "total_memory_peak_mb" in query_metrics:
-            peak_mb = query_metrics["total_memory_peak_mb"]
-            cpu_sec = query_metrics["total_cpu_time_sec"]
-            print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
-                  f"(RAM peak: {peak_mb:.0f}MB [graph+TS], CPU: {cpu_sec:.2f}s){RESET}   ")
-        else:
-            peak_mb = query_metrics["memory_peak_mb"]
-            cpu_sec = query_metrics["cpu_time_sec"]
-            print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
-                  f"(RAM peak: {peak_mb:.0f}MB, CPU: {cpu_sec:.2f}s){RESET}   ")
+        result["query_elapsed_s"] = total_elapsed
+
         if errors_count > 0:
             print_warn(f"{errors_count} query errors")
+
+        # Print summary table
+        print_benchmark_summary(scenario, result)
 
         result["status"] = "completed"
 
