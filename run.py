@@ -1068,13 +1068,18 @@ def get_query_variants(query_id: str, profile: str, dataset_info: Dict, seed: in
 
             elif param == "date_start":
                 # Sliding window: offset by variant index
+                # Return ISO format for SQL compatibility
+                from datetime import datetime, timezone
                 window_days = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
                 offset_days = i * 7  # Each variant shifts by 1 week
-                variant[param] = ts_end - (window_days + offset_days) * 86400
+                ts = ts_end - (window_days + offset_days) * 86400
+                variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
             elif param == "date_end":
+                from datetime import datetime, timezone
                 offset_days = i * 7
-                variant[param] = ts_end - offset_days * 86400
+                ts = ts_end - offset_days * 86400
+                variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
         variants.append(variant)
 
@@ -1609,7 +1614,21 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
 
         # Execute queries with variants
         queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
-        for query_id in queries_to_run:
+        total_queries = len(queries_to_run)
+        query_start_time = time.time()
+        errors_count = 0
+
+        print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
+
+        for qi, query_id in enumerate(queries_to_run):
+            # Update progress line
+            elapsed = time.time() - query_start_time
+            avg_per_query = elapsed / (qi + 1) if qi > 0 else 0
+            eta = avg_per_query * (total_queries - qi - 1) if qi > 0 else 0
+            print(f"\r    {BOLD}Queries: {qi+1}/{total_queries}{RESET} | "
+                  f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
+                  end="", flush=True)
+
             query_result = run_query_with_variants(
                 query_id=query_id,
                 scenario=scenario,
@@ -1622,6 +1641,14 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
             )
             if query_result:
                 result["queries"][query_id] = query_result
+            else:
+                errors_count += 1
+
+        # Final progress
+        total_elapsed = time.time() - query_start_time
+        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s{RESET}   ")
+        if errors_count > 0:
+            print_warn(f"{errors_count} query errors")
 
         result["status"] = "completed"
 
@@ -2117,7 +2144,21 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
 
     # Execute queries with variants
     queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
-    for query_id in queries_to_run:
+    total_queries = len(queries_to_run)
+    query_start_time = time.time()
+    errors_count = 0
+
+    print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
+
+    for qi, query_id in enumerate(queries_to_run):
+        # Update progress line
+        elapsed = time.time() - query_start_time
+        avg_per_query = elapsed / (qi + 1) if qi > 0 else 0
+        eta = avg_per_query * (total_queries - qi - 1) if qi > 0 else 0
+        print(f"\r    {BOLD}Queries: {qi+1}/{total_queries}{RESET} | "
+              f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
+              end="", flush=True)
+
         query_result = run_query_with_variants(
             query_id=query_id,
             scenario=scenario,
@@ -2130,6 +2171,14 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
         )
         if query_result:
             result["queries"][query_id] = query_result
+        else:
+            errors_count += 1
+
+    # Final progress
+    total_elapsed = time.time() - query_start_time
+    print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s{RESET}   ")
+    if errors_count > 0:
+        print_warn(f"{errors_count} query errors")
 
     result["status"] = "completed"
     driver.close()
