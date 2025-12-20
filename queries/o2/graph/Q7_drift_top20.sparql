@@ -1,0 +1,66 @@
+# Q7: Sensor Drift Detection - Top 20 drifting sensors in building (O1)
+# Benchmark: Statistical analysis using pre-computed daily aggregates
+# Pattern: Approximate CV from daily min/max/avg (avoids full dechunking)
+# Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END (xsd:date)
+# NOTE: Uses range-based approximation since per-value stddev requires dechunking
+
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX brick: <https://brickschema.org/schema/Brick#>
+PREFIX ts: <http://example.org/ts/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX btb: <http://basetype-benchmark.org/>
+
+# O1 uses daily aggregates to approximate drift detection
+# True stddev would require dechunking all values (expensive)
+# We approximate using: range / mean as a drift indicator
+
+SELECT ?point ?point_name ?mean_value ?range_value ?drift_indicator ?total_samples
+WHERE {
+    {
+        SELECT ?point
+               (AVG(?avg_value) AS ?mean_value)
+               (MAX(?max_value) - MIN(?min_value) AS ?range_value)
+               (SUM(?sample_count) AS ?total_samples)
+        WHERE {
+            ?point rdf:type brick:Point ;
+                   btb:building_id "$BUILDING_ID" .
+
+            ?agg rdf:type ts:DailyAggregate ;
+                 ts:forPoint ?point ;
+                 ts:date ?date ;
+                 ts:avgValue ?avg_value ;
+                 ts:minValue ?min_value ;
+                 ts:maxValue ?max_value ;
+                 ts:sampleCount ?sample_count .
+
+            # Filter to date range
+            FILTER (?date >= "$DATE_START"^^xsd:date && ?date < "$DATE_END"^^xsd:date)
+        }
+        GROUP BY ?point
+        HAVING (SUM(?sample_count) > 100)  # Minimum samples
+    }
+
+    # Get point name
+    OPTIONAL { ?point rdfs:label ?point_name }
+
+    # Calculate drift indicator (range / |mean|)
+    # Approximates coefficient of variation
+    BIND(
+        IF(ABS(?mean_value) > 0.001,
+           ?range_value / ABS(?mean_value),
+           ?range_value)
+        AS ?drift_indicator
+    )
+}
+ORDER BY DESC(?drift_indicator)
+LIMIT 20
+
+# NOTES:
+# - drift_indicator approximates CV using range instead of stddev
+# - True CV = stddev / mean, but stddev requires all values
+# - For normally distributed data: range ≈ 4-6 * stddev
+# - This method identifies high-variability sensors without dechunking
+#
+# ALTERNATIVE: Full dechunking for exact stddev (requires post-processing)
+# Would need to parse JSON values from chunks and compute stats client-side

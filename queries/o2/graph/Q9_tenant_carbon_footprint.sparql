@@ -1,0 +1,30 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q9: Tenant Carbon Footprint - Structure traversal
+# Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END (for TS query)
+
+SELECT ?tenant_id ?tenant_name ?building_id
+       (COUNT(DISTINCT ?space) AS ?space_count)
+       (COUNT(DISTINCT ?eq) AS ?equipment_count)
+       (GROUP_CONCAT(DISTINCT ?point_id; separator=",") AS ?power_point_ids)
+WHERE {
+  # Start from specified tenant
+  BIND(<http://basetype.benchmark/$TENANT_ID> AS ?tenant)
+
+  ?tenant btb:id ?tenant_id ;
+          btb:name ?tenant_name ;
+          btb:building_id ?building_id .
+
+  ?tenant btb:occupies ?space .
+  ?space rdf:type btb:Space .
+
+  ?space btb:serves|btb:contains ?eq .
+  ?eq rdf:type btb:Equipment .
+
+  ?eq btb:hasPoint ?point .
+  ?point rdf:type btb:Point ;
+         btb:id ?point_id ;
+         btb:measures btb:Power .
+}
+GROUP BY ?tenant_id ?tenant_name ?building_id

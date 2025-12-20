@@ -687,6 +687,170 @@ def get_container_stats(container_name: str) -> Optional[Dict]:
         return None
 
 
+def get_container_cgroup_path(container_name: str) -> Optional[str]:
+    """Get the cgroup v2 path for a container (Linux only)."""
+    if not IS_LINUX:
+        return None
+    try:
+        # Get container full ID
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Id}}", container_name],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return None
+        container_id = result.stdout.strip()
+
+        # Try systemd driver path first (most common on Ubuntu)
+        systemd_path = f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope"
+        if os.path.exists(systemd_path):
+            return systemd_path
+
+        # Try cgroupfs driver path
+        cgroupfs_path = f"/sys/fs/cgroup/docker/{container_id}"
+        if os.path.exists(cgroupfs_path):
+            return cgroupfs_path
+
+        return None
+    except Exception:
+        return None
+
+
+def get_cgroup_metrics(cgroup_path: str) -> Optional[Dict]:
+    """Read cgroup v2 metrics from filesystem.
+
+    Returns:
+        Dict with:
+        - memory_bytes: current memory usage (bytes)
+        - memory_peak_bytes: peak memory since container start (bytes)
+        - cpu_usage_usec: total CPU time consumed (microseconds)
+        - cpu_user_usec: user-space CPU time (microseconds)
+        - cpu_system_usec: kernel-space CPU time (microseconds)
+    """
+    if not cgroup_path or not os.path.exists(cgroup_path):
+        return None
+
+    metrics = {}
+    try:
+        # Memory current
+        mem_current = Path(cgroup_path) / "memory.current"
+        if mem_current.exists():
+            metrics["memory_bytes"] = int(mem_current.read_text().strip())
+
+        # Memory peak
+        mem_peak = Path(cgroup_path) / "memory.peak"
+        if mem_peak.exists():
+            metrics["memory_peak_bytes"] = int(mem_peak.read_text().strip())
+
+        # CPU stats
+        cpu_stat = Path(cgroup_path) / "cpu.stat"
+        if cpu_stat.exists():
+            for line in cpu_stat.read_text().strip().split("\n"):
+                parts = line.split()
+                if len(parts) == 2:
+                    key, value = parts
+                    if key == "usage_usec":
+                        metrics["cpu_usage_usec"] = int(value)
+                    elif key == "user_usec":
+                        metrics["cpu_user_usec"] = int(value)
+                    elif key == "system_usec":
+                        metrics["cpu_system_usec"] = int(value)
+
+        return metrics if metrics else None
+    except Exception:
+        return None
+
+
+def reset_memory_peak(cgroup_path: str) -> bool:
+    """Reset memory.peak counter to current value (Linux only)."""
+    if not cgroup_path:
+        return False
+    try:
+        mem_peak = Path(cgroup_path) / "memory.peak"
+        if mem_peak.exists():
+            mem_peak.write_text("0")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+class CGroupMetricsSnapshot:
+    """Snapshot of cgroup metrics for delta calculations."""
+
+    def __init__(self, container_name: str):
+        self.container_name = container_name
+        self.cgroup_path = get_container_cgroup_path(container_name)
+        self.timestamp = time.time()
+        self.metrics = get_cgroup_metrics(self.cgroup_path) if self.cgroup_path else None
+
+        # Fallback to docker stats if cgroup not available
+        if not self.metrics:
+            stats = get_container_stats(container_name)
+            if stats:
+                self.metrics = {
+                    "memory_bytes": int(stats["mem_mb"] * 1024 * 1024),
+                    "cpu_usage_usec": 0,  # Not available via docker stats
+                }
+
+    def memory_mb(self) -> float:
+        """Current memory in MB."""
+        if self.metrics and "memory_bytes" in self.metrics:
+            return self.metrics["memory_bytes"] / (1024 * 1024)
+        return 0.0
+
+    def memory_peak_mb(self) -> float:
+        """Peak memory in MB (since last reset)."""
+        if self.metrics and "memory_peak_bytes" in self.metrics:
+            return self.metrics["memory_peak_bytes"] / (1024 * 1024)
+        return self.memory_mb()
+
+    def cpu_time_sec(self) -> float:
+        """Total CPU time in seconds."""
+        if self.metrics and "cpu_usage_usec" in self.metrics:
+            return self.metrics["cpu_usage_usec"] / 1_000_000
+        return 0.0
+
+    @staticmethod
+    def compute_delta(before: 'CGroupMetricsSnapshot', after: 'CGroupMetricsSnapshot', num_cpus: int = 1) -> Dict:
+        """Compute resource usage between two snapshots.
+
+        Returns:
+            Dict with:
+            - memory_before_mb: RAM at start
+            - memory_after_mb: RAM at end
+            - memory_delta_mb: RAM growth (can be negative)
+            - memory_peak_mb: Peak RAM during interval (if available)
+            - cpu_time_sec: CPU time consumed during interval
+            - cpu_percent: CPU utilization as percentage (0-100 per core)
+            - wall_time_sec: Elapsed wall-clock time
+        """
+        wall_time = after.timestamp - before.timestamp
+
+        result = {
+            "memory_before_mb": before.memory_mb(),
+            "memory_after_mb": after.memory_mb(),
+            "memory_delta_mb": after.memory_mb() - before.memory_mb(),
+            "memory_peak_mb": after.memory_peak_mb(),
+            "wall_time_sec": wall_time,
+        }
+
+        # CPU delta
+        cpu_before = before.cpu_time_sec()
+        cpu_after = after.cpu_time_sec()
+        cpu_time = cpu_after - cpu_before
+        result["cpu_time_sec"] = cpu_time
+
+        # CPU percentage: (cpu_time / wall_time) * 100
+        # For multi-core, this can exceed 100%
+        if wall_time > 0:
+            result["cpu_percent"] = (cpu_time / wall_time) * 100
+        else:
+            result["cpu_percent"] = 0.0
+
+        return result
+
+
 def check_container_oom(container_name: str) -> bool:
     """Check if container was killed by OOM."""
     try:
@@ -959,6 +1123,26 @@ QUERIES_BY_SCENARIO = {
     "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Hybrid: graph + TimescaleDB
 }
 
+# Query classification for M2/O2 hybrid execution:
+# - GRAPH_ONLY: Q1-Q5 - Pure graph traversal, no timeseries
+# - TS_DIRECT: Q6 - Timeseries query with point_id parameter (no graph needed)
+# - HYBRID: Q7-Q13 - Graph query returns point_ids, then TimescaleDB aggregation
+HYBRID_QUERY_TYPE = {
+    "Q1": "graph_only",
+    "Q2": "graph_only",
+    "Q3": "graph_only",
+    "Q4": "graph_only",
+    "Q5": "graph_only",
+    "Q6": "ts_direct",      # point_id provided as parameter
+    "Q7": "hybrid",         # graph: get building points → TS: compute drift
+    "Q8": "hybrid",         # graph: tenant → points → TS: energy sum
+    "Q9": "hybrid",         # graph: tenant → points → TS: carbon calc
+    "Q10": "hybrid",        # graph: zone → access points → TS: events
+    "Q11": "hybrid",        # graph: building → IT points → TS: stats
+    "Q12": "hybrid",        # graph: building → all points → TS: KPIs
+    "Q13": "hybrid",        # graph: space → thermostat points → TS: DOW filter
+}
+
 # Benchmark protocol - proportional to profile (realistic workload simulation)
 # A large building (campus/hospital) receives more queries than a small one
 PROTOCOL_CONFIG = {
@@ -1144,6 +1328,14 @@ def substitute_params(query_text: str, params: Dict) -> str:
 def load_query(scenario: str, query_id: str, params: Optional[Dict] = None) -> Optional[str]:
     """Load query text for a scenario, optionally substituting parameters.
 
+    New folder structure:
+        queries/
+        ├── p1_p2/          # PostgreSQL (SQL) - P1 and P2 use same queries
+        ├── m1/             # Memgraph standalone (Cypher with chunks)
+        ├── m2/graph/       # Memgraph hybrid - graph part (Cypher)
+        ├── o1/             # Oxigraph standalone (SPARQL with chunks)
+        └── o2/graph/       # Oxigraph hybrid - graph part (SPARQL)
+
     Args:
         scenario: P1, P2, M1, M2, O1, O2
         query_id: Q1, Q2, ..., Q13
@@ -1152,14 +1344,22 @@ def load_query(scenario: str, query_id: str, params: Optional[Dict] = None) -> O
     Returns:
         Query text with parameters substituted, or None if not found
     """
-    if scenario.startswith("P"):
-        query_dir = QUERIES_DIR / "sql"
+    scenario_upper = scenario.upper()
+
+    if scenario_upper in ("P1", "P2"):
+        query_dir = QUERIES_DIR / "p1_p2"
         ext = "sql"
-    elif scenario.startswith("M"):
-        query_dir = QUERIES_DIR / "cypher"
+    elif scenario_upper == "M1":
+        query_dir = QUERIES_DIR / "m1"
         ext = "cypher"
-    elif scenario.startswith("O"):
-        query_dir = QUERIES_DIR / "sparql"
+    elif scenario_upper == "M2":
+        query_dir = QUERIES_DIR / "m2" / "graph"
+        ext = "cypher"
+    elif scenario_upper == "O1":
+        query_dir = QUERIES_DIR / "o1"
+        ext = "sparql"
+    elif scenario_upper == "O2":
+        query_dir = QUERIES_DIR / "o2" / "graph"
         ext = "sparql"
     else:
         return None
@@ -1171,6 +1371,73 @@ def load_query(scenario: str, query_id: str, params: Optional[Dict] = None) -> O
             query_text = substitute_params(query_text, params)
         return query_text
     return None
+
+
+def load_ts_query(scenario: str, query_id: str, params: Optional[Dict] = None) -> Optional[str]:
+    """Load TimescaleDB query for M2/O2 hybrid execution.
+
+    Folder structure:
+        queries/
+        ├── m2/ts/          # Memgraph hybrid - TimescaleDB part (SQL)
+        └── o2/ts/          # Oxigraph hybrid - TimescaleDB part (SQL)
+
+    Args:
+        scenario: M2 or O2
+        query_id: Q6, Q7, ..., Q13
+        params: Optional dict of parameters to substitute
+
+    Returns:
+        SQL query text for TimescaleDB, or None if not found
+    """
+    scenario_upper = scenario.upper()
+
+    if scenario_upper == "M2":
+        query_dir = QUERIES_DIR / "m2" / "ts"
+    elif scenario_upper == "O2":
+        query_dir = QUERIES_DIR / "o2" / "ts"
+    else:
+        return None
+
+    for f in query_dir.glob(f"{query_id}_*.sql"):
+        query_text = f.read_text(encoding="utf-8")
+        if params:
+            query_text = substitute_params(query_text, params)
+        return query_text
+    return None
+
+
+def extract_point_ids_from_graph_result(records: List, scenario: str) -> List[str]:
+    """Extract point_ids from graph query results for hybrid execution.
+
+    Args:
+        records: Query result records from Memgraph or Oxigraph
+        scenario: M2 or O2
+
+    Returns:
+        List of point_id strings
+    """
+    point_ids = []
+    for record in records:
+        if scenario == "M2":
+            # Memgraph returns dict-like records
+            if "point_ids" in record:
+                # collect() returns a list
+                ids = record["point_ids"]
+                if isinstance(ids, list):
+                    point_ids.extend(ids)
+                else:
+                    point_ids.append(str(ids))
+            elif "point_id" in record:
+                point_ids.append(str(record["point_id"]))
+        else:  # O2 - SPARQL
+            # SPARQL returns bindings with ?point_ids as comma-separated string
+            if "point_ids" in record:
+                ids_str = str(record["point_ids"].get("value", ""))
+                if ids_str:
+                    point_ids.extend(ids_str.split(","))
+            elif "point_id" in record:
+                point_ids.append(str(record["point_id"].get("value", "")))
+    return [pid.strip() for pid in point_ids if pid.strip()]
 
 
 def compute_stats(latencies: List[float]) -> Dict:
@@ -1574,6 +1841,11 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
                  f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
                  f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
+        # Reset memory.peak after ingestion to measure query impact only
+        cgroup_path = get_container_cgroup_path(container_name)
+        if cgroup_path:
+            reset_memory_peak(cgroup_path)
+
         # Define executor for PostgreSQL queries
         def pg_execute(query: str) -> int:
             try:
@@ -1597,6 +1869,9 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
         total_queries = len(queries_to_run)
         query_start_time = time.time()
         errors_count = 0
+
+        # Snapshot before queries (for CPU delta calculation)
+        metrics_before = CGroupMetricsSnapshot(container_name)
 
         print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
 
@@ -1624,9 +1899,19 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
             else:
                 errors_count += 1
 
-        # Final progress
+        # Snapshot after queries
+        metrics_after = CGroupMetricsSnapshot(container_name)
+        query_metrics = CGroupMetricsSnapshot.compute_delta(metrics_before, metrics_after)
+
+        # Store query phase metrics
+        result["query_metrics"] = query_metrics
+
+        # Final progress with resource metrics
         total_elapsed = time.time() - query_start_time
-        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s{RESET}   ")
+        peak_mb = query_metrics["memory_peak_mb"]
+        cpu_sec = query_metrics["cpu_time_sec"]
+        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
+              f"(RAM peak: {peak_mb:.0f}MB, CPU: {cpu_sec:.2f}s){RESET}   ")
         if errors_count > 0:
             print_warn(f"{errors_count} query errors")
 
@@ -2003,6 +2288,270 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
     return total
 
 
+def run_hybrid_query_m2(
+    query_id: str,
+    scenario: str,
+    mg_execute_raw,
+    ts_conn,
+    container_name: str,
+    ts_container: str,
+    n_warmup: int,
+    n_runs: int,
+    profile: str,
+    dataset_info: Dict,
+    seed: int = 42
+) -> Dict:
+    """Run M2 hybrid query: Graph (Memgraph) → TimescaleDB.
+
+    For hybrid queries:
+    1. Execute graph query to get point_ids
+    2. Execute TimescaleDB query with those point_ids
+    3. Measure combined latency
+
+    Args:
+        query_id: Q6-Q13
+        scenario: M2
+        mg_execute_raw: Function to execute Memgraph query and return raw records
+        ts_conn: TimescaleDB connection
+        container_name: Memgraph container name
+        ts_container: TimescaleDB container name
+        n_warmup: Warmup iterations
+        n_runs: Measured runs
+        profile: small/medium/large
+        dataset_info: Dataset info for parameterization
+
+    Returns:
+        Dict with latencies, stats, and breakdown (graph_ms, ts_ms)
+    """
+    from basetype_benchmark.benchmark.protocols import PROTOCOL_CONFIG
+
+    config = PROTOCOL_CONFIG.get(profile, PROTOCOL_CONFIG["small"])
+    n_variants = config.get("n_variants", 3)
+
+    # Get parameter variants
+    variants = get_query_variants(query_id, profile, dataset_info, seed, scenario)
+    if not variants:
+        variants = [{}]
+
+    all_latencies = []
+    all_graph_latencies = []
+    all_ts_latencies = []
+    total_rows = 0
+
+    query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
+
+    for params in variants[:n_variants]:
+        # Load graph query (Cypher)
+        graph_query = load_query(scenario, query_id, params)
+        if not graph_query:
+            continue
+
+        # Load TimescaleDB query
+        ts_query_template = load_ts_query(scenario, query_id, params)
+
+        # Warmup
+        for _ in range(n_warmup):
+            try:
+                if query_type == "ts_direct":
+                    # Direct TS query with point_id from params
+                    with ts_conn.cursor() as cur:
+                        cur.execute(ts_query_template)
+                        cur.fetchall()
+                        ts_conn.commit()
+                elif query_type == "hybrid":
+                    # Graph → TS
+                    records = mg_execute_raw(graph_query)
+                    point_ids = extract_point_ids_from_graph_result(records, scenario)
+                    if point_ids and ts_query_template:
+                        ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
+                        with ts_conn.cursor() as cur:
+                            cur.execute(ts_query)
+                            cur.fetchall()
+                            ts_conn.commit()
+            except Exception:
+                pass
+
+        # Measured runs
+        for _ in range(n_runs):
+            try:
+                if query_type == "ts_direct":
+                    # Direct TimescaleDB query
+                    t0 = time.perf_counter()
+                    with ts_conn.cursor() as cur:
+                        cur.execute(ts_query_template)
+                        rows = cur.fetchall()
+                        ts_conn.commit()
+                    total_ms = (time.perf_counter() - t0) * 1000
+                    all_latencies.append(total_ms)
+                    all_ts_latencies.append(total_ms)
+                    all_graph_latencies.append(0)
+                    total_rows = len(rows)
+
+                elif query_type == "hybrid":
+                    # Step 1: Graph query
+                    t0 = time.perf_counter()
+                    records = mg_execute_raw(graph_query)
+                    graph_ms = (time.perf_counter() - t0) * 1000
+
+                    # Extract point_ids from result
+                    point_ids = extract_point_ids_from_graph_result(records, scenario)
+
+                    # Step 2: TimescaleDB query
+                    ts_ms = 0
+                    if point_ids and ts_query_template:
+                        # Replace $POINT_IDS with actual array
+                        ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
+                        t1 = time.perf_counter()
+                        with ts_conn.cursor() as cur:
+                            cur.execute(ts_query)
+                            rows = cur.fetchall()
+                            ts_conn.commit()
+                        ts_ms = (time.perf_counter() - t1) * 1000
+                        total_rows = len(rows)
+
+                    total_ms = graph_ms + ts_ms
+                    all_latencies.append(total_ms)
+                    all_graph_latencies.append(graph_ms)
+                    all_ts_latencies.append(ts_ms)
+
+            except Exception as e:
+                print_warn(f"Hybrid query error: {e}")
+
+    if not all_latencies:
+        return None
+
+    stats = compute_stats(all_latencies)
+
+    return {
+        "latencies_ms": all_latencies,
+        "rows": total_rows,
+        "stats": stats,
+        "hybrid": True,
+        "breakdown": {
+            "graph_ms": compute_stats(all_graph_latencies),
+            "ts_ms": compute_stats(all_ts_latencies),
+        }
+    }
+
+
+def run_hybrid_query_o2(
+    query_id: str,
+    scenario: str,
+    sparql_execute_raw,
+    ts_conn,
+    container_name: str,
+    ts_container: str,
+    n_warmup: int,
+    n_runs: int,
+    profile: str,
+    dataset_info: Dict,
+    seed: int = 42
+) -> Dict:
+    """Run O2 hybrid query: Graph (Oxigraph SPARQL) → TimescaleDB.
+
+    Similar to run_hybrid_query_m2 but for SPARQL.
+    """
+    from basetype_benchmark.benchmark.protocols import PROTOCOL_CONFIG
+
+    config = PROTOCOL_CONFIG.get(profile, PROTOCOL_CONFIG["small"])
+    n_variants = config.get("n_variants", 3)
+
+    variants = get_query_variants(query_id, profile, dataset_info, seed, scenario)
+    if not variants:
+        variants = [{}]
+
+    all_latencies = []
+    all_graph_latencies = []
+    all_ts_latencies = []
+    total_rows = 0
+
+    query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
+
+    for params in variants[:n_variants]:
+        graph_query = load_query(scenario, query_id, params)
+        if not graph_query:
+            continue
+
+        ts_query_template = load_ts_query(scenario, query_id, params)
+
+        # Warmup
+        for _ in range(n_warmup):
+            try:
+                if query_type == "ts_direct":
+                    with ts_conn.cursor() as cur:
+                        cur.execute(ts_query_template)
+                        cur.fetchall()
+                        ts_conn.commit()
+                elif query_type == "hybrid":
+                    result = sparql_execute_raw(graph_query)
+                    point_ids = extract_point_ids_from_graph_result(result, scenario)
+                    if point_ids and ts_query_template:
+                        ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
+                        with ts_conn.cursor() as cur:
+                            cur.execute(ts_query)
+                            cur.fetchall()
+                            ts_conn.commit()
+            except Exception:
+                pass
+
+        # Measured runs
+        for _ in range(n_runs):
+            try:
+                if query_type == "ts_direct":
+                    t0 = time.perf_counter()
+                    with ts_conn.cursor() as cur:
+                        cur.execute(ts_query_template)
+                        rows = cur.fetchall()
+                        ts_conn.commit()
+                    total_ms = (time.perf_counter() - t0) * 1000
+                    all_latencies.append(total_ms)
+                    all_ts_latencies.append(total_ms)
+                    all_graph_latencies.append(0)
+                    total_rows = len(rows)
+
+                elif query_type == "hybrid":
+                    t0 = time.perf_counter()
+                    result = sparql_execute_raw(graph_query)
+                    graph_ms = (time.perf_counter() - t0) * 1000
+
+                    point_ids = extract_point_ids_from_graph_result(result, scenario)
+
+                    ts_ms = 0
+                    if point_ids and ts_query_template:
+                        ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
+                        t1 = time.perf_counter()
+                        with ts_conn.cursor() as cur:
+                            cur.execute(ts_query)
+                            rows = cur.fetchall()
+                            ts_conn.commit()
+                        ts_ms = (time.perf_counter() - t1) * 1000
+                        total_rows = len(rows)
+
+                    total_ms = graph_ms + ts_ms
+                    all_latencies.append(total_ms)
+                    all_graph_latencies.append(graph_ms)
+                    all_ts_latencies.append(ts_ms)
+
+            except Exception as e:
+                print_warn(f"Hybrid query error: {e}")
+
+    if not all_latencies:
+        return None
+
+    stats = compute_stats(all_latencies)
+
+    return {
+        "latencies_ms": all_latencies,
+        "rows": total_rows,
+        "stats": stats,
+        "hybrid": True,
+        "breakdown": {
+            "graph_ms": compute_stats(all_graph_latencies),
+            "ts_ms": compute_stats(all_ts_latencies),
+        }
+    }
+
+
 def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                             n_warmup: int = N_WARMUP, n_runs: int = N_RUNS,
                             profile: str = "small") -> Dict:
@@ -2081,6 +2630,11 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                  f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
                  f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
+        # Reset memory.peak after ingestion to measure query impact only
+        cgroup_path = get_container_cgroup_path(container_name)
+        if cgroup_path:
+            reset_memory_peak(cgroup_path)
+
     except LoadingStalled as e:
         load_monitor.stop()
         print_err(f"Memgraph loading STALLED (memory pressure): {e}")
@@ -2116,6 +2670,26 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
             records = list(session.run(query))
             return len(records)
 
+    def mg_execute_raw(query: str) -> List:
+        """Execute and return raw records for hybrid queries."""
+        with driver.session() as session:
+            return list(session.run(query))
+
+    # For M2: Connect to TimescaleDB for hybrid queries
+    ts_conn = None
+    ts_container = "btb_timescaledb"
+    if scenario == "M2":
+        try:
+            from basetype_benchmark.loaders.postgres.load import get_connection
+            print_info("Connecting to TimescaleDB for hybrid queries...")
+            ts_conn = get_connection()
+            # Reset memory.peak on TimescaleDB container too
+            ts_cgroup = get_container_cgroup_path(ts_container)
+            if ts_cgroup:
+                reset_memory_peak(ts_cgroup)
+        except Exception as e:
+            print_warn(f"Failed to connect to TimescaleDB: {e}")
+
     # Extract dataset info for query parameterization
     dataset_info = extract_dataset_info(export_dir, scenario)
     print_info(f"Dataset info: {len(dataset_info['meters'])} meters, "
@@ -2128,6 +2702,10 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
     query_start_time = time.time()
     errors_count = 0
 
+    # Snapshot before queries (for CPU delta calculation)
+    metrics_before_graph = CGroupMetricsSnapshot(container_name)
+    metrics_before_ts = CGroupMetricsSnapshot(ts_container) if scenario == "M2" else None
+
     print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
 
     for qi, query_id in enumerate(queries_to_run):
@@ -2139,29 +2717,72 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
               f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
               end="", flush=True)
 
-        query_result = run_query_with_variants(
-            query_id=query_id,
-            scenario=scenario,
-            execute_fn=mg_execute,
-            container_name=container_name,
-            n_warmup=n_warmup,
-            n_runs=n_runs,
-            profile=profile,
-            dataset_info=dataset_info
-        )
+        # M2 hybrid execution for timeseries queries
+        if scenario == "M2" and ts_conn and HYBRID_QUERY_TYPE.get(query_id) in ("ts_direct", "hybrid"):
+            query_result = run_hybrid_query_m2(
+                query_id=query_id,
+                scenario=scenario,
+                mg_execute_raw=mg_execute_raw,
+                ts_conn=ts_conn,
+                container_name=container_name,
+                ts_container=ts_container,
+                n_warmup=n_warmup,
+                n_runs=n_runs,
+                profile=profile,
+                dataset_info=dataset_info
+            )
+        else:
+            # M1 or M2 graph-only queries
+            query_result = run_query_with_variants(
+                query_id=query_id,
+                scenario=scenario,
+                execute_fn=mg_execute,
+                container_name=container_name,
+                n_warmup=n_warmup,
+                n_runs=n_runs,
+                profile=profile,
+                dataset_info=dataset_info
+            )
         if query_result:
             result["queries"][query_id] = query_result
         else:
             errors_count += 1
 
-    # Final progress
+    # Snapshot after queries
+    metrics_after_graph = CGroupMetricsSnapshot(container_name)
+    query_metrics = CGroupMetricsSnapshot.compute_delta(metrics_before_graph, metrics_after_graph)
+
+    # For M2, also capture TimescaleDB metrics
+    if scenario == "M2" and metrics_before_ts:
+        metrics_after_ts = CGroupMetricsSnapshot(ts_container)
+        ts_metrics = CGroupMetricsSnapshot.compute_delta(metrics_before_ts, metrics_after_ts)
+        query_metrics["ts_memory_peak_mb"] = ts_metrics["memory_peak_mb"]
+        query_metrics["ts_cpu_time_sec"] = ts_metrics["cpu_time_sec"]
+        query_metrics["total_memory_peak_mb"] = query_metrics["memory_peak_mb"] + ts_metrics["memory_peak_mb"]
+        query_metrics["total_cpu_time_sec"] = query_metrics["cpu_time_sec"] + ts_metrics["cpu_time_sec"]
+
+    # Store query phase metrics
+    result["query_metrics"] = query_metrics
+
+    # Final progress with resource metrics
     total_elapsed = time.time() - query_start_time
-    print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s{RESET}   ")
+    if scenario == "M2" and "total_memory_peak_mb" in query_metrics:
+        peak_mb = query_metrics["total_memory_peak_mb"]
+        cpu_sec = query_metrics["total_cpu_time_sec"]
+        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
+              f"(RAM peak: {peak_mb:.0f}MB [graph+TS], CPU: {cpu_sec:.2f}s){RESET}   ")
+    else:
+        peak_mb = query_metrics["memory_peak_mb"]
+        cpu_sec = query_metrics["cpu_time_sec"]
+        print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
+              f"(RAM peak: {peak_mb:.0f}MB, CPU: {cpu_sec:.2f}s){RESET}   ")
     if errors_count > 0:
         print_warn(f"{errors_count} query errors")
 
     result["status"] = "completed"
     driver.close()
+    if ts_conn:
+        ts_conn.close()
 
     return result
 
@@ -2254,6 +2875,11 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                  f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
                  f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
 
+        # Reset memory.peak after ingestion to measure query impact only
+        cgroup_path = get_container_cgroup_path(container_name)
+        if cgroup_path:
+            reset_memory_peak(cgroup_path)
+
         # Define executor for SPARQL queries
         def sparql_execute(query: str) -> int:
             resp = requests.get(
@@ -2267,6 +2893,34 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                 return len(data.get("results", {}).get("bindings", []))
             return 0
 
+        def sparql_execute_raw(query: str) -> List:
+            """Execute and return raw bindings for hybrid queries."""
+            resp = requests.get(
+                f"{endpoint}/query",
+                params={"query": query},
+                headers={"Accept": "application/sparql-results+json"},
+                timeout=60
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("results", {}).get("bindings", [])
+            return []
+
+        # For O2: Connect to TimescaleDB for hybrid queries
+        ts_conn = None
+        ts_container = "btb_timescaledb"
+        if scenario == "O2":
+            try:
+                from basetype_benchmark.loaders.postgres.load import get_connection
+                print_info("Connecting to TimescaleDB for hybrid queries...")
+                ts_conn = get_connection()
+                # Reset memory.peak on TimescaleDB container too
+                ts_cgroup = get_container_cgroup_path(ts_container)
+                if ts_cgroup:
+                    reset_memory_peak(ts_cgroup)
+            except Exception as e:
+                print_warn(f"Failed to connect to TimescaleDB: {e}")
+
         # Extract dataset info for query parameterization
         dataset_info = extract_dataset_info(export_dir, scenario)
         print_info(f"Dataset info: {len(dataset_info['meters'])} meters, "
@@ -2275,21 +2929,91 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
 
         # Execute queries with variants
         queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
-        for query_id in queries_to_run:
-            query_result = run_query_with_variants(
-                query_id=query_id,
-                scenario=scenario,
-                execute_fn=sparql_execute,
-                container_name=container_name,
-                n_warmup=n_warmup,
-                n_runs=n_runs,
-                profile=profile,
-                dataset_info=dataset_info
-            )
+        total_queries = len(queries_to_run)
+        query_start_time = time.time()
+        errors_count = 0
+
+        # Snapshot before queries (for CPU delta calculation)
+        metrics_before_graph = CGroupMetricsSnapshot(container_name)
+        metrics_before_ts = CGroupMetricsSnapshot(ts_container) if scenario == "O2" else None
+
+        print(f"\n    {BOLD}Queries: 0/{total_queries}{RESET}", end="", flush=True)
+
+        for qi, query_id in enumerate(queries_to_run):
+            # Update progress line
+            elapsed = time.time() - query_start_time
+            avg_per_query = elapsed / (qi + 1) if qi > 0 else 0
+            eta = avg_per_query * (total_queries - qi - 1) if qi > 0 else 0
+            print(f"\r    {BOLD}Queries: {qi+1}/{total_queries}{RESET} | "
+                  f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s | Errors: {errors_count}   ",
+                  end="", flush=True)
+
+            # O2 hybrid execution for timeseries queries
+            if scenario == "O2" and ts_conn and HYBRID_QUERY_TYPE.get(query_id) in ("ts_direct", "hybrid"):
+                query_result = run_hybrid_query_o2(
+                    query_id=query_id,
+                    scenario=scenario,
+                    sparql_execute_raw=sparql_execute_raw,
+                    ts_conn=ts_conn,
+                    container_name=container_name,
+                    ts_container=ts_container,
+                    n_warmup=n_warmup,
+                    n_runs=n_runs,
+                    profile=profile,
+                    dataset_info=dataset_info
+                )
+            else:
+                # O1 or O2 graph-only queries
+                query_result = run_query_with_variants(
+                    query_id=query_id,
+                    scenario=scenario,
+                    execute_fn=sparql_execute,
+                    container_name=container_name,
+                    n_warmup=n_warmup,
+                    n_runs=n_runs,
+                    profile=profile,
+                    dataset_info=dataset_info
+                )
             if query_result:
                 result["queries"][query_id] = query_result
+            else:
+                errors_count += 1
+
+        # Snapshot after queries
+        metrics_after_graph = CGroupMetricsSnapshot(container_name)
+        query_metrics = CGroupMetricsSnapshot.compute_delta(metrics_before_graph, metrics_after_graph)
+
+        # For O2, also capture TimescaleDB metrics
+        if scenario == "O2" and metrics_before_ts:
+            metrics_after_ts = CGroupMetricsSnapshot(ts_container)
+            ts_metrics = CGroupMetricsSnapshot.compute_delta(metrics_before_ts, metrics_after_ts)
+            query_metrics["ts_memory_peak_mb"] = ts_metrics["memory_peak_mb"]
+            query_metrics["ts_cpu_time_sec"] = ts_metrics["cpu_time_sec"]
+            query_metrics["total_memory_peak_mb"] = query_metrics["memory_peak_mb"] + ts_metrics["memory_peak_mb"]
+            query_metrics["total_cpu_time_sec"] = query_metrics["cpu_time_sec"] + ts_metrics["cpu_time_sec"]
+
+        # Store query phase metrics
+        result["query_metrics"] = query_metrics
+
+        # Final progress with resource metrics
+        total_elapsed = time.time() - query_start_time
+        if scenario == "O2" and "total_memory_peak_mb" in query_metrics:
+            peak_mb = query_metrics["total_memory_peak_mb"]
+            cpu_sec = query_metrics["total_cpu_time_sec"]
+            print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
+                  f"(RAM peak: {peak_mb:.0f}MB [graph+TS], CPU: {cpu_sec:.2f}s){RESET}   ")
+        else:
+            peak_mb = query_metrics["memory_peak_mb"]
+            cpu_sec = query_metrics["cpu_time_sec"]
+            print(f"\r    {GREEN}Queries: {total_queries}/{total_queries} completed in {total_elapsed:.1f}s "
+                  f"(RAM peak: {peak_mb:.0f}MB, CPU: {cpu_sec:.2f}s){RESET}   ")
+        if errors_count > 0:
+            print_warn(f"{errors_count} query errors")
 
         result["status"] = "completed"
+
+        if ts_conn:
+            ts_conn.close()
 
     except Exception as e:
         result["status"] = "error"

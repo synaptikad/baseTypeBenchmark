@@ -1,0 +1,30 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q4: Inventory - Temperature points for a specific floor
+# Parameter: $FLOOR_ID - floor to inventory temperature points
+
+SELECT ?floor_id ?floor_name ?building_id ?point_id ?point_name ?equipment_id ?equipment_name
+WHERE {
+  # Start from specified floor
+  BIND(<http://basetype.benchmark/$FLOOR_ID> AS ?floor)
+
+  ?floor btb:id ?floor_id ;
+         btb:name ?floor_name ;
+         btb:building_id ?building_id .
+
+  ?floor btb:contains ?space .
+  ?space rdf:type btb:Space .
+
+  ?space btb:contains|btb:serves ?eq .
+  ?eq rdf:type btb:Equipment ;
+      btb:id ?equipment_id ;
+      btb:name ?equipment_name .
+
+  ?eq btb:hasPoint ?point .
+  ?point rdf:type btb:Point ;
+         btb:id ?point_id ;
+         btb:name ?point_name ;
+         btb:measures btb:Temperature .
+}
+ORDER BY ?point_name

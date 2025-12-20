@@ -52,9 +52,42 @@ Les accès structurels (navigation des relations) et les accès temporels (agré
 
 Évaluer les deux dans un même moteur généraliste masque ces différences fondamentales.
 
-### Requête Q8 comme cas hybride
+### Architecture hybride fédérée (M2, O2)
 
-La requête Q8 illustre une architecture hybride : sélection des points via le graphe (tenant → espaces → équipements → points de puissance), puis agrégation des consommations dans TimescaleDB. Cette séparation exploite chaque paradigme sur son domaine d'optimisation.
+Les scénarios M2 (Memgraph + TimescaleDB) et O2 (Oxigraph + TimescaleDB) utilisent une architecture hybride avec exécution fédérée côté application. Cette approche, académiquement solide, reflète les pratiques industrielles réelles où un orchestrateur applicatif coordonne les accès aux différentes bases.
+
+#### Classification des requêtes
+
+| Type | Requêtes | Description |
+|------|----------|-------------|
+| `graph_only` | Q1-Q5 | Traversées structurelles pures (relations, hiérarchies) |
+| `ts_direct` | Q6 | Agrégation time-series directe (point_id connu) |
+| `hybrid` | Q7-Q13 | Sélection graph → agrégation time-series |
+
+#### Protocole d'exécution hybride
+
+Pour les requêtes `hybrid`, l'exécution procède en deux phases :
+
+1. **Phase Graph** : Exécution de la requête Cypher (M2) ou SPARQL (O2) pour identifier les `point_id` pertinents via navigation contextuelle
+2. **Phase TimescaleDB** : Injection des `point_id` dans une requête SQL paramétrée pour l'agrégation temporelle
+
+```
+┌─────────────────┐     point_ids[]     ┌─────────────────┐
+│   Graph DB      │ ──────────────────► │   TimescaleDB   │
+│ (Memgraph/Oxi)  │                     │   (time-series) │
+│                 │                     │                 │
+│ Cypher/SPARQL   │                     │ SQL + ARRAY[]   │
+└─────────────────┘                     └─────────────────┘
+```
+
+#### Mesure de performance
+
+Les métriques sont collectées séparément pour chaque container :
+- **Latence** : décomposée en `graph_ms` + `ts_ms` + overhead d'orchestration
+- **Ressources** : cgroup v2 metrics par container (memory.peak, cpu.stat)
+- **Métriques combinées** : somme des ressources des deux containers
+
+Cette architecture permet une comparaison équitable avec les scénarios monolithiques (P1/P2, M1, O1) en mesurant le coût réel de la fédération.
 
 ## Reproductibilité
 

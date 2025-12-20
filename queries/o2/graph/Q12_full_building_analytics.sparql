@@ -1,0 +1,20 @@
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Q12: Full Building Analytics Dashboard
+# Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END (for TS query)
+
+SELECT ?building_id
+       (SUM(IF(?type = btb:Floor, 1, 0)) AS ?floor_count)
+       (SUM(IF(?type = btb:Space, 1, 0)) AS ?space_count)
+       (SUM(IF(?type = btb:Equipment, 1, 0)) AS ?equipment_count)
+       (SUM(IF(?type = btb:Point, 1, 0)) AS ?point_count)
+       (SUM(IF(?type = btb:Tenant, 1, 0)) AS ?tenant_count)
+       (COUNT(*) AS ?total_nodes)
+WHERE {
+  ?node btb:building_id "$BUILDING_ID" ;
+        rdf:type ?type .
+
+  FILTER(STRSTARTS(STR(?type), "http://basetype.benchmark/ontology#"))
+}
+GROUP BY ?building_id
