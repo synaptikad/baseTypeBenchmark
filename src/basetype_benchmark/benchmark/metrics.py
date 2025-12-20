@@ -120,17 +120,24 @@ class ResourceMonitor:
 
 
 def _parse_mem_mb(raw: str) -> float | None:
+    """Parse Docker memory string like '824.5MiB' or '1.2GiB' to MB."""
+    import re
     try:
         cleaned = raw.split("/")[0].strip()
-        value, unit = cleaned.replace("iB", "B").split()
-        value = float(value)
-        unit = unit.upper()
+        # Match number (with optional decimal) followed by unit
+        match = re.match(r"([0-9.]+)\s*([A-Za-z]+)", cleaned)
+        if not match:
+            return None
+        value = float(match.group(1))
+        unit = match.group(2).upper().replace("IB", "B")  # MiB -> MB, GiB -> GB
         if unit.startswith("GB"):
             return value * 1024
         if unit.startswith("MB"):
             return value
         if unit.startswith("KB"):
             return value / 1024
+        if unit.startswith("B"):
+            return value / (1024 * 1024)
         return None
     except Exception:
         return None
