@@ -11,9 +11,16 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple, Any
+from typing import Dict, Iterator, List, Optional, Tuple, Any, Callable
 
 import yaml
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    tqdm = None
 
 from .equipment_loader import EquipmentDef, load_exploration, get_equipment_by_type
 
@@ -678,7 +685,8 @@ def generate_timeseries(
     points: List[Point],
     duration_days: int,
     rng: random.Random,
-    start_time: Optional[datetime] = None
+    start_time: Optional[datetime] = None,
+    show_progress: bool = True
 ) -> Iterator[Tuple[str, datetime, float]]:
     """Generate timeseries data for all points.
 
@@ -687,6 +695,7 @@ def generate_timeseries(
         duration_days: Duration in days
         rng: Random number generator
         start_time: Start timestamp (default: 2024-01-01)
+        show_progress: Show progress bar (default: True)
 
     Yields:
         Tuples of (point_id, timestamp, value)
@@ -694,7 +703,18 @@ def generate_timeseries(
     if start_time is None:
         start_time = datetime(2024, 1, 1)
 
-    for point in points:
+    # Wrap with progress bar if available
+    point_iter = points
+    if show_progress and HAS_TQDM:
+        point_iter = tqdm(
+            points,
+            desc="Generating timeseries",
+            unit="points",
+            ncols=80,
+            leave=True
+        )
+
+    for point in point_iter:
         config = get_point_config(point.name)
 
         if config["mode"] == "regular":

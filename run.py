@@ -2008,6 +2008,8 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
 
     # Load nodes from CSV
     nodes_file = files["nodes"]
+    total_nodes = 0
+    t0 = time.time()
     if nodes_file.exists():
         with open(nodes_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -2048,6 +2050,10 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                             ON CONFLICT (id) DO NOTHING
                         """, batch)
                     conn.commit()
+                    total_nodes += len(batch)
+                    elapsed = time.time() - t0
+                    rate = total_nodes / elapsed if elapsed > 0 else 0
+                    print(f"\r      Loading nodes: {total_nodes:,} ({rate:.0f}/s)...", end="", flush=True)
                     batch.clear()
             if batch:
                 if scenario == "P1":
@@ -2064,9 +2070,15 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                         ON CONFLICT (id) DO NOTHING
                     """, batch)
                 conn.commit()
+                total_nodes += len(batch)
+        elapsed = time.time() - t0
+        rate = total_nodes / elapsed if elapsed > 0 else 0
+        print(f"\r      Loaded {total_nodes:,} nodes in {elapsed:.1f}s ({rate:.0f}/s)          ")
 
     # Load edges from CSV
     edges_file = files["edges"]
+    total_edges = 0
+    t0 = time.time()
     if edges_file.exists():
         with open(edges_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -2080,6 +2092,10 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                         ON CONFLICT DO NOTHING
                     """, batch)
                     conn.commit()
+                    total_edges += len(batch)
+                    elapsed = time.time() - t0
+                    rate = total_edges / elapsed if elapsed > 0 else 0
+                    print(f"\r      Loading edges: {total_edges:,} ({rate:.0f}/s)...", end="", flush=True)
                     batch.clear()
             if batch:
                 execute_batch(cur, """
@@ -2088,20 +2104,32 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                     ON CONFLICT DO NOTHING
                 """, batch)
                 conn.commit()
+                total_edges += len(batch)
+        elapsed = time.time() - t0
+        rate = total_edges / elapsed if elapsed > 0 else 0
+        print(f"\r      Loaded {total_edges:,} edges in {elapsed:.1f}s ({rate:.0f}/s)          ")
 
     # Load timeseries from CSV (use COPY for performance)
     # CSV format from exporter_v2: point_id, time, value
     ts_file = files["timeseries"]
     if ts_file.exists():
+        print(f"      Loading timeseries (COPY)...", end="", flush=True)
+        t0 = time.time()
         with open(ts_file, 'r', encoding='utf-8') as f:
             cur.copy_expert(
                 "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
                 f
             )
         conn.commit()
+        elapsed = time.time() - t0
+        # Get row count
+        cur.execute("SELECT COUNT(*) FROM timeseries")
+        ts_count = cur.fetchone()[0]
+        rate = ts_count / elapsed if elapsed > 0 else 0
+        print(f"\r      Loaded {ts_count:,} timeseries in {elapsed:.1f}s ({rate:.0f}/s)          ")
 
     cur.close()
-    return {"nodes": True, "edges": True, "timeseries": True}
+    return {"nodes": total_nodes, "edges": total_edges, "timeseries": True}
 
 
 # =============================================================================
@@ -2146,8 +2174,9 @@ def _load_memgraph_nodes_csv(session, nodes_file: Path) -> int:
                     batch=batch
                 )
                 total += len(batch)
-                if total % 10000 == 0:
-                    print(f"      {total} nodes...", flush=True)
+                elapsed = time.time() - t0
+                rate = total / elapsed if elapsed > 0 else 0
+                print(f"\r      Loading nodes: {total:,} ({rate:.0f}/s)...", end="", flush=True)
                 batch.clear()
 
         if batch:
@@ -2159,7 +2188,8 @@ def _load_memgraph_nodes_csv(session, nodes_file: Path) -> int:
             total += len(batch)
 
     elapsed = time.time() - t0
-    print(f"      Loaded {total:,} nodes in {elapsed:.1f}s")
+    rate = total / elapsed if elapsed > 0 else 0
+    print(f"\r      Loaded {total:,} nodes in {elapsed:.1f}s ({rate:.0f}/s)          ")
     return total
 
 
@@ -2199,11 +2229,13 @@ def _load_memgraph_edges_csv(session, edges_file: Path) -> int:
                 batch=batch
             )
             total += len(batch)
-            if total % 10000 == 0:
-                print(f"      {total} edges...", flush=True)
+            elapsed = time.time() - t0
+            rate = total / elapsed if elapsed > 0 else 0
+            print(f"\r      Loading edges: {total:,} ({rate:.0f}/s)...", end="", flush=True)
 
     elapsed = time.time() - t0
-    print(f"      Loaded {total:,} edges in {elapsed:.1f}s")
+    rate = total / elapsed if elapsed > 0 else 0
+    print(f"\r      Loaded {total:,} edges in {elapsed:.1f}s ({rate:.0f}/s)          ")
     return total
 
 
@@ -2262,8 +2294,9 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
                     batch=batch_edges
                 )
                 total += len(batch_nodes)
-                if total % 10000 == 0:
-                    print(f"      {total} chunks...", flush=True)
+                elapsed = time.time() - t0
+                rate = total / elapsed if elapsed > 0 else 0
+                print(f"\r      Loading chunks: {total:,} ({rate:.0f}/s)...", end="", flush=True)
                 batch_nodes.clear()
                 batch_edges.clear()
 
@@ -2284,7 +2317,8 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
             total += len(batch_nodes)
 
     elapsed = time.time() - t0
-    print(f"      Loaded {total:,} chunks in {elapsed:.1f}s")
+    rate = total / elapsed if elapsed > 0 else 0
+    print(f"\r      Loaded {total:,} chunks in {elapsed:.1f}s ({rate:.0f}/s)          ")
     return total
 
 
