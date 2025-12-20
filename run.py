@@ -1308,24 +1308,13 @@ def run_query_benchmark(
         except Exception:
             pass
 
-    # Measured runs with resource monitoring
-    # Use ExtendedResourceMonitor on Linux for detailed metrics
-    if IS_LINUX and extended_metrics:
-        try:
-            from basetype_benchmark.benchmark.resource_monitor import ExtendedResourceMonitor
-            query_monitor = ExtendedResourceMonitor(container_name, interval_s=0.2)
-        except ImportError:
-            query_monitor = ResourceMonitor(container_name, interval_s=0.2)
-    else:
-        query_monitor = ResourceMonitor(container_name, interval_s=0.2)
-
-    query_monitor.start()
+    # Take snapshot of container stats BEFORE runs
+    # For fast queries, continuous sampling doesn't work (interval > query time)
+    stats_before = get_container_stats(container_name)
 
     latencies = []
     rows = 0
     for run_idx in range(n_runs):
-        # Note: drop_caches between runs removed for performance
-        # Single drop_caches before warmup is sufficient
         try:
             t0 = time.perf_counter()
             rows = execute_fn(query_text)
@@ -1333,75 +1322,40 @@ def run_query_benchmark(
         except Exception as e:
             print_warn(f"Query error: {e}")
 
-    query_resources = query_monitor.stop()
+    # Take snapshot AFTER runs
+    stats_after = get_container_stats(container_name)
 
-    # Remove raw samples to reduce result size (keep for extended monitor if needed)
-    if "samples" in query_resources and query_resources.get("sample_count", 0) > 100:
-        del query_resources["samples"]
+    # Build resource metrics from snapshots
+    # For fast queries, we report the steady-state container memory/CPU
+    mem_mb = 0
+    cpu_pct = 0
+    if stats_after:
+        mem_mb = stats_after.get("mem_mb", 0)
+        cpu_pct = stats_after.get("cpu_pct", 0)
+    elif stats_before:
+        mem_mb = stats_before.get("mem_mb", 0)
+        cpu_pct = stats_before.get("cpu_pct", 0)
+
+    query_resources = {
+        "mem_mb": {"min": mem_mb, "max": mem_mb, "avg": mem_mb},
+        "cpu_pct": {"min": cpu_pct, "max": cpu_pct, "avg": cpu_pct},
+        "sample_count": 2,
+    }
 
     stats = compute_stats(latencies)
 
-    # Normalize resources format for consistent access
-    # ExtendedResourceMonitor uses memory.used_mb, basic uses mem_mb
-    if isinstance(query_resources.get("cpu"), dict):
-        # Extended monitor format -> normalize to basic format
-        mem_info = query_resources.get("memory", {}).get("used_mb", {})
-        cpu_info = query_resources.get("cpu", {}).get("total_pct", {})
-        normalized_resources = {
-            "mem_mb": {
-                "min": mem_info.get("min", 0),
-                "max": mem_info.get("max", 0),
-                "avg": mem_info.get("avg", 0),
-            },
-            "cpu_pct": {
-                "min": cpu_info.get("min", 0),
-                "max": cpu_info.get("max", 0),
-                "avg": cpu_info.get("avg", 0),
-            },
-            "extended": query_resources  # Keep full data for detailed analysis
-        }
-    else:
-        # Basic monitor format - ensure keys exist
-        normalized_resources = {
-            "mem_mb": query_resources.get("mem_mb", {"min": 0, "max": 0, "avg": 0}),
-            "cpu_pct": query_resources.get("cpu_pct", {"min": 0, "max": 0, "avg": 0}),
-        }
-
-    # Build result with normalized resources
+    # Build result
     result = {
         "latencies_ms": latencies,
         "rows": rows,
         "stats": stats,
-        "resources": normalized_resources,
+        "resources": query_resources,
         "params": params or {}
     }
 
-    # Display output based on monitor type
-    if isinstance(query_resources.get("cpu"), dict):
-        # Extended monitor format
-        cpu_info = query_resources.get("cpu", {})
-        mem_info = query_resources.get("memory", {})
-        io_info = query_resources.get("io", {})
-        energy_info = query_resources.get("energy", {})
-
-        mem_max = mem_info.get("used_mb", {}).get("max", 0)
-        cpu_avg = cpu_info.get("total_pct", {}).get("avg", 0)
-        iowait = cpu_info.get("iowait_pct", {}).get("avg", 0)
-
-        display = f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms rows={rows}"
-        display += f" (RAM:{mem_max:.0f}MB CPU:{cpu_avg:.1f}%"
-        if iowait > 0.1:
-            display += f" IO:{iowait:.1f}%"
-        if energy_info.get("available") and energy_info.get("total_wh", 0) > 0:
-            display += f" E:{energy_info['total_wh']*1000:.2f}mWh"
-        display += ")"
-        print(display)
-    else:
-        # Basic monitor format (backward compatible)
-        mem_max = query_resources.get('mem_mb', {}).get('max', 0)
-        cpu_avg = query_resources.get('cpu_pct', {}).get('avg', 0)
-        print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms rows={rows} "
-              f"(RAM:{mem_max:.0f}MB CPU:{cpu_avg:.1f}%)")
+    # Display result
+    print(f"p50={stats['p50']:.1f}ms p95={stats['p95']:.1f}ms rows={rows} "
+          f"(RAM:{mem_mb:.0f}MB CPU:{cpu_pct:.1f}%)")
 
     return result
 
