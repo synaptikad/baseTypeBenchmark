@@ -36,6 +36,28 @@ IS_LINUX = sys.platform.startswith('linux')
 CYAN = "\033[96m"
 
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+# Batch sizes for data loading (tuned for performance)
+BATCH_SIZES = {
+    "postgres_nodes": 1000,
+    "postgres_edges": 1000,
+    "memgraph_nodes": 5000,
+    "memgraph_edges": 1000,
+    "memgraph_chunks": 2000,
+}
+
+# Docker container names
+CONTAINERS = {
+    "postgres": "btb_timescaledb",
+    "memgraph": "btb_memgraph",
+    "oxigraph": "btb_oxigraph",
+    "timescaledb": "btb_timescaledb",  # Alias for hybrid scenarios
+}
+
+
 def print_header(title: str):
     print(f"\n{'=' * 60}")
     print(f"  {title}")
@@ -56,6 +78,23 @@ def print_err(msg: str):
 
 def print_info(msg: str):
     print(f"{BLUE}[i]{RESET} {msg}")
+
+
+def _report_load_progress(label: str, count: int, start_time: float, final: bool = False):
+    """Report loading progress with rate calculation.
+
+    Args:
+        label: What is being loaded (e.g., "nodes", "edges")
+        count: Number of items processed
+        start_time: time.time() when loading started
+        final: If True, print final summary on new line
+    """
+    elapsed = time.time() - start_time
+    rate = count / elapsed if elapsed > 0 else 0
+    if final:
+        print(f"\r      Loaded {count:,} {label} in {elapsed:.1f}s ({rate:.0f}/s)          ")
+    else:
+        print(f"\r      Loading {label}: {count:,} ({rate:.0f}/s)...", end="", flush=True)
 
 
 def prompt(question: str, default: str = "") -> str:
@@ -2432,10 +2471,10 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
     return total
 
 
-def run_hybrid_query_m2(
+def run_hybrid_query(
     query_id: str,
     scenario: str,
-    mg_execute_raw,
+    graph_execute_raw,
     ts_conn,
     container_name: str,
     ts_container: str,
@@ -2445,7 +2484,7 @@ def run_hybrid_query_m2(
     dataset_info: Dict,
     seed: int = 42
 ) -> Dict:
-    """Run M2 hybrid query: Graph (Memgraph) → TimescaleDB.
+    """Run hybrid query: Graph (Cypher/SPARQL) → TimescaleDB.
 
     For hybrid queries:
     1. Execute graph query to get point_ids
@@ -2454,10 +2493,10 @@ def run_hybrid_query_m2(
 
     Args:
         query_id: Q6-Q13
-        scenario: M2
-        mg_execute_raw: Function to execute Memgraph query and return raw records
+        scenario: M2 or O2
+        graph_execute_raw: Function to execute graph query (Cypher or SPARQL)
         ts_conn: TimescaleDB connection
-        container_name: Memgraph container name
+        container_name: Graph container name (Memgraph or Oxigraph)
         ts_container: TimescaleDB container name
         n_warmup: Warmup iterations
         n_runs: Measured runs
@@ -2472,7 +2511,6 @@ def run_hybrid_query_m2(
     config = PROTOCOL_CONFIG.get(profile, PROTOCOL_CONFIG["small"])
     n_variants = config.get("n_variants", 3)
 
-    # Get parameter variants
     variants = get_query_variants(query_id, profile, dataset_info, seed, scenario)
     if not variants:
         variants = [{}]
@@ -2485,27 +2523,23 @@ def run_hybrid_query_m2(
     query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
 
     for params in variants[:n_variants]:
-        # Load graph query (Cypher)
         graph_query = load_query(scenario, query_id, params)
         if not graph_query:
             continue
 
-        # Load TimescaleDB query
         ts_query_template = load_ts_query(scenario, query_id, params)
 
         # Warmup
         for _ in range(n_warmup):
             try:
                 if query_type == "ts_direct":
-                    # Direct TS query with point_id from params
                     with ts_conn.cursor() as cur:
                         cur.execute(ts_query_template)
                         cur.fetchall()
                         ts_conn.commit()
                 elif query_type == "hybrid":
-                    # Graph → TS
-                    records = mg_execute_raw(graph_query)
-                    point_ids = extract_point_ids_from_graph_result(records, scenario)
+                    graph_result = graph_execute_raw(graph_query)
+                    point_ids = extract_point_ids_from_graph_result(graph_result, scenario)
                     if point_ids and ts_query_template:
                         ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
                         with ts_conn.cursor() as cur:
@@ -2519,7 +2553,6 @@ def run_hybrid_query_m2(
         for _ in range(n_runs):
             try:
                 if query_type == "ts_direct":
-                    # Direct TimescaleDB query
                     t0 = time.perf_counter()
                     with ts_conn.cursor() as cur:
                         cur.execute(ts_query_template)
@@ -2534,132 +2567,13 @@ def run_hybrid_query_m2(
                 elif query_type == "hybrid":
                     # Step 1: Graph query
                     t0 = time.perf_counter()
-                    records = mg_execute_raw(graph_query)
+                    graph_result = graph_execute_raw(graph_query)
                     graph_ms = (time.perf_counter() - t0) * 1000
 
                     # Extract point_ids from result
-                    point_ids = extract_point_ids_from_graph_result(records, scenario)
+                    point_ids = extract_point_ids_from_graph_result(graph_result, scenario)
 
                     # Step 2: TimescaleDB query
-                    ts_ms = 0
-                    if point_ids and ts_query_template:
-                        # Replace $POINT_IDS with actual array
-                        ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
-                        t1 = time.perf_counter()
-                        with ts_conn.cursor() as cur:
-                            cur.execute(ts_query)
-                            rows = cur.fetchall()
-                            ts_conn.commit()
-                        ts_ms = (time.perf_counter() - t1) * 1000
-                        total_rows = len(rows)
-
-                    total_ms = graph_ms + ts_ms
-                    all_latencies.append(total_ms)
-                    all_graph_latencies.append(graph_ms)
-                    all_ts_latencies.append(ts_ms)
-
-            except Exception as e:
-                print_warn(f"Hybrid query error: {e}")
-
-    if not all_latencies:
-        return None
-
-    stats = compute_stats(all_latencies)
-
-    return {
-        "latencies_ms": all_latencies,
-        "rows": total_rows,
-        "stats": stats,
-        "hybrid": True,
-        "breakdown": {
-            "graph_ms": compute_stats(all_graph_latencies),
-            "ts_ms": compute_stats(all_ts_latencies),
-        }
-    }
-
-
-def run_hybrid_query_o2(
-    query_id: str,
-    scenario: str,
-    sparql_execute_raw,
-    ts_conn,
-    container_name: str,
-    ts_container: str,
-    n_warmup: int,
-    n_runs: int,
-    profile: str,
-    dataset_info: Dict,
-    seed: int = 42
-) -> Dict:
-    """Run O2 hybrid query: Graph (Oxigraph SPARQL) → TimescaleDB.
-
-    Similar to run_hybrid_query_m2 but for SPARQL.
-    """
-    from basetype_benchmark.benchmark.protocols import PROTOCOL_CONFIG
-
-    config = PROTOCOL_CONFIG.get(profile, PROTOCOL_CONFIG["small"])
-    n_variants = config.get("n_variants", 3)
-
-    variants = get_query_variants(query_id, profile, dataset_info, seed, scenario)
-    if not variants:
-        variants = [{}]
-
-    all_latencies = []
-    all_graph_latencies = []
-    all_ts_latencies = []
-    total_rows = 0
-
-    query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
-
-    for params in variants[:n_variants]:
-        graph_query = load_query(scenario, query_id, params)
-        if not graph_query:
-            continue
-
-        ts_query_template = load_ts_query(scenario, query_id, params)
-
-        # Warmup
-        for _ in range(n_warmup):
-            try:
-                if query_type == "ts_direct":
-                    with ts_conn.cursor() as cur:
-                        cur.execute(ts_query_template)
-                        cur.fetchall()
-                        ts_conn.commit()
-                elif query_type == "hybrid":
-                    result = sparql_execute_raw(graph_query)
-                    point_ids = extract_point_ids_from_graph_result(result, scenario)
-                    if point_ids and ts_query_template:
-                        ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
-                        with ts_conn.cursor() as cur:
-                            cur.execute(ts_query)
-                            cur.fetchall()
-                            ts_conn.commit()
-            except Exception:
-                pass
-
-        # Measured runs
-        for _ in range(n_runs):
-            try:
-                if query_type == "ts_direct":
-                    t0 = time.perf_counter()
-                    with ts_conn.cursor() as cur:
-                        cur.execute(ts_query_template)
-                        rows = cur.fetchall()
-                        ts_conn.commit()
-                    total_ms = (time.perf_counter() - t0) * 1000
-                    all_latencies.append(total_ms)
-                    all_ts_latencies.append(total_ms)
-                    all_graph_latencies.append(0)
-                    total_rows = len(rows)
-
-                elif query_type == "hybrid":
-                    t0 = time.perf_counter()
-                    result = sparql_execute_raw(graph_query)
-                    graph_ms = (time.perf_counter() - t0) * 1000
-
-                    point_ids = extract_point_ids_from_graph_result(result, scenario)
-
                     ts_ms = 0
                     if point_ids and ts_query_template:
                         ts_query = ts_query_template.replace("$POINT_IDS", f"ARRAY{point_ids}")
@@ -2857,10 +2771,10 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
 
         # M2 hybrid execution for timeseries queries
         if scenario == "M2" and ts_conn and query_type in ("ts_direct", "hybrid"):
-            query_result = run_hybrid_query_m2(
+            query_result = run_hybrid_query(
                 query_id=query_id,
                 scenario=scenario,
-                mg_execute_raw=mg_execute_raw,
+                graph_execute_raw=mg_execute_raw,
                 ts_conn=ts_conn,
                 container_name=container_name,
                 ts_container=ts_container,
@@ -3081,10 +2995,10 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
 
             # O2 hybrid execution for timeseries queries
             if scenario == "O2" and ts_conn and query_type in ("ts_direct", "hybrid"):
-                query_result = run_hybrid_query_o2(
+                query_result = run_hybrid_query(
                     query_id=query_id,
                     scenario=scenario,
-                    sparql_execute_raw=sparql_execute_raw,
+                    graph_execute_raw=sparql_execute_raw,
                     ts_conn=ts_conn,
                     container_name=container_name,
                     ts_container=ts_container,
