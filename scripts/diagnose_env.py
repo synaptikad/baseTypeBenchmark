@@ -164,6 +164,25 @@ def _test_reset_memory_peak(cgroup_path: str) -> Dict[str, Any]:
         out["after"] = after
         # Different kernels behave differently; we accept any successful write.
         out["reset_ok"] = True
+    except PermissionError as e:
+        # On many Docker setups, writing to /sys/fs/cgroup requires root.
+        # Try passwordless sudo without prompting.
+        out["error"] = repr(e)
+        try:
+            r = _run(["sudo", "-n", "tee", str(p)], timeout=10)
+            if r.returncode == 0:
+                out["sudo_used"] = True
+                time.sleep(0.05)
+                out["after"] = _read_int(p)
+                out["reset_ok"] = True
+            else:
+                out["sudo_used"] = True
+                out["sudo_error"] = (r.stderr or r.stdout).strip()
+                out["reset_ok"] = False
+        except Exception as se:
+            out["sudo_used"] = True
+            out["sudo_error"] = repr(se)
+            out["reset_ok"] = False
     except Exception as e:
         out["error"] = repr(e)
         out["reset_ok"] = False

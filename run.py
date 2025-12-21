@@ -807,10 +807,28 @@ def reset_memory_peak(cgroup_path: str) -> bool:
     try:
         mem_peak = Path(cgroup_path) / "memory.peak"
         if mem_peak.exists():
-            mem_peak.write_text("0")
-            return True
+            try:
+                mem_peak.write_text("0")
+                return True
+            except PermissionError:
+                # Often requires root to write under /sys/fs/cgroup. If the user
+                # has passwordless sudo (typical on cloud images), try a
+                # non-interactive sudo write.
+                try:
+                    if not str(mem_peak).startswith("/sys/fs/cgroup/"):
+                        return False
+
+                    r = subprocess.run(
+                        ["sudo", "-n", "tee", str(mem_peak)],
+                        input="0",
+                        text=True,
+                        capture_output=True,
+                    )
+                    return r.returncode == 0
+                except Exception:
+                    return False
     except Exception:
-        pass
+        return False
     return False
 
 
