@@ -12,7 +12,9 @@ Exports the generated dataset to:
 import hashlib
 import json
 import statistics
+import sys
 import tempfile
+import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -21,6 +23,39 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow.parquet as pq
+
+
+# =============================================================================
+# PROGRESS UTILITIES
+# =============================================================================
+
+def _progress_bar(current: int, total: int, prefix: str = "", width: int = 30,
+                  start_time: float = None) -> str:
+    """Generate a progress bar string with ETA."""
+    pct = current / total if total > 0 else 0
+    filled = int(width * pct)
+    bar = "=" * filled + ">" + "." * (width - filled - 1) if filled < width else "=" * width
+
+    eta_str = ""
+    if start_time and current > 0:
+        elapsed = time.time() - start_time
+        rate = current / elapsed
+        remaining = (total - current) / rate if rate > 0 else 0
+        if remaining < 60:
+            eta_str = f" ETA: {remaining:.0f}s"
+        else:
+            eta_str = f" ETA: {remaining/60:.1f}m"
+
+    return f"\r{prefix} [{bar}] {current:,}/{total:,} ({pct*100:.1f}%){eta_str}"
+
+
+def _print_progress(current: int, total: int, prefix: str = "",
+                    start_time: float = None, every_n: int = 100) -> None:
+    """Print progress bar, updating every N items."""
+    if current % every_n == 0 or current == total:
+        print(_progress_bar(current, total, prefix, start_time=start_time), end="", flush=True)
+        if current == total:
+            print()  # Newline at end
 
 from .generator_v2 import (
     Dataset, Node, Edge, Point, TSChunk,
@@ -35,10 +70,10 @@ from .generator_v2 import (
 
 @dataclass
 class DailyChunk:
-    """Daily timeseries chunk for M1/O1 formats (SpinalCom model).
+    """Daily timeseries chunk for M1/O1 formats.
 
     Each chunk contains all samples for one point for one day.
-    This matches the SpinalTimeSeriesArchiveDay pattern from SpinalCom.
+    This is a standard BOS pattern for timeseries archival.
     """
     point_id: str
     date_day: str  # "2024-01-15" (UTC midnight)
@@ -61,10 +96,10 @@ def generate_daily_chunks(
     point_id: str,
     samples: List[Tuple[datetime, float]]
 ) -> Iterator[DailyChunk]:
-    """Generate daily timeseries chunks for M1/O1 format (SpinalCom model).
+    """Generate daily timeseries chunks for M1/O1 format.
 
     Groups all samples by day, producing one chunk per (point, day) pair.
-    This matches the SpinalTimeSeriesArchiveDay pattern from SpinalCom.
+    This is a standard BOS pattern: one archive node per (point, day).
 
     Args:
         point_id: Point identifier
@@ -423,11 +458,10 @@ def export_memgraph_chunks_csv(
     output_dir: Path,
     chunk_size: int = CHUNK_SIZE
 ) -> None:
-    """Export timeseries as daily chunks for M1 (SpinalCom model).
+    """Export timeseries as daily chunks for M1.
 
-    Uses one chunk per (point, day) pair, matching the SpinalTimeSeriesArchiveDay
-    pattern from SpinalCom BOS. This dramatically reduces the number of graph nodes
-    compared to fixed-size chunks (e.g., ~18k vs ~520k for small-2d).
+    Uses one chunk per (point, day) pair. This dramatically reduces the number
+    of graph nodes compared to fixed-size chunks (e.g., ~18k vs ~520k for small-2d).
 
     Args:
         parquet_dir: Directory containing Parquet files
@@ -439,10 +473,16 @@ def export_memgraph_chunks_csv(
 
     ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
 
+    # Count unique points for progress
+    point_ids = ts_df["point_id"].unique()
+    total_points = len(point_ids)
+    print(f"          Generating daily chunks for {total_points:,} points...")
+
     chunks_data = []
+    start_time = time.time()
 
     # Group by point_id and generate daily chunks
-    for point_id, group in ts_df.groupby("point_id"):
+    for i, (point_id, group) in enumerate(ts_df.groupby("point_id"), 1):
         samples = list(zip(group["timestamp"], group["value"]))
         samples.sort(key=lambda x: x[0])
 
@@ -454,11 +494,16 @@ def export_memgraph_chunks_csv(
                 "values": json.dumps(chunk.values)
             })
 
+        _print_progress(i, total_points, "          Points", start_time, every_n=500)
+
+    # Write CSV
+    print(f"          Writing {len(chunks_data):,} chunks to CSV...")
     pd.DataFrame(chunks_data).to_csv(
         output_dir / "mg_chunks.csv", index=False
     )
 
-    print(f"Exported Memgraph daily chunks: {len(chunks_data)} chunks (SpinalCom model)")
+    elapsed = time.time() - start_time
+    print(f"          Done: {len(chunks_data):,} daily chunks in {elapsed:.1f}s")
 
 
 # =============================================================================
@@ -561,10 +606,9 @@ def export_oxigraph_chunks_ntriples(
     output_dir: Path,
     chunk_size: int = CHUNK_SIZE
 ) -> None:
-    """Export timeseries as daily chunks N-Triples for O1 (SpinalCom model).
+    """Export timeseries as daily chunks N-Triples for O1.
 
-    Uses one chunk per (point, day) pair, matching the SpinalTimeSeriesArchiveDay
-    pattern from SpinalCom BOS.
+    Uses one chunk per (point, day) pair (standard BOS daily archive pattern).
 
     Args:
         parquet_dir: Directory containing Parquet files
@@ -575,12 +619,19 @@ def export_oxigraph_chunks_ntriples(
 
     ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
 
+    # Count unique points for progress
+    point_ids = ts_df["point_id"].unique()
+    total_points = len(point_ids)
+    print(f"          Generating O1 daily chunk triples for {total_points:,} points...")
+
     prefixes = {
         "ts": "http://example.org/ts/",
         "xsd": "http://www.w3.org/2001/XMLSchema#",
     }
 
     triples = []
+    start_time = time.time()
+    chunk_count = 0
 
     def uri(id_str: str) -> str:
         return f"<urn:{id_str}>"
@@ -589,7 +640,7 @@ def export_oxigraph_chunks_ntriples(
         return f'"{value}"^^<{prefixes["xsd"]}{datatype}>'
 
     # Generate daily chunks
-    for point_id, group in ts_df.groupby("point_id"):
+    for i, (point_id, group) in enumerate(ts_df.groupby("point_id"), 1):
         samples = list(zip(group["timestamp"], group["value"]))
         samples.sort(key=lambda x: x[0])
 
@@ -603,12 +654,17 @@ def export_oxigraph_chunks_ntriples(
             triples.append(f'{chunk_uri} <{prefixes["ts"]}dateDay> {literal(chunk.date_day, "date")} .')
             triples.append(f'{chunk_uri} <{prefixes["ts"]}timestamps> {literal(json.dumps(chunk.timestamps), "string")} .')
             triples.append(f'{chunk_uri} <{prefixes["ts"]}values> {literal(json.dumps(chunk.values), "string")} .')
+            chunk_count += 1
+
+        _print_progress(i, total_points, "          Points", start_time, every_n=500)
 
     # Write to file
+    print(f"          Writing {len(triples):,} triples to N-Triples...")
     with open(output_dir / "chunks.nt", "w", encoding="utf-8") as f:
         f.write("\n".join(triples))
 
-    print(f"Exported O1 daily chunks N-Triples: {len(triples)} triples (SpinalCom model)")
+    elapsed = time.time() - start_time
+    print(f"          Done: {chunk_count:,} chunks, {len(triples):,} triples in {elapsed:.1f}s")
 
 
 def export_oxigraph_aggregates_ntriples(

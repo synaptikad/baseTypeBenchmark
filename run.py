@@ -2411,10 +2411,10 @@ def _load_memgraph_edges_csv(session, edges_file: Path) -> int:
 
 
 def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
-    """Load daily timeseries chunks from CSV into Memgraph (SpinalCom model).
+    """Load daily timeseries chunks from CSV into Memgraph.
 
     CSV format (V2.1): point_id,date_day,timestamps,values
-    One chunk per (point, day) pair, matching SpinalTimeSeriesArchiveDay pattern.
+    One chunk per (point, day) pair (standard BOS daily archive pattern).
     Creates ArchiveDay nodes linked to Point nodes via HAS_TIMESERIES.
     """
     import csv
@@ -2429,7 +2429,7 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
     with open(chunks_file, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Use date_day for unique chunk ID (SpinalCom model)
+            # Use date_day for unique chunk ID
             date_day = row.get('date_day', row.get('chunk_idx', '0'))
             chunk_id = f"archive_{row['point_id']}_{date_day}"
 
@@ -2457,7 +2457,7 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
             })
 
             if len(batch_nodes) >= batch_size:
-                # Create ArchiveDay nodes with explicit timestamps (SpinalCom model)
+                # Create ArchiveDay nodes with explicit timestamps
                 session.run(
                     "UNWIND $batch AS row "
                     "CREATE (c:ArchiveDay {id: row.id, point_id: row.point_id, "

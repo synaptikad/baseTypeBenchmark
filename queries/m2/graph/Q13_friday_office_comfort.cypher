@@ -1,5 +1,5 @@
 // Q13: Friday Office Comfort - Stress-test for dechunking (M2)
-// Benchmark: DOW filtering requires dechunking every daily archive (SpinalCom model)
+// Benchmark: DOW filtering requires dechunking every daily archive
 // Parameters: $SPACE_TYPE - space type pattern, $DATE_START/$DATE_END (Unix timestamps)
 // Pattern: UNWIND daily archives (explicit timestamps) + manual DOW calculation + occupancy correlation
 // WARNING: This query is intentionally expensive on M2 to demonstrate chunking overhead

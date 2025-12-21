@@ -1,5 +1,5 @@
 // Q7: Sensor Drift Detection - Top 20 drifting sensors in building (M1)
-// Benchmark: Statistical analysis via daily archive UNWIND (SpinalCom model)
+// Benchmark: Statistical analysis via daily archive UNWIND
 // Pattern: Variance/CV calculation from dechunked values (explicit timestamps)
 // Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END (Unix timestamps)
 // WARNING: Intentionally expensive on M1 - must dechunk all data for stats

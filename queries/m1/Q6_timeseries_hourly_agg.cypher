@@ -1,5 +1,5 @@
 // Q6: Timeseries Hourly Aggregation - Dechunking stress-test (M1)
-// Benchmark: Manual hourly aggregation via daily archive UNWIND (SpinalCom model)
+// Benchmark: Manual hourly aggregation via daily archive UNWIND
 // Pattern: Explicit timestamps from daily archives, bucket by hour
 // Parameters: $POINT_ID - point to aggregate, $DATE_START/$DATE_END (Unix timestamps)
 // WARNING: Intentionally expensive on M1 to demonstrate chunking overhead vs time_bucket

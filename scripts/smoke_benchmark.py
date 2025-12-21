@@ -46,34 +46,54 @@ def _load_run_module():
     return run
 
 
-def _ensure_dataset(run_mod, profile: str, seed: int, source: str) -> Path:
-    """Ensure a V2 exported dataset exists, return export_dir."""
-    export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{profile}_seed{seed}"
+def _ensure_parquet_pivot(run_mod, profile: str, seed: int, source: str) -> Path:
+    """Ensure Parquet pivot exists (lazy export mode), return export_dir."""
+    from basetype_benchmark.dataset.dataset_manager import DatasetManager
 
-    if run_mod.check_dataset(profile, seed=seed):
+    mgr = DatasetManager(base_dir=Path("src/basetype_benchmark/dataset"))
+    export_dir = mgr.get_export_path(profile, seed)
+    parquet_dir = export_dir / "parquet"
+
+    # If parquet already exists, we're good
+    if (parquet_dir / "timeseries.parquet").exists():
+        print(f"[i] Parquet pivot exists: {parquet_dir}")
         return export_dir
 
+    # Try HuggingFace first
     if source in ("auto", "hf"):
         ok = False
         try:
             ok = bool(run_mod.download_from_huggingface(profile, seed=seed))
         except Exception:
             ok = False
-        if ok and run_mod.check_dataset(profile, seed=seed):
+        if ok and (parquet_dir / "timeseries.parquet").exists():
             return export_dir
         if source == "hf":
             raise RuntimeError("Dataset not found on HuggingFace (or download failed)")
 
-    # Generate locally (V2)
+    # Generate Parquet pivot only (no scenario exports yet)
+    mgr.generate_parquet_only(profile_name=profile, seed=seed)
+
+    if not (parquet_dir / "timeseries.parquet").exists():
+        raise RuntimeError(f"Parquet generation failed: {parquet_dir}")
+
+    return export_dir
+
+
+def _export_scenario(profile: str, scenario: str, seed: int) -> Path:
+    """Export a single scenario from Parquet pivot (lazy export)."""
     from basetype_benchmark.dataset.dataset_manager import DatasetManager
 
     mgr = DatasetManager(base_dir=Path("src/basetype_benchmark/dataset"))
-    mgr.generate_and_export(profile_name=profile, seed=seed)
+    return mgr.export_scenario_only(profile, scenario, seed)
 
-    if not run_mod.check_dataset(profile, seed=seed):
-        raise RuntimeError(f"Dataset generation completed but fingerprint.json missing: {export_dir}")
 
-    return export_dir
+def _prune_scenario(profile: str, scenario: str, seed: int, keep_timeseries: bool = True) -> None:
+    """Prune scenario files after run to free disk space."""
+    from basetype_benchmark.dataset.dataset_manager import DatasetManager
+
+    mgr = DatasetManager(base_dir=Path("src/basetype_benchmark/dataset"))
+    mgr.prune_scenario(profile, scenario, seed, keep_shared_timeseries=keep_timeseries)
 
 
 def _select_queries(run_mod, scenarios: List[str], query_ids: List[str]) -> Dict[str, List[str]]:
@@ -172,11 +192,16 @@ def main() -> int:
     # Patch query lists to reduce runtime
     selected_map = _select_queries(run_mod, scenarios, [q.upper() for q in args.queries])
     original_queries = dict(run_mod.QUERIES_BY_SCENARIO)
+
+    # Scenarios that share TimescaleDB timeseries
+    TIMESERIES_SCENARIOS = {"P1", "P2", "M2", "O2"}
+
     try:
         for s in scenarios:
             run_mod.QUERIES_BY_SCENARIO[s] = selected_map[s]
 
-        export_dir = _ensure_dataset(run_mod, args.profile, args.seed, args.dataset_source)
+        # Phase 1: Ensure Parquet pivot exists (no scenario exports yet)
+        export_dir = _ensure_parquet_pivot(run_mod, args.profile, args.seed, args.dataset_source)
 
         stamp = args.out_dir.strip() or f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_smoke_{args.profile}_seed{args.seed}"
         out_dir = Path("benchmark_results") / stamp
@@ -191,14 +216,27 @@ def main() -> int:
             "n_runs": args.n_runs,
             "queries": {s: selected_map[s] for s in scenarios},
             "export_dir": str(export_dir),
+            "workflow": "lazy_export_prune",
         }
         (out_dir / "smoke_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
         all_results: Dict[str, Dict[int, Dict]] = {}
 
+        # Track which timeseries-sharing scenarios have run
+        ts_scenarios_done = set()
+
         for scenario in scenarios:
             all_results[scenario] = {}
             containers = run_mod.SCENARIOS[scenario]["containers"]
+
+            # === LAZY EXPORT: export this scenario only ===
+            print(f"\n[LAZY] Exporting {scenario}...")
+            try:
+                _export_scenario(args.profile, scenario, args.seed)
+            except Exception as e:
+                print(f"[ERROR] Export failed for {scenario}: {e}")
+                all_results[scenario] = {ram: {"status": "error", "error": f"export_failed: {e}"} for ram in args.ram_levels}
+                continue
 
             for ram_gb in args.ram_levels:
                 print(f"\n=== SMOKE {scenario} @ {ram_gb}GB ===")
@@ -240,6 +278,22 @@ def main() -> int:
                     json.dumps(all_results[scenario][ram_gb], indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
+
+            # === PRUNE after all RAM levels for this scenario ===
+            if scenario in TIMESERIES_SCENARIOS:
+                ts_scenarios_done.add(scenario)
+                # Check if all timeseries scenarios in our list are done
+                ts_scenarios_in_run = set(scenarios) & TIMESERIES_SCENARIOS
+                all_ts_done = ts_scenarios_done >= ts_scenarios_in_run
+
+                # Keep timeseries if more TS scenarios to run
+                keep_ts = not all_ts_done
+                print(f"\n[PRUNE] {scenario} (keep_timeseries={keep_ts})")
+                _prune_scenario(args.profile, scenario, args.seed, keep_timeseries=keep_ts)
+            else:
+                # M1/O1: no shared timeseries, prune everything
+                print(f"\n[PRUNE] {scenario} (full prune)")
+                _prune_scenario(args.profile, scenario, args.seed, keep_timeseries=False)
 
         (out_dir / "smoke_results.json").write_text(
             json.dumps(all_results, indent=2, ensure_ascii=False),

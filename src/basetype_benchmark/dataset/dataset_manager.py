@@ -335,6 +335,182 @@ class DatasetManager:
             return True
         return False
 
+    def prune_scenario(
+        self,
+        profile_name: str,
+        scenario: str,
+        seed: int = DEFAULT_SEED,
+        keep_shared_timeseries: bool = True
+    ) -> bool:
+        """Supprime les fichiers d'un scénario spécifique pour libérer le disque.
+
+        Args:
+            profile_name: Nom du profil
+            scenario: Code scénario (P1, P2, M1, M2, O1, O2)
+            seed: Graine
+            keep_shared_timeseries: Si True, garde timeseries.csv (partagé P1/P2/M2/O2)
+
+        Returns:
+            True si des fichiers ont été supprimés
+        """
+        scenario_path = self.get_scenario_path(profile_name, scenario, seed)
+        if not scenario_path.exists():
+            return False
+
+        # Fichiers à conserver si keep_shared_timeseries
+        shared_files = {"timeseries.csv", "pg_timeseries.csv"} if keep_shared_timeseries else set()
+
+        deleted_count = 0
+        for f in scenario_path.iterdir():
+            if f.is_file() and f.name not in shared_files:
+                f.unlink()
+                deleted_count += 1
+
+        # Supprimer le dossier s'il est vide (ou ne contient que shared)
+        remaining = list(scenario_path.iterdir())
+        if not remaining:
+            scenario_path.rmdir()
+
+        print(f"[PRUNE] {scenario}: deleted {deleted_count} files")
+        return deleted_count > 0
+
+    def export_scenario_only(
+        self,
+        profile_name: str,
+        scenario: str,
+        seed: int = DEFAULT_SEED
+    ) -> Path:
+        """Exporte uniquement un scénario spécifique depuis le Parquet pivot.
+
+        Workflow optimisé pour gros datasets:
+        1. Parquet doit déjà exister (via generate_parquet_only)
+        2. Exporte uniquement le format nécessaire pour ce scénario
+        3. Après le run, appeler prune_scenario pour libérer l'espace
+
+        Args:
+            profile_name: Nom du profil
+            scenario: Code scénario (P1, P2, M1, M2, O1, O2)
+            seed: Graine
+
+        Returns:
+            Path vers le répertoire du scénario
+        """
+        export_path = self.get_export_path(profile_name, seed)
+        parquet_dir = export_path / "parquet"
+
+        if not parquet_dir.exists():
+            raise RuntimeError(
+                f"Parquet pivot not found at {parquet_dir}. "
+                "Call generate_parquet_only() first."
+            )
+
+        scenario_upper = scenario.upper()
+        scenario_lower = scenario.lower()
+        output_dir = export_path / scenario_lower
+
+        # Mapping scénario -> target exporter
+        target_mapping = {
+            'P1': 'postgresql',
+            'P2': 'postgresql_jsonb',
+            'M1': 'memgraph_m1',
+            'M2': 'memgraph',
+            'O1': 'oxigraph_o1',
+            'O2': 'oxigraph',
+        }
+
+        if scenario_upper not in target_mapping:
+            raise ValueError(f"Unknown scenario: {scenario}. Valid: {list(target_mapping.keys())}")
+
+        target = target_mapping[scenario_upper]
+
+        print(f"[EXPORT] {scenario_upper} ({target})...")
+        exporter_v2.export_for_target(parquet_dir, target, output_dir)
+        print(f"[EXPORT] {scenario_upper} done -> {output_dir}")
+
+        return output_dir
+
+    def generate_parquet_only(
+        self,
+        profile_name: str,
+        seed: int = DEFAULT_SEED
+    ) -> Tuple[Path, Dict[str, Any]]:
+        """Génère uniquement le Parquet pivot (sans les exports scénarios).
+
+        Workflow optimisé pour gros datasets:
+        1. Cette méthode génère le Parquet pivot
+        2. Appeler export_scenario_only() pour chaque scénario avant son run
+        3. Appeler prune_scenario() après chaque run
+
+        Args:
+            profile_name: Nom du profil
+            seed: Graine
+
+        Returns:
+            Tuple (parquet_dir, fingerprint)
+        """
+        # Parser le profil
+        scale, duration_days = self._parse_profile(profile_name)
+        resolved_profile = ALIASES.get(profile_name, profile_name)
+        estimated_size = self._estimate_size_gb(scale, duration_days)
+
+        # Créer le répertoire d'export
+        export_subdir = self.export_dir / f"{resolved_profile}_seed{seed}"
+        parquet_dir = export_subdir / "parquet"
+
+        # Si Parquet existe déjà, skip
+        if (parquet_dir / "timeseries.parquet").exists():
+            print(f"[i] Parquet pivot already exists: {parquet_dir}")
+            fingerprint = exporter_v2.compute_fingerprint(parquet_dir)
+            return parquet_dir, fingerprint
+
+        if export_subdir.exists():
+            shutil.rmtree(export_subdir)
+        export_subdir.mkdir(parents=True)
+
+        print(f"[i] Generating Parquet pivot for {profile_name}")
+        print(f"    Scale: {scale}, Duration: {duration_days} days")
+        print(f"    Estimated size: ~{estimated_size:.1f} GB")
+
+        use_streaming = estimated_size >= STREAMING_THRESHOLD_GB
+        if use_streaming:
+            print(f"    Mode: STREAMING")
+
+        start_time = time_module.time()
+
+        # Phase 1: Générer le graphe
+        print(f"    [1/2] Generating graph structure...")
+        generator = DatasetGeneratorV2(
+            profile_name=scale,
+            config_path=CONFIG_DIR,
+            exploration_path=EXPLORATION_DIR if EXPLORATION_DIR.exists() else None,
+            seed=seed
+        )
+        dataset = generator.generate()
+        print(f"          Nodes: {len(dataset.nodes):,}, Edges: {len(dataset.edges):,}, Points: {len(dataset.points):,}")
+
+        # Phase 2: Export Parquet
+        print(f"    [2/2] Exporting to Parquet pivot...")
+        if use_streaming:
+            exporter_v2.export_parquet_streaming(dataset, parquet_dir, duration_days=duration_days)
+        else:
+            exporter_v2.export_parquet(dataset, parquet_dir, duration_days=duration_days)
+
+        # Cleanup
+        del dataset
+        gc.collect()
+
+        # Fingerprint
+        fingerprint = exporter_v2.compute_fingerprint(parquet_dir)
+        fingerprint["profile"] = resolved_profile
+        fingerprint["seed"] = seed
+        fingerprint["duration_days"] = duration_days
+        exporter_v2.save_fingerprint(fingerprint, export_subdir)
+
+        total_time = time_module.time() - start_time
+        print(f"[OK] Parquet pivot generated in {total_time:.1f}s")
+
+        return parquet_dir, fingerprint
+
     def get_export_info(self, profile_name: str, seed: int = DEFAULT_SEED) -> Optional[dict]:
         """Informations sur un dataset exporté."""
         if not self.is_exported(profile_name, seed):
