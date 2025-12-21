@@ -193,8 +193,14 @@ def main() -> int:
     selected_map = _select_queries(run_mod, scenarios, [q.upper() for q in args.queries])
     original_queries = dict(run_mod.QUERIES_BY_SCENARIO)
 
-    # Scenarios that share TimescaleDB timeseries
+    # Scenarios that share TimescaleDB timeseries (must run before M1/O1)
     TIMESERIES_SCENARIOS = {"P1", "P2", "M2", "O2"}
+
+    # Optimal order: timeseries-sharing scenarios first, then full-graph
+    # This maximizes disk efficiency by keeping shared timeseries.csv
+    OPTIMAL_ORDER = ["P1", "P2", "M2", "O2", "M1", "O1"]
+    scenarios = sorted(scenarios, key=lambda s: OPTIMAL_ORDER.index(s) if s in OPTIMAL_ORDER else 99)
+    print(f"[i] Scenario order (optimized): {' → '.join(scenarios)}")
 
     try:
         for s in scenarios:
