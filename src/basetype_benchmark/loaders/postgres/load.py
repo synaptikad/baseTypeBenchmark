@@ -53,11 +53,19 @@ def _resolve_pg_config_defaults(
     The benchmark's docker-compose uses docker/.env (typically copied from
     config/benchmark.env). When running Python locally/on a server, these vars
     are often not exported, so we read that file as a fallback.
+
+    Returns dict with resolved values plus '_env_source' for diagnostics.
     """
     repo_root = Path(__file__).resolve().parents[4]
     env_file_vars: Dict[str, str] = {}
+    env_sources: List[str] = []
+
+    # Try to read env files (docker/.env takes precedence)
     for candidate in (repo_root / "docker" / ".env", repo_root / ".env"):
-        env_file_vars.update(_read_env_file(candidate))
+        file_vars = _read_env_file(candidate)
+        if file_vars:
+            env_file_vars.update(file_vars)
+            env_sources.append(str(candidate))
 
     def _get(key: str, default: str) -> str:
         return os.getenv(key) or env_file_vars.get(key) or default
@@ -74,6 +82,8 @@ def _resolve_pg_config_defaults(
         "user": resolved_user,
         "password": resolved_password,
         "database": resolved_db,
+        "_env_sources": env_sources,
+        "_repo_root": str(repo_root),
     }
 
 
@@ -96,7 +106,7 @@ def _is_non_transient_pg_error(err: Exception) -> bool:
 def get_connection(
     host: str = "localhost",
     port: int = 5432,
-    user: str = "benchmark",
+    user: str = "postgres",
     password: str = "benchmark",
     database: str = "benchmark",
     max_retries: Optional[int] = None,
@@ -107,7 +117,7 @@ def get_connection(
     Args:
         host: PostgreSQL host
         port: PostgreSQL port
-        user: PostgreSQL user
+        user: PostgreSQL user (default: postgres, matching config/benchmark.env)
         password: PostgreSQL password
         database: PostgreSQL database
         max_retries: Maximum connection attempts
@@ -126,6 +136,8 @@ def get_connection(
     user = str(cfg["user"])
     password = str(cfg["password"])
     database = str(cfg["database"])
+    env_sources = cfg.get("_env_sources", [])
+    repo_root = cfg.get("_repo_root", "?")
 
     # TimescaleDB (especially on first boot with empty volumes) can take longer
     # than ~30s to become ready. Default to a time-based budget (~180s) while
@@ -149,10 +161,16 @@ def get_connection(
         except psycopg2.OperationalError as e:
             last_error = e
             if _is_non_transient_pg_error(e):
+                env_info = ", ".join(env_sources) if env_sources else "NONE FOUND"
                 print(
-                    "[ERROR] PostgreSQL connection error looks non-transient. "
-                    "Check POSTGRES_* settings (env or docker/.env).\n"
-                    f"        host={host} port={port} user={user} db={database}"
+                    "[ERROR] PostgreSQL connection error looks non-transient.\n"
+                    f"        host={host} port={port} user={user} db={database}\n"
+                    f"        env files read: {env_info}\n"
+                    f"        repo_root: {repo_root}\n"
+                    "        Possible fixes:\n"
+                    "          1. Ensure docker/.env exists: cp config/benchmark.env docker/.env\n"
+                    "          2. Reset volume if creds changed: docker compose down -v\n"
+                    "          3. Check container env: docker inspect btb_timescaledb | grep POSTGRES"
                 )
                 raise
             if attempt < max_retries - 1:

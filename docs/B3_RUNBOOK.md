@@ -12,7 +12,44 @@ Avoir une checklist **fiable et reproductible** pour exécuter le benchmark sur 
 - génération dataset OK (quand HuggingFace ne contient pas les exports)
 - démarrage + connexion aux services (TimescaleDB/PostgreSQL, Memgraph, Oxigraph)
 
-## État actuel (ce qu’on a déjà validé)
+---
+
+## Bootstrap initial (FAIRE UNE SEULE FOIS)
+
+Après un `git pull` sur B3, exécuter cette séquence **avant** tout smoke test :
+
+```bash
+cd ~/baseTypeBenchmark
+
+# 1. Créer docker/.env à partir du template
+cp config/benchmark.env docker/.env
+
+# 2. Vérifier le contenu
+grep POSTGRES docker/.env
+# Attendu: POSTGRES_USER=postgres, POSTGRES_PASSWORD=benchmark, POSTGRES_DB=benchmark
+
+# 3. Détruire les volumes existants (évite les credentials persistés)
+cd docker
+docker compose down -v
+
+# 4. Démarrer TimescaleDB avec limite RAM
+MEMORY_LIMIT=8g docker compose up -d timescaledb
+
+# 5. Attendre que le conteneur soit healthy (~20s)
+sleep 20
+docker ps | grep btb_timescaledb
+# Attendu: (healthy)
+
+# 6. Tester la connexion
+PGPASSWORD=benchmark psql -h localhost -U postgres -d benchmark -c 'SELECT 1;'
+# Attendu: affiche "1"
+```
+
+Si l'étape 6 échoue, voir la section "Blocage actuel: connexion PostgreSQL".
+
+---
+
+## État actuel (ce qu'on a déjà validé)
 
 - cgroup v2 présent sur la machine.
 - `memory.peak` est **resettable**.
@@ -203,43 +240,59 @@ MEMORY_LIMIT=8g docker compose up -d timescaledb
    - validée sur B3 avec fallback `sudo -n`.
    - recommendation: documenter explicitement l’exigence “passwordless sudo” (ou fallback max(memory.current)).
 
-## Commandes “step-by-step” recommandées (résumé)
+## Commandes "step-by-step" recommandées (résumé)
 
-1) Docker OK
-
-```bash
-docker ps
-```
-
-2) Démarrer TimescaleDB (test)
+### Après git pull (première fois ou après reset)
 
 ```bash
-cd ~/baseTypeBenchmark/docker
+cd ~/baseTypeBenchmark
+
+# Bootstrap env + volumes
+cp config/benchmark.env docker/.env
+cd docker && docker compose down -v
 MEMORY_LIMIT=8g docker compose up -d timescaledb
+sleep 20
+
+# Valider connexion
+PGPASSWORD=benchmark psql -h localhost -U postgres -d benchmark -c 'SELECT 1;'
 ```
 
-3) Valider reset memory.peak
+### Diagnostic rapide
 
 ```bash
+# 1) Docker OK
+docker ps
+
+# 2) Vérifier docker/.env
+grep POSTGRES ~/baseTypeBenchmark/docker/.env
+
+# 3) Vérifier ce que le conteneur a reçu
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' btb_timescaledb | grep POSTGRES
+
+# 4) Logs si problème
+docker logs btb_timescaledb --tail 100
+
+# 5) Valider cgroup/memory.peak
 cd ~/baseTypeBenchmark
 python3 scripts/diagnose_env.py --containers btb_timescaledb
 ```
 
-4) Diagnostiquer PostgreSQL
-
-```bash
-cd ~/baseTypeBenchmark
-sed -n '1,120p' docker/.env | egrep 'POSTGRES_' || true
-
-docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' btb_timescaledb | egrep 'POSTGRES_' || true
-
-docker logs btb_timescaledb --tail 200
-```
-
-5) Quand PostgreSQL est OK, relancer smoke P1
+### Lancer le smoke test P1
 
 ```bash
 cd ~/baseTypeBenchmark
 source .venv/bin/activate
 python3 scripts/smoke_benchmark.py --profile small-2d --scenarios P1 --ram-levels 8 --n-warmup 1 --n-runs 1 --queries Q1
 ```
+
+### Si erreur "non-transient" PostgreSQL
+
+Le message d'erreur affiche maintenant :
+- Les fichiers `.env` lus (ou "NONE FOUND")
+- Le `repo_root` détecté
+- Les actions correctives
+
+Causes fréquentes :
+1. `docker/.env` absent → `cp config/benchmark.env docker/.env`
+2. Volume initialisé avec autres creds → `docker compose down -v`
+3. Mismatch user (ex: `benchmark` vs `postgres`) → vérifier `docker/.env`
