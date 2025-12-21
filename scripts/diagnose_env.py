@@ -30,8 +30,14 @@ from typing import Any, Dict, List, Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run(cmd: List[str], timeout: int = 10) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def _run(cmd: List[str], timeout: int = 10, input_text: Optional[str] = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        input=input_text,
+    )
 
 
 def _docker_version() -> Dict[str, Any]:
@@ -169,7 +175,7 @@ def _test_reset_memory_peak(cgroup_path: str) -> Dict[str, Any]:
         # Try passwordless sudo without prompting.
         out["error"] = repr(e)
         try:
-            r = _run(["sudo", "-n", "tee", str(p)], timeout=10)
+            r = _run(["sudo", "-n", "tee", str(p)], timeout=10, input_text="0")
             if r.returncode == 0:
                 out["sudo_used"] = True
                 time.sleep(0.05)
