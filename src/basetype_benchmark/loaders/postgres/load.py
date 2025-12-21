@@ -19,6 +19,80 @@ import psycopg2
 from psycopg2.extras import execute_batch
 
 
+def _read_env_file(path: Path) -> Dict[str, str]:
+    """Read a simple KEY=VALUE env file (no interpolation)."""
+    data: Dict[str, str] = {}
+    try:
+        if not path.exists():
+            return data
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k:
+                data[k] = v
+    except Exception:
+        return {}
+    return data
+
+
+def _resolve_pg_config_defaults(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+) -> Dict[str, object]:
+    """Resolve connection defaults from env vars or docker/.env.
+
+    The benchmark's docker-compose uses docker/.env (typically copied from
+    config/benchmark.env). When running Python locally/on a server, these vars
+    are often not exported, so we read that file as a fallback.
+    """
+    repo_root = Path(__file__).resolve().parents[4]
+    env_file_vars: Dict[str, str] = {}
+    for candidate in (repo_root / "docker" / ".env", repo_root / ".env"):
+        env_file_vars.update(_read_env_file(candidate))
+
+    def _get(key: str, default: str) -> str:
+        return os.getenv(key) or env_file_vars.get(key) or default
+
+    resolved_host = _get("POSTGRES_HOST", host)
+    resolved_port = int(_get("POSTGRES_PORT", str(port)))
+    resolved_user = _get("POSTGRES_USER", user)
+    resolved_password = _get("POSTGRES_PASSWORD", password)
+    resolved_db = _get("POSTGRES_DB", database)
+
+    return {
+        "host": resolved_host,
+        "port": resolved_port,
+        "user": resolved_user,
+        "password": resolved_password,
+        "database": resolved_db,
+    }
+
+
+def _is_non_transient_pg_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    # Errors that won't be fixed by waiting.
+    return any(
+        s in msg
+        for s in (
+            "password authentication failed",
+            "authentication failed",
+            "role \"",
+            "does not exist",
+            "no pg_hba.conf entry",
+            "database \"",
+        )
+    )
+
+
 def get_connection(
     host: str = "localhost",
     port: int = 5432,
@@ -45,6 +119,14 @@ def get_connection(
     Raises:
         psycopg2.OperationalError: If connection fails after all retries
     """
+    # Resolve defaults from environment or docker/.env (docker compose config).
+    cfg = _resolve_pg_config_defaults(host, port, user, password, database)
+    host = str(cfg["host"])
+    port = int(cfg["port"])
+    user = str(cfg["user"])
+    password = str(cfg["password"])
+    database = str(cfg["database"])
+
     # TimescaleDB (especially on first boot with empty volumes) can take longer
     # than ~30s to become ready. Default to a time-based budget (~180s) while
     # allowing callers to override explicitly.
@@ -66,6 +148,13 @@ def get_connection(
             return conn
         except psycopg2.OperationalError as e:
             last_error = e
+            if _is_non_transient_pg_error(e):
+                print(
+                    "[ERROR] PostgreSQL connection error looks non-transient. "
+                    "Check POSTGRES_* settings (env or docker/.env).\n"
+                    f"        host={host} port={port} user={user} db={database}"
+                )
+                raise
             if attempt < max_retries - 1:
                 print(f"[INFO] PostgreSQL not ready (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
                 time.sleep(retry_delay)
