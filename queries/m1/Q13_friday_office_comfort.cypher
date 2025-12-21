@@ -1,7 +1,7 @@
 // Q13: Friday Office Comfort - Stress-test for dechunking (M1)
 // Benchmark: DOW filtering requires dechunking every chunk
 // Parameters: $SPACE_TYPE - space type pattern, $DATE_START/$DATE_END (Unix timestamps)
-// Pattern: UNWIND chunks + manual DOW calculation + occupancy correlation
+// Pattern: UNWIND chunks (explicit timestamps) + manual DOW calculation + occupancy correlation
 // WARNING: This query is intentionally expensive on M1 to demonstrate chunking overhead
 
 // Step 1: Find spaces of given type with thermostat setpoints
@@ -10,12 +10,12 @@ MATCH (sp:Node {type: 'Space'})<-[:LOCATED_IN]-(eq:Node {type: 'Equipment'})
 WHERE sp.space_type STARTS WITH '$SPACE_TYPE'
   AND eq.equipment_type = 'Thermostat'
   AND p.name CONTAINS 'setpoint'
-  AND c.start_ts >= $DATE_START AND c.start_ts < $DATE_END
+  AND c.timestamps[0] >= $DATE_START AND c.timestamps[0] < $DATE_END
 
-// Step 2: Dechunk - reconstruct individual timestamps from chunks
-WITH sp, p, c, c.start_ts AS base_ts, c.freq_sec AS freq, c.values AS vals
+// Step 2: Dechunk - extract individual values with explicit timestamps
+WITH sp, p, c, c.timestamps AS ts_list, c.values AS vals
 UNWIND RANGE(0, SIZE(vals)-1) AS idx
-WITH sp, p, base_ts + (idx * freq) AS ts, vals[idx] AS setpoint
+WITH sp, p, ts_list[idx] AS ts, vals[idx] AS setpoint
 
 // Step 3: Filter to Fridays only (DOW calculation from Unix timestamp)
 // Unix epoch (1970-01-01) was Thursday, so (ts/86400 + 4) % 7 gives DOW
@@ -23,20 +23,17 @@ WITH sp, p, base_ts + (idx * freq) AS ts, vals[idx] AS setpoint
 WITH sp, ts, setpoint, ((ts / 86400) + 4) % 7 AS dow
 WHERE dow = 5  // Friday
 
-// Step 4: Find PeopleCounter in same space and get occupancy at same timestamp
+// Step 4: Find PeopleCounter in same space - dechunk to find closest timestamp
 OPTIONAL MATCH (sp)<-[:LOCATED_IN]-(eq2:Node {type: 'Equipment', equipment_type: 'PeopleCounter'})
                -[:HAS_POINT]->(p2:Node {type: 'Point'})-[:HAS_CHUNK]->(c2:TSChunk)
-WHERE c2.start_ts <= ts < c2.start_ts + (SIZE(c2.values) * c2.freq_sec)
+WHERE c2.timestamps[0] <= ts AND ts <= c2.timestamps[-1]
 
-// Step 5: Extract occupancy value from chunk at matching timestamp
+// Step 5: Extract occupancy value - find closest timestamp in chunk
+// With explicit timestamps, search for value at matching or nearest timestamp
 WITH sp, ts, setpoint, c2,
-     CASE WHEN c2 IS NOT NULL AND c2.freq_sec > 0
-          THEN (ts - c2.start_ts) / c2.freq_sec
-          ELSE -1
-     END AS occ_idx
+     [i IN RANGE(0, SIZE(c2.timestamps)-1) WHERE c2.timestamps[i] = ts | c2.values[i]] AS exact_match
 WITH sp, ts, setpoint,
-     CASE WHEN occ_idx >= 0 AND occ_idx < SIZE(c2.values)
-          THEN c2.values[occ_idx]
+     CASE WHEN SIZE(exact_match) > 0 THEN exact_match[0]
           ELSE null
      END AS occupancy
 

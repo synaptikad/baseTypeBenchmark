@@ -60,7 +60,7 @@ Ce benchmark fournit des mesures empiriques pour eclairer ce choix architectural
 
 - Docker et Docker Compose
 - Python 3.10+
-- Instance cloud recommandee : 256 Go RAM, 32 vCPU (ex: AWS m8g.16xlarge)
+- Instance cloud recommandee : 256 Go RAM, 32 vCPU (ex: OVH B3-256)
 
 ### Installation rapide
 
@@ -81,18 +81,10 @@ pip install -r requirements.txt
 python run.py
 ```
 
-### Scripts de deploiement cloud
-
-Des scripts de setup sont disponibles pour differents providers :
+### Script de deploiement cloud
 
 ```bash
-# AWS EC2 (m8g.16xlarge Graviton4)
-curl -sSL https://raw.githubusercontent.com/.../deploy/aws_setup.sh | sudo bash
-
-# Hetzner CCX63
-bash deploy/hetzner_setup.sh
-
-# OVH B3-256
+# OVH B3-256 (256 Go RAM, 32 vCPU, 400 Go NVMe)
 bash deploy/ovh_setup.sh
 ```
 
@@ -272,7 +264,7 @@ BaseTypeBenchmark/
 │       ├── postgres/
 │       ├── memgraph/
 │       └── oxigraph/
-├── deploy/                     # Scripts cloud (AWS, Hetzner, OVH)
+├── deploy/                     # Scripts deploiement OVH
 └── docs_private/               # Article academique
 ```
 

@@ -120,17 +120,17 @@ class DatasetSizeEstimate:
 
 
 # =============================================================================
-# Configuration serveur AWS EC2 r6id.8xlarge
+# Configuration serveur OVH B3-256
 # =============================================================================
-AWS_MAX_RAM_GB = 256  # AWS r6id.8xlarge : 256 Go RAM (32 vCPU, 2x950GB NVMe)
-"""RAM maximale disponible sur l'instance AWS r6id.8xlarge."""
+OVH_MAX_RAM_GB = 256  # OVH B3-256 : 256 Go RAM (32 vCPU, 400 Go NVMe)
+"""RAM maximale disponible sur l'instance OVH B3-256."""
 
 # Alias pour compatibilité
-HETZNER_MAX_RAM_GB = 192  # Hetzner CCX63 : 192 Go (alternative moins chère)
-B3_MAX_RAM_GB = AWS_MAX_RAM_GB  # Alias legacy
+MAX_RAM_GB = OVH_MAX_RAM_GB
+AWS_MAX_RAM_GB = OVH_MAX_RAM_GB  # Legacy alias
 
 # =============================================================================
-# Paliers RAM pour tests (max 256GB sur AWS r8g.8xlarge)
+# Paliers RAM pour tests (max 256GB sur OVH B3-256)
 # =============================================================================
 # Objectif : Trouver le plateau PostgreSQL et le seuil OOM Memgraph/Oxigraph
 #
@@ -288,7 +288,7 @@ def get_m1_feasibility_matrix() -> Dict[str, Dict[str, str]]:
         Dict[scale][duration] = "OK (XXX GB)" ou "OOM (XXX GB > 256)"
     """
     matrix = {}
-    max_ram_mb = AWS_MAX_RAM_GB * 1024
+    max_ram_mb = OVH_MAX_RAM_GB * 1024
 
     scales = ["small", "medium", "large"]
     durations = ["2d", "1w", "1m", "6m", "1y"]
@@ -303,7 +303,7 @@ def get_m1_feasibility_matrix() -> Dict[str, Dict[str, str]]:
                 if ram_mb <= max_ram_mb:
                     matrix[scale][duration] = f"OK ({ram_gb:.0f} GB)"
                 else:
-                    matrix[scale][duration] = f"OOM ({ram_gb:.0f} GB > {AWS_MAX_RAM_GB})"
+                    matrix[scale][duration] = f"OOM ({ram_gb:.0f} GB > {OVH_MAX_RAM_GB})"
             else:
                 matrix[scale][duration] = "N/A"
 
@@ -317,7 +317,7 @@ def print_m1_feasibility_matrix() -> None:
     print("\n" + "=" * 80)
     print("MATRICE DE FAISABILITÉ M1 (Memgraph tout in-memory)")
     print("=" * 80)
-    print(f"RAM disponible : {AWS_MAX_RAM_GB} GB")
+    print(f"RAM disponible : {OVH_MAX_RAM_GB} GB")
     print(f"Formule : RAM = (structure + timeseries) × 3")
     print()
 
@@ -351,7 +351,7 @@ def get_full_feasibility_matrix() -> Dict[str, Dict[str, Dict[str, str]]]:
         Dict[engine][scale][duration] = "XX GB" ou "OOM"
     """
     matrix = {}
-    max_ram_mb = AWS_MAX_RAM_GB * 1024
+    max_ram_mb = OVH_MAX_RAM_GB * 1024
 
     scales = ["small", "medium", "large"]
     durations = ["2d", "1w", "1m", "6m", "1y"]
@@ -402,7 +402,7 @@ def print_full_feasibility_matrix() -> None:
     print("\n" + "=" * 100)
     print("MATRICE DE FAISABILITÉ - TOUS LES MOTEURS")
     print("=" * 100)
-    print(f"RAM disponible : {AWS_MAX_RAM_GB} GB | OOM = dépassement garanti")
+    print(f"RAM disponible : {OVH_MAX_RAM_GB} GB | OOM = dépassement garanti")
     print()
 
     scales = ["small", "medium", "large"]

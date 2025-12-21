@@ -3,6 +3,7 @@
 # Parameters: $SPACE_TYPE - space type pattern, $DATE_START/$DATE_END (for chunk filter)
 # Pattern: SPARQL cannot parse JSON arrays - requires application post-processing
 # WARNING: This query returns raw chunks; actual DOW filtering happens in Python
+# NOTE: Uses explicit timestamps (deadband-compatible) instead of start_ts + idx * freq_sec
 
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -13,15 +14,15 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 # Fetch all chunks for thermostat setpoints and PeopleCounters in specified space type
 # Client must:
-# 1. Parse values JSON string into array
-# 2. Reconstruct timestamps from start_ts + idx * freq_sec
+# 1. Parse timestamps and values JSON strings into arrays
+# 2. Iterate over (timestamp, value) pairs directly
 # 3. Filter to Fridays (DOW = 5)
 # 4. Correlate setpoint with occupancy at same timestamp
 # 5. Group by occupancy level
 
 SELECT ?space ?spaceType
-       ?setpointChunk ?setpointStartTs ?setpointFreqSec ?setpointValues
-       ?occChunk ?occStartTs ?occFreqSec ?occValues
+       ?setpointChunk ?setpointTimestamps ?setpointValues
+       ?occChunk ?occTimestamps ?occValues
 WHERE {
     # Spaces of specified type
     ?space rdf:type brick:Space ;
@@ -35,10 +36,9 @@ WHERE {
     ?setpointPoint rdfs:label ?pointName .
     FILTER (CONTAINS(LCASE(?pointName), "setpoint"))
 
-    # Setpoint timeseries chunks
+    # Setpoint timeseries chunks (explicit timestamps)
     ?setpointPoint ts:hasChunk ?setpointChunk .
-    ?setpointChunk ts:startTs ?setpointStartTs ;
-                   ts:freqSec ?setpointFreqSec ;
+    ?setpointChunk ts:timestamps ?setpointTimestamps ;
                    ts:values ?setpointValues .
 
     # Optional: PeopleCounter in same space for occupancy correlation
@@ -47,24 +47,21 @@ WHERE {
                   rdf:type brick:People_Count_Sensor ;
                   brick:hasPoint ?occPoint .
         ?occPoint ts:hasChunk ?occChunk .
-        ?occChunk ts:startTs ?occStartTs ;
-                  ts:freqSec ?occFreqSec ;
+        ?occChunk ts:timestamps ?occTimestamps ;
                   ts:values ?occValues .
     }
 }
-ORDER BY ?space ?setpointStartTs
+ORDER BY ?space ?setpointChunk
 
 # POST-PROCESSING REQUIRED (Python):
 #
 # def process_q13_sparql_results(results):
 #     friday_data = []
 #     for row in results:
+#         timestamps = json.loads(row['setpointTimestamps'])
 #         setpoint_values = json.loads(row['setpointValues'])
-#         start_ts = int(row['setpointStartTs'])
-#         freq_sec = int(row['setpointFreqSec'])
 #
-#         for idx, setpoint in enumerate(setpoint_values):
-#             ts = start_ts + (idx * freq_sec)
+#         for ts, setpoint in zip(timestamps, setpoint_values):
 #             dow = ((ts // 86400) + 4) % 7  # 0=Sun, 5=Fri
 #             if dow == 5:  # Friday
 #                 occupancy = find_occupancy_at_ts(row, ts)

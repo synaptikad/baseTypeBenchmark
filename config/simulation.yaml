@@ -1,0 +1,189 @@
+# Simulation Configuration
+# Physical behavior and deadband settings for realistic timeseries generation
+
+# Point type behaviors
+point_behaviors:
+
+  # Temperature sensors (zone, supply, return air, water, etc.)
+  temperature:
+    deadband: 0.5               # °C - transmit only if change > 0.5°C
+    sample_interval: 60         # Base sampling interval (seconds)
+    thermal_lag_minutes: 10     # Time constant for temperature response
+    noise_std: 0.1              # Random noise standard deviation
+    occupancy_influence: 2.0    # °C offset due to occupancy heat load
+    setpoint_day: 21.0          # Default setpoint during occupied hours
+    setpoint_night: 18.0        # Default setpoint during unoccupied hours
+
+  # Humidity sensors
+  humidity:
+    deadband: 3.0               # %RH - transmit only if change > 3%
+    sample_interval: 60
+    response_time_minutes: 20   # Slower response than temperature
+    noise_std: 1.0
+    min_value: 0
+    max_value: 100
+
+  # Pressure sensors (static, differential)
+  pressure:
+    deadband: 5.0               # Pa (or 5% for differential)
+    sample_interval: 60
+    response_time_seconds: 10   # Fast response
+    noise_std: 2.0
+
+  # CO2 / Air quality sensors
+  co2:
+    deadband: 50                # ppm
+    sample_interval: 60
+    response_time_minutes: 5
+    baseline: 400               # Outdoor CO2 level
+    occupancy_rate: 30          # ppm per person per minute accumulation
+    ventilation_decay: 0.1      # Decay rate when unoccupied
+
+  # Position actuators (valves, dampers)
+  position:
+    deadband: 2.0               # % position
+    sample_interval: 60
+    modulation_period_seconds: 45  # PID hunting/modulation cycle
+    modulation_amplitude: 5.0   # % amplitude of modulation
+    min_value: 0
+    max_value: 100
+
+  # Electrical power sensors
+  power:
+    deadband_percent: 0.5       # % of nominal power
+    sample_interval: 60
+    base_load_ratio: 0.2        # Base load as fraction of nominal
+    occupancy_load_ratio: 0.8   # Additional load when occupied
+    noise_std: 0.05             # Noise as fraction of current value
+
+  # Energy meters (cumulative)
+  energy:
+    mode: cumulative            # Always increasing values
+    sample_interval: 900        # 15 minutes - fixed interval, no deadband
+    deadband: 0                 # No deadband for meters
+
+  # Status/State points (binary or enum)
+  status:
+    mode: state_machine         # Discrete state changes
+    min_state_duration: 300     # Minimum seconds between state changes
+    sample_interval: 300        # Check interval
+
+  # Alarm points
+  alarm:
+    mode: event                 # Event-driven, not periodic
+    events_per_day: 0.5         # Average alarm events per day
+    duration_minutes: 30        # Average alarm duration
+
+  # Speed sensors (fans, pumps)
+  speed:
+    deadband: 1.0               # Hz or %
+    sample_interval: 60
+    min_value: 0
+    max_value: 100              # % or 60 Hz
+
+  # Flow sensors
+  flow:
+    deadband: 2.0               # % of nominal
+    sample_interval: 60
+    response_time_seconds: 30
+
+
+# Occupancy schedules
+occupancy:
+  weekday:
+    is_occupied: true
+    occupied_start: "08:00"
+    occupied_end: "19:00"
+    transition_minutes: 30
+    peak_density: 1.0
+
+  saturday:
+    is_occupied: true
+    occupied_start: "09:00"
+    occupied_end: "13:00"
+    transition_minutes: 20
+    peak_density: 0.3
+
+  sunday:
+    is_occupied: false
+
+  # Global settings
+  variation_minutes: 15         # Random variation in schedules
+
+
+# Environment model (outdoor conditions)
+environment:
+  climate: temperate            # temperate, continental, mediterranean, tropical
+  latitude: 48.8                # For solar calculations
+  annual_mean_temp: 12.0        # °C
+  annual_amplitude: 10.0        # °C (summer-winter difference)
+  daily_amplitude: 8.0          # °C (day-night difference)
+
+
+# Simulation engine settings
+simulation:
+  # Base simulation time step
+  base_step_seconds: 60         # Internal simulation granularity
+
+  # Random seed (null = random)
+  seed: null
+
+  # Skip warmup period (let values stabilize)
+  warmup_hours: 2
+
+  # Point type classification patterns
+  # Maps point names to behaviors using regex patterns
+  type_patterns:
+    temperature:
+      - ".*temp.*"
+      - ".*temperature.*"
+      - ".*_t$"
+      - ".*_temp$"
+    humidity:
+      - ".*humid.*"
+      - ".*rh$"
+      - ".*_rh$"
+    pressure:
+      - ".*pressure.*"
+      - ".*_dp$"
+      - ".*static.*"
+    co2:
+      - ".*co2.*"
+      - ".*carbon.*"
+    position:
+      - ".*valve.*"
+      - ".*damper.*"
+      - ".*_pos$"
+      - ".*_cmd$"
+      - ".*position.*"
+    power:
+      - ".*power.*"
+      - ".*_kw$"
+      - ".*_w$"
+    energy:
+      - ".*energy.*"
+      - ".*kwh.*"
+      - ".*_wh$"
+      - ".*meter.*"
+      - ".*consumption.*"
+    status:
+      - ".*status.*"
+      - ".*state.*"
+      - ".*run$"
+      - ".*enable.*"
+      - ".*_on$"
+    alarm:
+      - ".*alarm.*"
+      - ".*fault.*"
+      - ".*error.*"
+      - ".*trip.*"
+    speed:
+      - ".*speed.*"
+      - ".*_hz$"
+      - ".*_rpm$"
+      - ".*freq.*"
+    flow:
+      - ".*flow.*"
+      - ".*_cfm$"
+      - ".*_gpm$"
+      - ".*airflow.*"

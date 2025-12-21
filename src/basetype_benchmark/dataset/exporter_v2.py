@@ -356,8 +356,7 @@ def export_memgraph_chunks_csv(
             chunks_data.append({
                 "point_id": chunk.point_id,
                 "chunk_idx": chunk.chunk_idx,
-                "start_ts": chunk.start_ts,
-                "freq_sec": chunk.freq_sec,
+                "timestamps": json.dumps(chunk.timestamps),
                 "values": json.dumps(chunk.values)
             })
 
@@ -504,8 +503,7 @@ def export_oxigraph_chunks_ntriples(
 
             triples.append(f'{point_uri} <{prefixes["ts"]}hasChunk> {chunk_uri} .')
             triples.append(f'{chunk_uri} <{prefixes["ts"]}chunkIdx> {literal(chunk.chunk_idx, "integer")} .')
-            triples.append(f'{chunk_uri} <{prefixes["ts"]}startTs> {literal(chunk.start_ts, "integer")} .')
-            triples.append(f'{chunk_uri} <{prefixes["ts"]}freqSec> {literal(chunk.freq_sec, "integer")} .')
+            triples.append(f'{chunk_uri} <{prefixes["ts"]}timestamps> {literal(json.dumps(chunk.timestamps), "string")} .')
             triples.append(f'{chunk_uri} <{prefixes["ts"]}values> {literal(json.dumps(chunk.values), "string")} .')
 
     # Write to file

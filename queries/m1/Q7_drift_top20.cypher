@@ -1,19 +1,19 @@
 // Q7: Sensor Drift Detection - Top 20 drifting sensors in building (M1)
 // Benchmark: Statistical analysis via chunk UNWIND
-// Pattern: Variance/CV calculation from dechunked values
+// Pattern: Variance/CV calculation from dechunked values (explicit timestamps)
 // Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END (Unix timestamps)
 // WARNING: Intentionally expensive on M1 - must dechunk all data for stats
 
 // Step 1: Get all points in building with chunks in time range
 MATCH (p:Node {type: 'Point', building_id: '$BUILDING_ID'})-[:HAS_CHUNK]->(c:TSChunk)
-WHERE c.start_ts >= $DATE_START AND c.start_ts < $DATE_END
+WHERE c.timestamps[0] >= $DATE_START AND c.timestamps[0] < $DATE_END
 
-// Step 2: Dechunk all values
-WITH p, c.start_ts AS base_ts, c.freq_sec AS freq, c.values AS vals
+// Step 2: Dechunk all values with explicit timestamps
+WITH p, c.timestamps AS ts_list, c.values AS vals
 UNWIND RANGE(0, SIZE(vals)-1) AS idx
 WITH p.id AS point_id,
      p.name AS point_name,
-     base_ts + (idx * freq) AS ts,
+     ts_list[idx] AS ts,
      vals[idx] AS value
 
 // Step 3: Filter to exact time range

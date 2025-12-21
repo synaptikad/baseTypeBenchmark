@@ -1,4 +1,4 @@
-"""Extended Resource Monitor for AWS EC2 / Docker benchmarks.
+"""Extended Resource Monitor for cloud/Docker benchmarks.
 
 Collects comprehensive metrics during query execution:
 - CPU: user, system, iowait, per-core utilization
@@ -7,7 +7,7 @@ Collects comprehensive metrics during query execution:
 - Network: packets, bytes, errors
 - Energy: RAPL power estimation (if available on Intel CPUs)
 
-Designed for Debian/Linux on AWS EC2 with Docker containers.
+Designed for Linux servers with Docker containers (OVH, VPS, etc.).
 """
 from __future__ import annotations
 
@@ -607,80 +607,87 @@ class ExtendedResourceMonitor:
         }
 
 
-class EC2MetadataCollector:
-    """Collect AWS EC2 instance metadata and EBS metrics.
+class CloudMetadataCollector:
+    """Collect cloud instance metadata (supports multiple providers).
 
-    Uses IMDSv2 to fetch instance type, CPU credits, etc.
-    Useful for understanding performance characteristics on different instance types.
+    Currently detects:
+    - OVH/OpenStack (primary target)
+    - Generic Linux VPS
+
+    Note: Cloud-specific metadata collection is optional.
+    The benchmark works on any Linux server with Docker.
     """
-
-    IMDS_TOKEN_URL = "http://169.254.169.254/latest/api/token"
-    IMDS_BASE_URL = "http://169.254.169.254/latest"
 
     def __init__(self, timeout: float = 2.0):
         self.timeout = timeout
-        self._token: Optional[str] = None
-        self._is_ec2: Optional[bool] = None
+        self._is_cloud: Optional[bool] = None
+        self._provider: Optional[str] = None
 
-    def is_ec2(self) -> bool:
-        """Check if running on EC2."""
-        if self._is_ec2 is not None:
-            return self._is_ec2
+    def is_cloud(self) -> bool:
+        """Check if running on a cloud instance."""
+        if self._is_cloud is not None:
+            return self._is_cloud
 
+        # Check for common cloud indicators
         try:
-            import urllib.request
-            # Try to get IMDSv2 token
-            req = urllib.request.Request(
-                self.IMDS_TOKEN_URL,
-                method="PUT",
-                headers={"X-aws-ec2-metadata-token-ttl-seconds": "300"}
-            )
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                self._token = resp.read().decode()
-                self._is_ec2 = True
+            # Check for cloud-init (common on cloud VMs)
+            cloud_init = Path("/run/cloud-init")
+            if cloud_init.exists():
+                self._is_cloud = True
+                self._provider = "cloud"
+                return True
+
+            # Check DMI for virtualization
+            dmi_path = Path("/sys/class/dmi/id/sys_vendor")
+            if dmi_path.exists():
+                vendor = dmi_path.read_text().strip().lower()
+                if any(v in vendor for v in ["ovh", "openstack", "kvm", "qemu"]):
+                    self._is_cloud = True
+                    self._provider = "ovh" if "ovh" in vendor else "vps"
+                    return True
         except Exception:
-            self._is_ec2 = False
+            pass
 
-        return self._is_ec2
-
-    def _get_metadata(self, path: str) -> Optional[str]:
-        """Get metadata from IMDS."""
-        if not self.is_ec2():
-            return None
-
-        try:
-            import urllib.request
-            url = f"{self.IMDS_BASE_URL}/{path}"
-            req = urllib.request.Request(
-                url,
-                headers={"X-aws-ec2-metadata-token": self._token}
-            )
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.read().decode()
-        except Exception:
-            return None
+        self._is_cloud = False
+        return False
 
     def get_instance_info(self) -> Dict:
-        """Get EC2 instance information."""
-        if not self.is_ec2():
-            return {"is_ec2": False}
+        """Get cloud instance information."""
+        if not self.is_cloud():
+            return {"is_cloud": False}
 
-        return {
-            "is_ec2": True,
-            "instance_id": self._get_metadata("meta-data/instance-id"),
-            "instance_type": self._get_metadata("meta-data/instance-type"),
-            "availability_zone": self._get_metadata("meta-data/placement/availability-zone"),
-            "region": self._get_metadata("meta-data/placement/region"),
-            "ami_id": self._get_metadata("meta-data/ami-id"),
-            "local_ipv4": self._get_metadata("meta-data/local-ipv4"),
+        info = {
+            "is_cloud": True,
+            "provider": self._provider,
         }
 
-    def get_cpu_options(self) -> Dict:
-        """Get vCPU information (for CPU credits on T instances)."""
-        if not self.is_ec2():
-            return {}
+        # Get hostname
+        try:
+            info["hostname"] = platform.node()
+        except Exception:
+            pass
 
-        # Get number of vCPUs from /proc/cpuinfo instead
+        # Get vCPUs
+        try:
+            info["vcpus"] = os.cpu_count()
+        except Exception:
+            pass
+
+        # Get total RAM
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        mem_kb = int(line.split()[1])
+                        info["ram_gb"] = round(mem_kb / 1024 / 1024, 1)
+                        break
+        except Exception:
+            pass
+
+        return info
+
+    def get_cpu_options(self) -> Dict:
+        """Get vCPU information."""
         try:
             with open("/proc/cpuinfo", "r") as f:
                 content = f.read()
@@ -688,6 +695,10 @@ class EC2MetadataCollector:
                 return {"vcpus": vcpus}
         except Exception:
             return {}
+
+
+# Backward compatibility alias
+EC2MetadataCollector = CloudMetadataCollector
 
 
 def get_system_info() -> Dict:
@@ -732,12 +743,12 @@ def get_system_info() -> Dict:
     except Exception:
         pass
 
-    # EC2 metadata
-    ec2 = EC2MetadataCollector()
-    ec2_info = ec2.get_instance_info()
-    if ec2_info.get("is_ec2"):
-        info["ec2"] = ec2_info
-        info["ec2"]["cpu_options"] = ec2.get_cpu_options()
+    # Cloud metadata (OVH, VPS, etc.)
+    cloud = CloudMetadataCollector()
+    cloud_info = cloud.get_instance_info()
+    if cloud_info.get("is_cloud"):
+        info["cloud"] = cloud_info
+        info["cloud"]["cpu_options"] = cloud.get_cpu_options()
 
     # Docker version
     try:

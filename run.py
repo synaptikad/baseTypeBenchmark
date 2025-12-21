@@ -31,7 +31,7 @@ DIM = "\033[2m"
 RESET = "\033[0m"
 
 
-# Detect if we're on Linux (EC2) for extended monitoring
+# Detect if we're on Linux for extended monitoring
 IS_LINUX = sys.platform.startswith('linux')
 CYAN = "\033[96m"
 
@@ -530,7 +530,7 @@ def workflow_dataset():
 # RAM CONFIGURATION
 # =============================================================================
 
-# RAM levels to test (in GB) - up to 256GB for large EC2 instances
+# RAM levels to test (in GB) - up to 256GB for OVH B3-256
 RAM_LEVELS = [4, 8, 16, 32, 64, 128, 256]
 
 # Minimum RAM per scale (estimated)
@@ -1906,14 +1906,16 @@ def run_scenario_benchmark(scenario: str, export_dir: Path, profile: str = "smal
     # Display benchmark protocol info
     print_info(f"Benchmark Protocol: {n_variants} variants × {n_runs} runs + {n_warmup} warmup per query")
 
-    # Collect system info for benchmark context (on Linux/EC2)
+    # Collect system info for benchmark context (on Linux)
     system_info = {}
     if IS_LINUX:
         try:
             from basetype_benchmark.benchmark.resource_monitor import get_system_info
             system_info = get_system_info()
-            if system_info.get("ec2", {}).get("is_ec2"):
-                print_info(f"Running on EC2: {system_info['ec2'].get('instance_type', 'unknown')}")
+            if system_info.get("cloud", {}).get("is_cloud"):
+                provider = system_info["cloud"].get("provider", "unknown")
+                ram_gb = system_info["cloud"].get("ram_gb", "?")
+                print_info(f"Running on cloud: {provider} ({ram_gb} GB RAM)")
         except ImportError:
             pass
 
@@ -2391,7 +2393,8 @@ def _load_memgraph_edges_csv(session, edges_file: Path) -> int:
 def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
     """Load timeseries chunks from CSV into Memgraph.
 
-    CSV format (V2): point_id,chunk_idx,start_ts,freq_sec,values
+    CSV format (V2): point_id,chunk_idx,timestamps,values
+    Uses explicit timestamps (deadband-compatible) instead of start_ts + idx * freq_sec.
     Creates TimeseriesChunk nodes linked to Point nodes via HAS_CHUNK.
     """
     import csv
@@ -2408,7 +2411,12 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
         for row in reader:
             chunk_id = f"chunk_{row['point_id']}_{row['chunk_idx']}"
 
-            # Parse values array
+            # Parse timestamps and values arrays
+            try:
+                timestamps = json.loads(row['timestamps'])
+            except (json.JSONDecodeError, TypeError):
+                timestamps = []
+
             try:
                 values = json.loads(row['values'])
             except (json.JSONDecodeError, TypeError):
@@ -2417,8 +2425,7 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
             batch_nodes.append({
                 'id': chunk_id,
                 'point_id': row['point_id'],
-                'start_ts': int(row['start_ts']),
-                'freq_sec': int(row['freq_sec']),
+                'timestamps': timestamps,
                 'values': values
             })
             batch_edges.append({
@@ -2427,18 +2434,18 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
             })
 
             if len(batch_nodes) >= batch_size:
-                # Create chunk nodes
+                # Create chunk nodes with explicit timestamps
                 session.run(
                     "UNWIND $batch AS row "
-                    "CREATE (c:TimeseriesChunk {id: row.id, point_id: row.point_id, "
-                    "start_ts: row.start_ts, freq_sec: row.freq_sec, values: row.values})",
+                    "CREATE (c:TSChunk {id: row.id, point_id: row.point_id, "
+                    "timestamps: row.timestamps, values: row.values})",
                     batch=batch_nodes
                 )
                 # Create HAS_CHUNK edges
                 session.run(
                     "UNWIND $batch AS row "
                     "MATCH (p:Node {id: row.src}) "
-                    "MATCH (c:TimeseriesChunk {id: row.dst}) "
+                    "MATCH (c:TSChunk {id: row.dst}) "
                     "CREATE (p)-[:HAS_CHUNK]->(c)",
                     batch=batch_edges
                 )
@@ -2452,14 +2459,14 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
         if batch_nodes:
             session.run(
                 "UNWIND $batch AS row "
-                "CREATE (c:TimeseriesChunk {id: row.id, point_id: row.point_id, "
-                "start_ts: row.start_ts, freq_sec: row.freq_sec, values: row.values})",
+                "CREATE (c:TSChunk {id: row.id, point_id: row.point_id, "
+                "timestamps: row.timestamps, values: row.values})",
                 batch=batch_nodes
             )
             session.run(
                 "UNWIND $batch AS row "
                 "MATCH (p:Node {id: row.src}) "
-                "MATCH (c:TimeseriesChunk {id: row.dst}) "
+                "MATCH (c:TSChunk {id: row.dst}) "
                 "CREATE (p)-[:HAS_CHUNK]->(c)",
                 batch=batch_edges
             )

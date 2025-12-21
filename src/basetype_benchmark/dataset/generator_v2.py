@@ -2,6 +2,10 @@
 
 Generates realistic building datasets for database benchmarking.
 Based on docs/generator_v2 specifications.
+
+Supports two timeseries generation modes:
+- Legacy: Independent Gaussian samples at fixed intervals
+- Simulation: Physical simulation with deadband filtering (~7x data reduction)
 """
 
 import json
@@ -23,6 +27,7 @@ except ImportError:
     tqdm = None
 
 from .equipment_loader import EquipmentDef, load_exploration, get_equipment_by_type
+from .simulation import SimulationEngine, SimulationConfig, PointInfo
 
 
 # =============================================================================
@@ -61,11 +66,14 @@ class Point:
 
 @dataclass
 class TSChunk:
-    """Timeseries chunk for M1/O1 formats."""
+    """Timeseries chunk for M1/O1 formats.
+
+    Uses explicit timestamps (not start_ts + idx*freq_sec) to support
+    irregular intervals from deadband filtering.
+    """
     point_id: str
     chunk_idx: int
-    start_ts: int  # Unix timestamp
-    freq_sec: int
+    timestamps: List[int]  # Unix timestamps (explicit, for deadband support)
     values: List[float]
 
 
@@ -686,7 +694,9 @@ def generate_timeseries(
     duration_days: int,
     rng: random.Random,
     start_time: Optional[datetime] = None,
-    show_progress: bool = True
+    show_progress: bool = True,
+    use_simulation: bool = True,
+    simulation_config_path: Optional[Path] = None,
 ) -> Iterator[Tuple[str, datetime, float]]:
     """Generate timeseries data for all points.
 
@@ -696,6 +706,8 @@ def generate_timeseries(
         rng: Random number generator
         start_time: Start timestamp (default: 2024-01-01)
         show_progress: Show progress bar (default: True)
+        use_simulation: Use physical simulation with deadband (default: True)
+        simulation_config_path: Path to simulation.yaml config file
 
     Yields:
         Tuples of (point_id, timestamp, value)
@@ -703,12 +715,85 @@ def generate_timeseries(
     if start_time is None:
         start_time = datetime(2024, 1, 1)
 
+    if use_simulation:
+        # Use physical simulation engine with deadband filtering
+        yield from _generate_timeseries_simulation(
+            points, duration_days, rng, start_time,
+            show_progress, simulation_config_path
+        )
+    else:
+        # Legacy mode: independent Gaussian samples
+        yield from _generate_timeseries_legacy(
+            points, duration_days, rng, start_time, show_progress
+        )
+
+
+def _generate_timeseries_simulation(
+    points: List[Point],
+    duration_days: int,
+    rng: random.Random,
+    start_time: datetime,
+    show_progress: bool,
+    config_path: Optional[Path] = None,
+) -> Iterator[Tuple[str, datetime, float]]:
+    """Generate timeseries using physical simulation with deadband.
+
+    This mode produces ~7x less data than legacy mode by:
+    - Using Ornstein-Uhlenbeck process for temporal correlation
+    - Applying deadband filtering (only transmit on significant change)
+    - Modeling occupancy and environmental context
+    """
+    # Load simulation config
+    if config_path is None:
+        config_path = Path("config/simulation.yaml")
+
+    if config_path.exists():
+        config = SimulationConfig.load(config_path)
+    else:
+        config = SimulationConfig.default()
+
+    # Convert Point objects to PointInfo for simulation
+    point_infos = [
+        PointInfo(
+            id=p.id,
+            name=p.name,
+            equipment_id=p.equipment_id,
+            unit=p.unit,
+            setpoint=(p.range_min + p.range_max) / 2,
+        )
+        for p in points
+    ]
+
+    # Create simulation engine
+    engine = SimulationEngine(
+        config=config,
+        rng=rng,
+        start_time=start_time,
+    )
+
+    # Generate samples
+    for sample in engine.generate(point_infos, duration_days, show_progress):
+        yield (sample.point_id, sample.timestamp, sample.value)
+
+
+def _generate_timeseries_legacy(
+    points: List[Point],
+    duration_days: int,
+    rng: random.Random,
+    start_time: datetime,
+    show_progress: bool,
+) -> Iterator[Tuple[str, datetime, float]]:
+    """Legacy timeseries generation: independent Gaussian samples.
+
+    This mode generates samples at fixed intervals without correlation
+    or deadband filtering. Useful for comparison or backwards compatibility.
+    """
     # Wrap with progress bar if available
     point_iter = points
     if show_progress and HAS_TQDM:
         point_iter = tqdm(
             points,
-            desc="Generating timeseries",
+            desc="Generating timeseries (legacy)",
             unit="points",
             ncols=80,
             leave=True
@@ -770,32 +855,27 @@ def generate_chunks(
     point_id: str,
     samples: List[Tuple[datetime, float]]
 ) -> Iterator[TSChunk]:
-    """Generate timeseries chunks for M1 format.
+    """Generate timeseries chunks for M1/O1 format.
+
+    Uses explicit timestamps to support irregular intervals from deadband filtering.
+    Each chunk contains up to CHUNK_SIZE (timestamp, value) pairs.
 
     Args:
         point_id: Point identifier
         samples: List of (timestamp, value) tuples
 
     Yields:
-        TSChunk objects
+        TSChunk objects with explicit timestamps
     """
     for chunk_idx, i in enumerate(range(0, len(samples), CHUNK_SIZE)):
         chunk_samples = samples[i:i + CHUNK_SIZE]
         if not chunk_samples:
             continue
 
-        start_ts = int(chunk_samples[0][0].timestamp())
-
-        # Calculate frequency if regular
-        freq_sec = 0
-        if len(chunk_samples) > 1:
-            freq_sec = int((chunk_samples[1][0] - chunk_samples[0][0]).total_seconds())
-
         yield TSChunk(
             point_id=point_id,
             chunk_idx=chunk_idx,
-            start_ts=start_ts,
-            freq_sec=freq_sec,
+            timestamps=[int(ts.timestamp()) for ts, _ in chunk_samples],
             values=[v for _, v in chunk_samples]
         )
 
