@@ -33,7 +33,9 @@ class StatusSimulator(PointSimulator):
         self.min_state_duration = params.get("min_state_duration", 300)  # 5 min min
         self.on_probability_occupied = params.get("on_probability_occupied", 0.95)
         self.on_probability_unoccupied = params.get("on_probability_unoccupied", 0.1)
-        self.states = params.get("states", [0, 1])  # Binary by default
+        # Do not override PointSimulator.states (dict[str, SimulationState]).
+        # Keep the allowed discrete values in a dedicated attribute.
+        self.state_values = params.get("states", [0, 1])  # Binary by default
 
         self._last_change_times: dict[str, datetime] = {}
 
@@ -45,7 +47,7 @@ class StatusSimulator(PointSimulator):
     ) -> SimulationState:
         """Initialize with a valid state value."""
         if initial_value is None:
-            initial_value = self.rng.choice(self.states)
+            initial_value = self.rng.choice(self.state_values)
         return super().init_state(point_id, initial_value, setpoint)
 
     def step(
@@ -71,7 +73,7 @@ class StatusSimulator(PointSimulator):
         current = int(state.current_value)
 
         # Binary status logic
-        if len(self.states) == 2:
+        if len(self.state_values) == 2:
             if occupancy.is_occupied:
                 target_prob = self.on_probability_occupied
             else:
