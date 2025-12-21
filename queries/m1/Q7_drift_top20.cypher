@@ -1,11 +1,11 @@
 // Q7: Sensor Drift Detection - Top 20 drifting sensors in building (M1)
-// Benchmark: Statistical analysis via chunk UNWIND
+// Benchmark: Statistical analysis via daily archive UNWIND (SpinalCom model)
 // Pattern: Variance/CV calculation from dechunked values (explicit timestamps)
 // Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END (Unix timestamps)
 // WARNING: Intentionally expensive on M1 - must dechunk all data for stats
 
-// Step 1: Get all points in building with chunks in time range
-MATCH (p:Node {type: 'Point', building_id: '$BUILDING_ID'})-[:HAS_CHUNK]->(c:TSChunk)
+// Step 1: Get all points in building with daily archives in time range
+MATCH (p:Node {type: 'Point', building_id: '$BUILDING_ID'})-[:HAS_TIMESERIES]->(c:ArchiveDay)
 WHERE c.timestamps[0] >= $DATE_START AND c.timestamps[0] < $DATE_END
 
 // Step 2: Dechunk all values with explicit timestamps

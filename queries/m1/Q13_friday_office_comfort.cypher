@@ -1,12 +1,12 @@
 // Q13: Friday Office Comfort - Stress-test for dechunking (M1)
-// Benchmark: DOW filtering requires dechunking every chunk
+// Benchmark: DOW filtering requires dechunking every daily archive (SpinalCom model)
 // Parameters: $SPACE_TYPE - space type pattern, $DATE_START/$DATE_END (Unix timestamps)
-// Pattern: UNWIND chunks (explicit timestamps) + manual DOW calculation + occupancy correlation
+// Pattern: UNWIND daily archives (explicit timestamps) + manual DOW calculation + occupancy correlation
 // WARNING: This query is intentionally expensive on M1 to demonstrate chunking overhead
 
 // Step 1: Find spaces of given type with thermostat setpoints
 MATCH (sp:Node {type: 'Space'})<-[:LOCATED_IN]-(eq:Node {type: 'Equipment'})
-      -[:HAS_POINT]->(p:Node {type: 'Point'})-[:HAS_CHUNK]->(c:TSChunk)
+      -[:HAS_POINT]->(p:Node {type: 'Point'})-[:HAS_TIMESERIES]->(c:ArchiveDay)
 WHERE sp.space_type STARTS WITH '$SPACE_TYPE'
   AND eq.equipment_type = 'Thermostat'
   AND p.name CONTAINS 'setpoint'
@@ -25,7 +25,7 @@ WHERE dow = 5  // Friday
 
 // Step 4: Find PeopleCounter in same space - dechunk to find closest timestamp
 OPTIONAL MATCH (sp)<-[:LOCATED_IN]-(eq2:Node {type: 'Equipment', equipment_type: 'PeopleCounter'})
-               -[:HAS_POINT]->(p2:Node {type: 'Point'})-[:HAS_CHUNK]->(c2:TSChunk)
+               -[:HAS_POINT]->(p2:Node {type: 'Point'})-[:HAS_TIMESERIES]->(c2:ArchiveDay)
 WHERE c2.timestamps[0] <= ts AND ts <= c2.timestamps[-1]
 
 // Step 5: Extract occupancy value - find closest timestamp in chunk

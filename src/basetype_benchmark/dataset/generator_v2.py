@@ -78,17 +78,6 @@ class TSChunk:
 
 
 @dataclass
-class DailyAggregate:
-    """Daily aggregate for O1 format."""
-    point_id: str
-    date: str  # "2024-01-15"
-    avg: float
-    min_val: float
-    max_val: float
-    count: int
-
-
-@dataclass
 class Dataset:
     """Complete generated dataset."""
     nodes: List[Node]
@@ -877,35 +866,6 @@ def generate_chunks(
             chunk_idx=chunk_idx,
             timestamps=[int(ts.timestamp()) for ts, _ in chunk_samples],
             values=[v for _, v in chunk_samples]
-        )
-
-
-def generate_daily_aggregates(
-    point_id: str,
-    samples: List[Tuple[datetime, float]]
-) -> Iterator[DailyAggregate]:
-    """Generate daily aggregates for O1 format.
-
-    Args:
-        point_id: Point identifier
-        samples: List of (timestamp, value) tuples
-
-    Yields:
-        DailyAggregate objects
-    """
-    by_day: Dict[str, List[float]] = defaultdict(list)
-
-    for ts, value in samples:
-        by_day[ts.date().isoformat()].append(value)
-
-    for date, values in sorted(by_day.items()):
-        yield DailyAggregate(
-            point_id=point_id,
-            date=date,
-            avg=round(statistics.mean(values), 2),
-            min_val=round(min(values), 2),
-            max_val=round(max(values), 2),
-            count=len(values)
         )
 
 

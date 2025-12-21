@@ -1,11 +1,11 @@
 // Q6: Timeseries Hourly Aggregation - Dechunking stress-test (M1)
-// Benchmark: Manual hourly aggregation via chunk UNWIND
-// Pattern: Explicit timestamps from chunks (deadband-compatible), bucket by hour
+// Benchmark: Manual hourly aggregation via daily archive UNWIND (SpinalCom model)
+// Pattern: Explicit timestamps from daily archives, bucket by hour
 // Parameters: $POINT_ID - point to aggregate, $DATE_START/$DATE_END (Unix timestamps)
 // WARNING: Intentionally expensive on M1 to demonstrate chunking overhead vs time_bucket
 
-// Step 1: Get point with chunks in time range
-MATCH (p:Node {id: '$POINT_ID'})-[:HAS_CHUNK]->(c:TSChunk)
+// Step 1: Get point with daily archives in time range
+MATCH (p:Node {id: '$POINT_ID'})-[:HAS_TIMESERIES]->(c:ArchiveDay)
 WHERE c.timestamps[0] >= $DATE_START AND c.timestamps[0] < $DATE_END
 
 // Step 2: Dechunk - extract individual values with explicit timestamps

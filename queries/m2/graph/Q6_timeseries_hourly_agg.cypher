@@ -1,21 +1,21 @@
-// Q6: Timeseries Hourly Aggregation - Dechunking stress-test (M1)
-// Benchmark: Manual hourly aggregation via chunk UNWIND
-// Pattern: Reconstruct timestamps from chunks, bucket by hour
+// Q6: Timeseries Hourly Aggregation - Dechunking stress-test (M2)
+// Benchmark: Manual hourly aggregation via daily archive UNWIND (SpinalCom model)
+// Pattern: Explicit timestamps from daily archives, bucket by hour
 // Parameters: $POINT_ID - point to aggregate, $DATE_START/$DATE_END (Unix timestamps)
-// WARNING: Intentionally expensive on M1 to demonstrate chunking overhead vs time_bucket
+// WARNING: Intentionally expensive on M2 to demonstrate chunking overhead vs time_bucket
 
-// Step 1: Get point with chunks in time range
-MATCH (p:Node {id: '$POINT_ID'})-[:HAS_CHUNK]->(c:TSChunk)
-WHERE c.start_ts >= $DATE_START AND c.start_ts < $DATE_END
+// Step 1: Get point with daily archives in time range
+MATCH (p:Node {id: '$POINT_ID'})-[:HAS_TIMESERIES]->(c:ArchiveDay)
+WHERE c.timestamps[0] >= $DATE_START AND c.timestamps[0] < $DATE_END
 
-// Step 2: Dechunk - reconstruct individual values with timestamps
-WITH p, c, c.start_ts AS base_ts, c.freq_sec AS freq, c.values AS vals
+// Step 2: Dechunk - extract individual values with explicit timestamps
+WITH p, c, c.timestamps AS ts_list, c.values AS vals
 UNWIND RANGE(0, SIZE(vals)-1) AS idx
 WITH p.id AS point_id,
-     base_ts + (idx * freq) AS ts,
+     ts_list[idx] AS ts,
      vals[idx] AS value
 
-// Step 3: Filter to exact time range (chunks may extend beyond)
+// Step 3: Filter to exact time range (archives may extend beyond)
 WHERE ts >= $DATE_START AND ts < $DATE_END
 
 // Step 4: Bucket by hour (floor to hour boundary)

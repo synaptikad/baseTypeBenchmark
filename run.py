@@ -2129,12 +2129,13 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                 data JSONB DEFAULT '{}'
             )
         """)
-    else:  # P2 - JSONB schema
+    else:  # P2 - JSONB schema (with building_id extracted for filtering)
         cur.execute("""
             CREATE TABLE nodes (
                 id TEXT PRIMARY KEY,
                 type TEXT NOT NULL,
                 name TEXT,
+                building_id TEXT,
                 properties JSONB DEFAULT '{}'
             )
         """)
@@ -2166,8 +2167,8 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
 
     # Create indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
     if scenario == "P1":
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_domain ON nodes(domain)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_src_rel ON edges(src_id, rel_type)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst_rel ON edges(dst_id, rel_type)")
@@ -2202,6 +2203,7 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                         row['id'],
                         row['type'],
                         row.get('name', ''),
+                        row.get('building_id', ''),
                         row.get('properties', '{}')
                     ))
                 if len(batch) >= 1000:
@@ -2214,8 +2216,8 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                         """, batch)
                     else:
                         execute_batch(cur, """
-                            INSERT INTO nodes (id, type, name, properties)
-                            VALUES (%s, %s, %s, %s)
+                            INSERT INTO nodes (id, type, name, building_id, properties)
+                            VALUES (%s, %s, %s, %s, %s)
                             ON CONFLICT (id) DO NOTHING
                         """, batch)
                     conn.commit()
@@ -2234,8 +2236,8 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                     """, batch)
                 else:
                     execute_batch(cur, """
-                        INSERT INTO nodes (id, type, name, properties)
-                        VALUES (%s, %s, %s, %s)
+                        INSERT INTO nodes (id, type, name, building_id, properties)
+                        VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO NOTHING
                     """, batch)
                 conn.commit()
@@ -2409,11 +2411,11 @@ def _load_memgraph_edges_csv(session, edges_file: Path) -> int:
 
 
 def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
-    """Load timeseries chunks from CSV into Memgraph.
+    """Load daily timeseries chunks from CSV into Memgraph (SpinalCom model).
 
-    CSV format (V2): point_id,chunk_idx,timestamps,values
-    Uses explicit timestamps (deadband-compatible) instead of start_ts + idx * freq_sec.
-    Creates TimeseriesChunk nodes linked to Point nodes via HAS_CHUNK.
+    CSV format (V2.1): point_id,date_day,timestamps,values
+    One chunk per (point, day) pair, matching SpinalTimeSeriesArchiveDay pattern.
+    Creates ArchiveDay nodes linked to Point nodes via HAS_TIMESERIES.
     """
     import csv
     import json
@@ -2427,7 +2429,9 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
     with open(chunks_file, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            chunk_id = f"chunk_{row['point_id']}_{row['chunk_idx']}"
+            # Use date_day for unique chunk ID (SpinalCom model)
+            date_day = row.get('date_day', row.get('chunk_idx', '0'))
+            chunk_id = f"archive_{row['point_id']}_{date_day}"
 
             # Parse timestamps and values arrays
             try:
@@ -2443,6 +2447,7 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
             batch_nodes.append({
                 'id': chunk_id,
                 'point_id': row['point_id'],
+                'date_day': date_day,
                 'timestamps': timestamps,
                 'values': values
             })
@@ -2452,47 +2457,47 @@ def _load_memgraph_chunks_csv(session, chunks_file: Path) -> int:
             })
 
             if len(batch_nodes) >= batch_size:
-                # Create chunk nodes with explicit timestamps
+                # Create ArchiveDay nodes with explicit timestamps (SpinalCom model)
                 session.run(
                     "UNWIND $batch AS row "
-                    "CREATE (c:TSChunk {id: row.id, point_id: row.point_id, "
-                    "timestamps: row.timestamps, values: row.values})",
+                    "CREATE (c:ArchiveDay {id: row.id, point_id: row.point_id, "
+                    "date_day: row.date_day, timestamps: row.timestamps, values: row.values})",
                     batch=batch_nodes
                 )
-                # Create HAS_CHUNK edges
+                # Create HAS_TIMESERIES edges
                 session.run(
                     "UNWIND $batch AS row "
                     "MATCH (p:Node {id: row.src}) "
-                    "MATCH (c:TSChunk {id: row.dst}) "
-                    "CREATE (p)-[:HAS_CHUNK]->(c)",
+                    "MATCH (c:ArchiveDay {id: row.dst}) "
+                    "CREATE (p)-[:HAS_TIMESERIES]->(c)",
                     batch=batch_edges
                 )
                 total += len(batch_nodes)
                 elapsed = time.time() - t0
                 rate = total / elapsed if elapsed > 0 else 0
-                print(f"\r      Loading chunks: {total:,} ({rate:.0f}/s)...", end="", flush=True)
+                print(f"\r      Loading daily archives: {total:,} ({rate:.0f}/s)...", end="", flush=True)
                 batch_nodes.clear()
                 batch_edges.clear()
 
         if batch_nodes:
             session.run(
                 "UNWIND $batch AS row "
-                "CREATE (c:TSChunk {id: row.id, point_id: row.point_id, "
-                "timestamps: row.timestamps, values: row.values})",
+                "CREATE (c:ArchiveDay {id: row.id, point_id: row.point_id, "
+                "date_day: row.date_day, timestamps: row.timestamps, values: row.values})",
                 batch=batch_nodes
             )
             session.run(
                 "UNWIND $batch AS row "
                 "MATCH (p:Node {id: row.src}) "
-                "MATCH (c:TSChunk {id: row.dst}) "
-                "CREATE (p)-[:HAS_CHUNK]->(c)",
+                "MATCH (c:ArchiveDay {id: row.dst}) "
+                "CREATE (p)-[:HAS_TIMESERIES]->(c)",
                 batch=batch_edges
             )
             total += len(batch_nodes)
 
     elapsed = time.time() - t0
     rate = total / elapsed if elapsed > 0 else 0
-    print(f"\r      Loaded {total:,} chunks in {elapsed:.1f}s ({rate:.0f}/s)          ")
+    print(f"\r      Loaded {total:,} daily archives in {elapsed:.1f}s ({rate:.0f}/s)          ")
     return total
 
 

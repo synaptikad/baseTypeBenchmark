@@ -11,9 +11,10 @@ Exports the generated dataset to:
 
 import hashlib
 import json
+import statistics
 import tempfile
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
@@ -22,10 +23,99 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from .generator_v2 import (
-    Dataset, Node, Edge, Point, TSChunk, DailyAggregate,
-    generate_timeseries, generate_chunks, generate_daily_aggregates,
+    Dataset, Node, Edge, Point, TSChunk,
+    generate_timeseries, generate_chunks,
     CHUNK_SIZE
 )
+
+
+# =============================================================================
+# SPINALCOM MODEL - DAILY CHUNKS (for M1/O1 exports)
+# =============================================================================
+
+@dataclass
+class DailyChunk:
+    """Daily timeseries chunk for M1/O1 formats (SpinalCom model).
+
+    Each chunk contains all samples for one point for one day.
+    This matches the SpinalTimeSeriesArchiveDay pattern from SpinalCom.
+    """
+    point_id: str
+    date_day: str  # "2024-01-15" (UTC midnight)
+    timestamps: List[int]  # Unix timestamps (all samples for this day)
+    values: List[float]
+
+
+@dataclass
+class DailyAggregate:
+    """Daily aggregate for O1 format."""
+    point_id: str
+    date: str  # "2024-01-15"
+    avg: float
+    min_val: float
+    max_val: float
+    count: int
+
+
+def generate_daily_chunks(
+    point_id: str,
+    samples: List[Tuple[datetime, float]]
+) -> Iterator[DailyChunk]:
+    """Generate daily timeseries chunks for M1/O1 format (SpinalCom model).
+
+    Groups all samples by day, producing one chunk per (point, day) pair.
+    This matches the SpinalTimeSeriesArchiveDay pattern from SpinalCom.
+
+    Args:
+        point_id: Point identifier
+        samples: List of (timestamp, value) tuples
+
+    Yields:
+        DailyChunk objects (one per day)
+    """
+    by_day: Dict[str, List[Tuple[datetime, float]]] = defaultdict(list)
+
+    for ts, value in samples:
+        day_key = ts.date().isoformat()
+        by_day[day_key].append((ts, value))
+
+    for date_day in sorted(by_day.keys()):
+        day_samples = sorted(by_day[date_day], key=lambda x: x[0])
+        yield DailyChunk(
+            point_id=point_id,
+            date_day=date_day,
+            timestamps=[int(ts.timestamp()) for ts, _ in day_samples],
+            values=[v for _, v in day_samples]
+        )
+
+
+def generate_daily_aggregates(
+    point_id: str,
+    samples: List[Tuple[datetime, float]]
+) -> Iterator[DailyAggregate]:
+    """Generate daily aggregates for O1 format.
+
+    Args:
+        point_id: Point identifier
+        samples: List of (timestamp, value) tuples
+
+    Yields:
+        DailyAggregate objects
+    """
+    by_day: Dict[str, List[float]] = defaultdict(list)
+
+    for ts, value in samples:
+        by_day[ts.date().isoformat()].append(value)
+
+    for date, values in sorted(by_day.items()):
+        yield DailyAggregate(
+            point_id=point_id,
+            date=date,
+            avg=round(statistics.mean(values), 2),
+            min_val=round(min(values), 2),
+            max_val=round(max(values), 2),
+            count=len(values)
+        )
 
 
 # =============================================================================
@@ -333,12 +423,16 @@ def export_memgraph_chunks_csv(
     output_dir: Path,
     chunk_size: int = CHUNK_SIZE
 ) -> None:
-    """Export timeseries as chunks for M1 (in-memory chunks).
+    """Export timeseries as daily chunks for M1 (SpinalCom model).
+
+    Uses one chunk per (point, day) pair, matching the SpinalTimeSeriesArchiveDay
+    pattern from SpinalCom BOS. This dramatically reduces the number of graph nodes
+    compared to fixed-size chunks (e.g., ~18k vs ~520k for small-2d).
 
     Args:
         parquet_dir: Directory containing Parquet files
         output_dir: Output directory for CSV files
-        chunk_size: Number of values per chunk
+        chunk_size: Ignored (kept for API compatibility)
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -347,15 +441,15 @@ def export_memgraph_chunks_csv(
 
     chunks_data = []
 
-    # Group by point_id
+    # Group by point_id and generate daily chunks
     for point_id, group in ts_df.groupby("point_id"):
         samples = list(zip(group["timestamp"], group["value"]))
         samples.sort(key=lambda x: x[0])
 
-        for chunk in generate_chunks(point_id, samples):
+        for chunk in generate_daily_chunks(point_id, samples):
             chunks_data.append({
                 "point_id": chunk.point_id,
-                "chunk_idx": chunk.chunk_idx,
+                "date_day": chunk.date_day,
                 "timestamps": json.dumps(chunk.timestamps),
                 "values": json.dumps(chunk.values)
             })
@@ -364,7 +458,7 @@ def export_memgraph_chunks_csv(
         output_dir / "mg_chunks.csv", index=False
     )
 
-    print(f"Exported Memgraph chunks: {len(chunks_data)} chunks")
+    print(f"Exported Memgraph daily chunks: {len(chunks_data)} chunks (SpinalCom model)")
 
 
 # =============================================================================
@@ -467,12 +561,15 @@ def export_oxigraph_chunks_ntriples(
     output_dir: Path,
     chunk_size: int = CHUNK_SIZE
 ) -> None:
-    """Export timeseries chunks as N-Triples for O1.
+    """Export timeseries as daily chunks N-Triples for O1 (SpinalCom model).
+
+    Uses one chunk per (point, day) pair, matching the SpinalTimeSeriesArchiveDay
+    pattern from SpinalCom BOS.
 
     Args:
         parquet_dir: Directory containing Parquet files
         output_dir: Output directory
-        chunk_size: Number of values per chunk
+        chunk_size: Ignored (kept for API compatibility)
     """
     output_dir = Path(output_dir)
 
@@ -491,18 +588,19 @@ def export_oxigraph_chunks_ntriples(
     def literal(value, datatype: str) -> str:
         return f'"{value}"^^<{prefixes["xsd"]}{datatype}>'
 
-    # Generate chunks
+    # Generate daily chunks
     for point_id, group in ts_df.groupby("point_id"):
         samples = list(zip(group["timestamp"], group["value"]))
         samples.sort(key=lambda x: x[0])
 
         point_uri = uri(point_id)
 
-        for chunk in generate_chunks(point_id, samples):
-            chunk_uri = uri(f"chunk_{point_id}_{chunk.chunk_idx}")
+        for chunk in generate_daily_chunks(point_id, samples):
+            # Use date_day in URI instead of numeric index
+            chunk_uri = uri(f"chunk_{point_id}_{chunk.date_day}")
 
             triples.append(f'{point_uri} <{prefixes["ts"]}hasChunk> {chunk_uri} .')
-            triples.append(f'{chunk_uri} <{prefixes["ts"]}chunkIdx> {literal(chunk.chunk_idx, "integer")} .')
+            triples.append(f'{chunk_uri} <{prefixes["ts"]}dateDay> {literal(chunk.date_day, "date")} .')
             triples.append(f'{chunk_uri} <{prefixes["ts"]}timestamps> {literal(json.dumps(chunk.timestamps), "string")} .')
             triples.append(f'{chunk_uri} <{prefixes["ts"]}values> {literal(json.dumps(chunk.values), "string")} .')
 
@@ -510,7 +608,7 @@ def export_oxigraph_chunks_ntriples(
     with open(output_dir / "chunks.nt", "w", encoding="utf-8") as f:
         f.write("\n".join(triples))
 
-    print(f"Exported O1 chunks N-Triples: {len(triples)} triples")
+    print(f"Exported O1 daily chunks N-Triples: {len(triples)} triples (SpinalCom model)")
 
 
 def export_oxigraph_aggregates_ntriples(
