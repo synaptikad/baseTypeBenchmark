@@ -66,6 +66,18 @@ class AlarmSimulator(PointSimulator):
 
         return self.rng.random() < prob_in_interval
 
+    def step(
+        self,
+        state: SimulationState,
+        timestamp: datetime,
+        dt: float,
+        occupancy: OccupancyContext,
+        environment: EnvironmentContext,
+    ) -> float:
+        # Alarm points are event-driven and are handled in simulate().
+        # This method exists to satisfy the PointSimulator abstract interface.
+        return state.current_value
+
     def simulate(
         self,
         state: SimulationState,
