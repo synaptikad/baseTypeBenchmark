@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
+import os
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -23,7 +25,7 @@ def get_connection(
     user: str = "benchmark",
     password: str = "benchmark",
     database: str = "benchmark",
-    max_retries: int = 10,
+    max_retries: Optional[int] = None,
     retry_delay: float = 3.0
 ):
     """Create a PostgreSQL connection with retry logic.
@@ -43,6 +45,14 @@ def get_connection(
     Raises:
         psycopg2.OperationalError: If connection fails after all retries
     """
+    # TimescaleDB (especially on first boot with empty volumes) can take longer
+    # than ~30s to become ready. Default to a time-based budget (~180s) while
+    # allowing callers to override explicitly.
+    if max_retries is None:
+        max_wait_s = float(os.getenv("BTB_PG_CONNECT_TIMEOUT_S", "180"))
+        retry_delay = float(os.getenv("BTB_PG_CONNECT_RETRY_DELAY_S", str(retry_delay)))
+        max_retries = max(1, int(math.ceil(max_wait_s / max(retry_delay, 0.1))))
+
     last_error = None
     for attempt in range(max_retries):
         try:
