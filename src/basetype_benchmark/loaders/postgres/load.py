@@ -60,8 +60,8 @@ def _resolve_pg_config_defaults(
     env_file_vars: Dict[str, str] = {}
     env_sources: List[str] = []
 
-    # Try to read env files (docker/.env takes precedence)
-    for candidate in (repo_root / "docker" / ".env", repo_root / ".env"):
+    # Try to read env files (docker/.env takes precedence, so read it last)
+    for candidate in (repo_root / ".env", repo_root / "docker" / ".env"):
         file_vars = _read_env_file(candidate)
         if file_vars:
             env_file_vars.update(file_vars)
