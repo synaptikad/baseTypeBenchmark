@@ -18,19 +18,33 @@ Ce benchmark fournit des **mesures empiriques reproductibles** pour eclairer ce 
 
 **Premier benchmark batimentaire avec analyse parametrique cout-memoire:**
 
-- Protocole RAM-Gradient: test systematique de 8 a 128 Go par moteur
+- Protocole RAM-Gradient: test systematique de 512 Mo a 256 Go par moteur
 - Metriques d'efficience: performance / Go alloue
 - Formule de dimensionnement: `RAM_recommandee = RAM_min x 1.5`
 
 ### Pourquoi ce benchmark ?
 
-La transformation numerique des batiments conduit a des architectures orientees graphe, souvent en memoire. Mais:
+La transformation numerique des batiments conduit a des architectures orientees graphe, souvent in-memory. Mais le graphe batimentaire est-il suffisamment complexe pour justifier ce choix ?
 
-- **Cout economique**: Prix DRAM +170% YoY (T3 2025, TrendForce)
-- **Cout energetique**: 256 Go RAM = 25-40 W permanent = 220-350 kWh/an
-- **Ratio structure/temporel**: Les donnees batimentaires sont 1:1000 a 1:3000 (structure vs timeseries)
+**Complexite structurelle bornee**
 
-Les traversees graphe dans un SI batimentaire sont **bornees** (profondeur < 10). L'hypothese in-memory merite verification empirique.
+Les ontologies batimentaires (Brick, Haystack, RealEstateCore, Google DBO) definissent ~10 types de relations: containment (isPartOf), flux (feeds), spatial (serves), controle (controls), metering (isMeteredBy). Meme en modelisant un SI complet incluant usagers, mainteneurs, tickets, reservations et contrats (~25 types de relations), le graphe reste simple:
+
+| Metrique           | Batiment | Reseau social | Biologie (PPI) | PLM Aerospatial |
+|--------------------|----------|---------------|----------------|-----------------|
+| Degre moyen        | ~1       | 100+          | 50+            | 20+             |
+| Types de relations | ~25      | 50+           | 200+           | 100+            |
+| Profondeur max     | 6-8      | unbounded     | unbounded      | 30+             |
+
+Cette simplicite (pattern arborescent + references) suggere que les traversees sont realisables avec SQL recursif, sans necessiter un moteur graphe in-memory specialise.
+
+**Cout des architectures in-memory**
+
+- **Economique**: Prix DRAM +170% YoY (T3 2025, TrendForce)
+- **Energetique**: 256 Go RAM = 25-40 W permanent = 220-350 kWh/an
+- **Ecologique**: Empreinte carbone DRAM vs stockage SSD
+
+L'hypothese in-memory merite verification empirique avec mesures de latence, RAM et CPU.
 
 ---
 
@@ -316,8 +330,9 @@ Chaque fichier JSON contient :
 1. Project Haystack. https://project-haystack.org/
 2. Brick Schema. https://brickschema.org/
 3. RealEstateCore. https://realestatecore.io/
-4. TrendForce. DRAM Contract Prices. 2025.
-5. Berkeley Lab. United States Data Center Energy Usage Report. December 2024.
+4. Google Digital Buildings Ontology. https://google.github.io/digitalbuildings/
+5. TrendForce. DRAM Contract Prices. 2025.
+6. Berkeley Lab. United States Data Center Energy Usage Report. December 2024.
 
 ---
 
