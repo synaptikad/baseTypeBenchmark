@@ -2048,6 +2048,90 @@ def run_scenario_benchmark(scenario: str, export_dir: Path, profile: str = "smal
     return result
 
 
+def _ensure_timescaledb_timeseries(export_dir: Path, scenario: str) -> bool:
+    """Ensure TimescaleDB has timeseries data for hybrid scenarios (M2/O2).
+
+    Returns True if timeseries are already loaded or successfully loaded.
+    Returns False if loading failed.
+    """
+    from basetype_benchmark.loaders.postgres.load import get_connection
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # Check if timeseries table exists and has data
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'timeseries'
+            )
+        """)
+        table_exists = cur.fetchone()[0]
+
+        if table_exists:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            count = cur.fetchone()[0]
+            if count > 0:
+                print_info(f"TimescaleDB timeseries already loaded ({count:,} rows)")
+                cur.close()
+                conn.close()
+                return True
+
+        # Need to load timeseries - get the file
+        files = get_scenario_files(export_dir, scenario)
+        ts_file = files.get("timeseries")
+
+        if not ts_file or not ts_file.exists():
+            print_warn(f"Timeseries file not found: {ts_file}")
+            cur.close()
+            conn.close()
+            return False
+
+        # Create table if not exists
+        if not table_exists:
+            print_info("Creating timeseries table...")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS timeseries (
+                    time TIMESTAMPTZ NOT NULL,
+                    point_id TEXT NOT NULL,
+                    value DOUBLE PRECISION
+                )
+            """)
+            try:
+                cur.execute("SELECT create_hypertable('timeseries', 'time', if_not_exists => TRUE)")
+            except Exception:
+                pass
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
+            conn.commit()
+
+        # Load timeseries via COPY
+        ts_size_mb = ts_file.stat().st_size / (1024 * 1024)
+        print_info(f"Loading timeseries for {scenario} ({ts_size_mb:.0f} MB)...")
+        t0 = time.time()
+
+        with open(ts_file, 'r', encoding='utf-8') as f:
+            cur.copy_expert(
+                "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
+                f
+            )
+        conn.commit()
+
+        elapsed = time.time() - t0
+        cur.execute("SELECT COUNT(*) FROM timeseries")
+        ts_count = cur.fetchone()[0]
+        rate = ts_count / elapsed if elapsed > 0 else 0
+        print_ok(f"Loaded {ts_count:,} timeseries rows in {elapsed:.1f}s ({rate:.0f}/s)")
+
+        cur.close()
+        conn.close()
+        return True
+
+    except Exception as e:
+        print_err(f"Failed to ensure TimescaleDB timeseries: {e}")
+        return False
+
+
 def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
                             n_warmup: int = N_WARMUP, n_runs: int = N_RUNS,
                             profile: str = "small") -> Dict:
@@ -2847,6 +2931,11 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
         try:
             from basetype_benchmark.loaders.postgres.load import get_connection
             print_info("Connecting to TimescaleDB for hybrid queries...")
+
+            # Ensure timeseries data is loaded (idempotent)
+            if not _ensure_timescaledb_timeseries(export_dir, scenario):
+                print_warn("TimescaleDB timeseries not available - Q6 will fail")
+
             ts_conn = get_connection()
             # Reset memory.peak on TimescaleDB container too
             ts_cgroup = get_container_cgroup_path(ts_container)
@@ -3071,6 +3160,11 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
             try:
                 from basetype_benchmark.loaders.postgres.load import get_connection
                 print_info("Connecting to TimescaleDB for hybrid queries...")
+
+                # Ensure timeseries data is loaded (idempotent)
+                if not _ensure_timescaledb_timeseries(export_dir, scenario):
+                    print_warn("TimescaleDB timeseries not available - Q6 will fail")
+
                 ts_conn = get_connection()
                 # Reset memory.peak on TimescaleDB container too
                 ts_cgroup = get_container_cgroup_path(ts_container)
