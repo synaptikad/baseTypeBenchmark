@@ -2614,8 +2614,7 @@ def run_hybrid_query(
     Returns:
         Dict with latencies, stats, and breakdown (graph_ms, ts_ms)
     """
-    from basetype_benchmark.benchmark.protocols import PROTOCOL_CONFIG
-
+    # PROTOCOL_CONFIG is defined at module level (line ~1282)
     config = PROTOCOL_CONFIG.get(profile, PROTOCOL_CONFIG["small"])
     n_variants = config.get("n_variants", 3)
 
