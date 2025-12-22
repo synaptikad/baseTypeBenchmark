@@ -60,10 +60,11 @@ def clear_store(endpoint: str) -> None:
 
 
 def load_jsonld(endpoint: str, jsonld_path: Path) -> float:
+    """Load JSON-LD file into Oxigraph default graph."""
     payload = jsonld_path.read_bytes()
     t0 = time.perf_counter()
     response = requests.post(
-        f"{endpoint}/store", headers={"Content-Type": "application/ld+json"}, data=payload, timeout=300
+        f"{endpoint}/store?default", headers={"Content-Type": "application/ld+json"}, data=payload, timeout=300
     )
     # Accept 200, 201, 204 as success (201 = Created is valid for POST)
     if response.status_code not in [200, 201, 204]:
@@ -74,7 +75,7 @@ def load_jsonld(endpoint: str, jsonld_path: Path) -> float:
 
 
 def load_ntriples(endpoint: str, nt_path: Path, timeout: int = 600) -> float:
-    """Load N-Triples file into Oxigraph via HTTP POST.
+    """Load N-Triples file into Oxigraph via HTTP POST to default graph.
 
     Args:
         endpoint: Oxigraph HTTP endpoint (e.g., http://localhost:7878)
@@ -83,11 +84,15 @@ def load_ntriples(endpoint: str, nt_path: Path, timeout: int = 600) -> float:
 
     Returns:
         Elapsed time in seconds
+
+    Note:
+        Uses /store?default to load into the default graph.
+        Without ?default, POST creates a new named graph each time.
     """
     payload = nt_path.read_bytes()
     t0 = time.perf_counter()
     response = requests.post(
-        f"{endpoint}/store",
+        f"{endpoint}/store?default",
         headers={"Content-Type": "application/n-triples"},
         data=payload,
         timeout=timeout
@@ -139,7 +144,7 @@ def load_ntriples_streaming(endpoint: str, nt_path: Path, chunk_size: int = 10 *
             buffer = buffer[last_newline + 1:]
 
             response = requests.post(
-                f"{endpoint}/store",
+                f"{endpoint}/store?default",
                 headers={"Content-Type": "application/n-triples"},
                 data=to_send,
                 timeout=300
@@ -156,7 +161,7 @@ def load_ntriples_streaming(endpoint: str, nt_path: Path, chunk_size: int = 10 *
         # Send remaining buffer
         if buffer:
             response = requests.post(
-                f"{endpoint}/store",
+                f"{endpoint}/store?default",
                 headers={"Content-Type": "application/n-triples"},
                 data=buffer,
                 timeout=300
