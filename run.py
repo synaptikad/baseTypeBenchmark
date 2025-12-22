@@ -1707,11 +1707,103 @@ def print_benchmark_summary(scenario: str, result: Dict) -> None:
     print(f"    {BOLD}{'─' * 60}{RESET}\n")
 
 
+def _extract_oxigraph_dataset_info(endpoint: str = "http://localhost:7878") -> Dict:
+    """Extract dataset info from Oxigraph via SPARQL.
+
+    For O1/O2 scenarios, we query the loaded RDF data directly since
+    there's no CSV nodes file.
+
+    Args:
+        endpoint: Oxigraph HTTP endpoint
+
+    Returns:
+        Dict with lists of available IDs by type
+    """
+    import requests
+
+    info = {
+        "meters": [],
+        "equipment": [],
+        "spaces": [],
+        "floors": [],
+        "buildings": [],
+        "tenants": [],
+        "zones": [],
+        "points": [],
+        "ts_end": int(time.time()),
+    }
+
+    # SPARQL query to get node types and IDs
+    # Uses btb: prefix aligned with export and queries
+    query = """
+    PREFIX btb: <http://basetype.benchmark/ontology#>
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+    SELECT ?id ?type WHERE {
+        ?id rdf:type ?type .
+        FILTER(STRSTARTS(STR(?type), "http://basetype.benchmark/ontology#"))
+    }
+    LIMIT 5000
+    """
+
+    try:
+        resp = requests.get(
+            f"{endpoint}/query",
+            params={"query": query},
+            headers={"Accept": "application/sparql-results+json"},
+            timeout=30
+        )
+        if resp.status_code != 200:
+            print_warn(f"SPARQL query failed: {resp.status_code}")
+            return info
+
+        data = resp.json()
+        bindings = data.get("results", {}).get("bindings", [])
+
+        for binding in bindings:
+            node_id = binding.get("id", {}).get("value", "")
+            node_type = binding.get("type", {}).get("value", "").lower()
+
+            # Extract local name from URI (e.g., .../Brick#Equipment -> equipment)
+            if "#" in node_type:
+                node_type = node_type.split("#")[-1].lower()
+
+            if "meter" in node_type:
+                info["meters"].append(node_id)
+            elif node_type in ("equipment",) or "ahu" in node_type or "vav" in node_type or "fcu" in node_type:
+                info["equipment"].append(node_id)
+            elif "space" in node_type or "room" in node_type:
+                info["spaces"].append(node_id)
+            elif "floor" in node_type:
+                info["floors"].append(node_id)
+            elif "building" in node_type:
+                info["buildings"].append(node_id)
+            elif "tenant" in node_type or "organization" in node_type:
+                info["tenants"].append(node_id)
+            elif "zone" in node_type:
+                info["zones"].append(node_id)
+            elif "point" in node_type or "sensor" in node_type:
+                info["points"].append(node_id)
+
+        # Limit to avoid too many options
+        for key in info:
+            if isinstance(info[key], list) and len(info[key]) > 100:
+                info[key] = info[key][:100]
+
+    except Exception as e:
+        print_warn(f"Error extracting Oxigraph dataset info: {e}")
+
+    return info
+
+
 def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
     """Extract available IDs from dataset for query parameterization.
 
     Reads the nodes file to extract meters, equipment, spaces, floors, etc.
     for generating query variants with realistic parameters.
+
+    For O1/O2 scenarios, queries Oxigraph directly via SPARQL since
+    there's no CSV nodes file.
 
     Args:
         export_dir: Base export directory
@@ -1721,6 +1813,10 @@ def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
         Dict with lists of available IDs by type
     """
     import csv
+
+    # O1/O2: Query Oxigraph directly (no CSV nodes file)
+    if scenario.upper() in ("O1", "O2"):
+        return _extract_oxigraph_dataset_info()
 
     files = get_scenario_files(export_dir, scenario)
     nodes_file = files.get("nodes")

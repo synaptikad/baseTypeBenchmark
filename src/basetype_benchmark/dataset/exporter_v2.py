@@ -523,45 +523,46 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
     nodes_df = pd.read_parquet(parquet_dir / "nodes.parquet")
     edges_df = pd.read_parquet(parquet_dir / "edges.parquet")
 
-    # Prefixes
+    # Prefixes - aligned with SPARQL queries in queries/o1/ and queries/o2/
+    # Queries use: PREFIX btb: <http://basetype.benchmark/ontology#>
     prefixes = {
         "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
         "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-        "brick": "https://brickschema.org/schema/Brick#",
-        "btb": "http://basetype-benchmark.org/",
+        "btb": "http://basetype.benchmark/ontology#",  # Aligned with SPARQL queries
         "xsd": "http://www.w3.org/2001/XMLSchema#",
     }
 
-    # Type mappings
+    # Type mappings - all use btb: prefix to match queries
     type_mapping = {
-        "Site": "brick:Site",
-        "Building": "brick:Building",
-        "Floor": "brick:Floor",
-        "Space": "brick:Space",
-        "Equipment": "brick:Equipment",
-        "Point": "brick:Point",
+        "Site": "btb:Site",
+        "Building": "btb:Building",
+        "Floor": "btb:Floor",
+        "Space": "btb:Space",
+        "Equipment": "btb:Equipment",
+        "Point": "btb:Point",
         "Tenant": "btb:Tenant",
     }
 
-    # Relation mappings
+    # Relation mappings - use btb: to match queries (btb:feeds, btb:contains, etc.)
     rel_mapping = {
-        "CONTAINS": "brick:hasPart",
-        "LOCATED_IN": "brick:isLocationOf",
-        "HAS_POINT": "brick:hasPoint",
-        "FEEDS": "brick:feeds",
+        "CONTAINS": "btb:contains",
+        "LOCATED_IN": "btb:locatedIn",
+        "HAS_POINT": "btb:hasPoint",
+        "FEEDS": "btb:feeds",
         "SERVES": "btb:serves",
-        "HAS_PART": "brick:hasPart",
+        "HAS_PART": "btb:hasPart",
         "OCCUPIES": "btb:occupies",
     }
 
     triples = []
 
     def uri(id_str: str) -> str:
-        # Sanitize IRI: replace invalid characters (space, backtick, quotes, brackets, etc.)
-        # Keep only alphanumeric, underscore, hyphen, dot, colon
+        # Node URIs use base URI that matches SPARQL query expectations
+        # Queries use: BIND(<http://basetype.benchmark/$METER_ID> AS ?meter)
+        # Sanitize IRI: replace invalid characters
         import re
         sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
-        return f"<urn:{sanitized}>"
+        return f"<http://basetype.benchmark/{sanitized}>"
 
     def literal(value: str, datatype: str = None) -> str:
         escaped = value.replace('"', '\\"').replace('\n', '\\n')
@@ -569,23 +570,35 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
             return f'"{escaped}"^^<{prefixes["xsd"]}{datatype}>'
         return f'"{escaped}"'
 
+    # Helper to expand prefix
+    def expand_prefix(prefixed: str) -> str:
+        """Expand btb:Something to full URI."""
+        if prefixed.startswith("btb:"):
+            return prefixes["btb"] + prefixed[4:]
+        return prefixed  # Unknown prefix, return as-is
+
     # Export nodes
     for _, row in nodes_df.iterrows():
         node_uri = uri(row["id"])
         node_type = type_mapping.get(row["type"], f"btb:{row['type']}")
 
         # Type triple
-        triples.append(f'{node_uri} <{prefixes["rdf"]}type> <{node_type.replace("brick:", prefixes["brick"]).replace("btb:", prefixes["btb"])}> .')
+        triples.append(f'{node_uri} <{prefixes["rdf"]}type> <{expand_prefix(node_type)}> .')
 
-        # Label
+        # ID property (btb:id) - queries use this for filtering
+        triples.append(f'{node_uri} <{prefixes["btb"]}id> {literal(row["id"])} .')
+
+        # Name property (btb:name) - queries use this, not rdfs:label
         name = row.get("name", "")
         if name:
+            triples.append(f'{node_uri} <{prefixes["btb"]}name> {literal(name)} .')
+            # Also keep rdfs:label for compatibility
             triples.append(f'{node_uri} <{prefixes["rdfs"]}label> {literal(name)} .')
 
-        # Properties
+        # Properties from JSON column
         props = json.loads(row["properties"]) if row["properties"] else {}
         for key, value in props.items():
-            if key in ("name",):
+            if key in ("name", "id"):  # Already handled above
                 continue
             if isinstance(value, str) and value:
                 triples.append(f'{node_uri} <{prefixes["btb"]}{key}> {literal(value)} .')
@@ -595,7 +608,7 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
         src_uri = uri(row["src_id"])
         dst_uri = uri(row["dst_id"])
         rel = rel_mapping.get(row["rel_type"], f"btb:{row['rel_type'].lower()}")
-        rel_uri = rel.replace("brick:", prefixes["brick"]).replace("btb:", prefixes["btb"])
+        rel_uri = expand_prefix(rel)
         triples.append(f'{src_uri} <{rel_uri}> {dst_uri} .')
 
     # Write to file
@@ -637,12 +650,17 @@ def export_oxigraph_chunks_ntriples(
     start_time = time.time()
     chunk_count = 0
 
-    def uri(id_str: str) -> str:
-        # Sanitize IRI: replace invalid characters (space, backtick, quotes, brackets, etc.)
-        # Keep only alphanumeric, underscore, hyphen, dot, colon
+    def node_uri(id_str: str) -> str:
+        # Node URIs must match graph.nt URIs for JOIN via hasChunk relation
         import re
         sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
-        return f"<urn:{sanitized}>"
+        return f"<http://basetype.benchmark/{sanitized}>"
+
+    def chunk_uri(id_str: str) -> str:
+        # Chunk URIs can use urn: scheme (only accessed via hasChunk)
+        import re
+        sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
+        return f"<urn:chunk:{sanitized}>"
 
     def literal(value, datatype: str) -> str:
         return f'"{value}"^^<{prefixes["xsd"]}{datatype}>'
@@ -652,16 +670,16 @@ def export_oxigraph_chunks_ntriples(
         samples = list(zip(group["timestamp"], group["value"]))
         samples.sort(key=lambda x: x[0])
 
-        point_uri = uri(point_id)
+        point_ref = node_uri(point_id)
 
         for chunk in generate_daily_chunks(point_id, samples):
             # Use date_day in URI instead of numeric index
-            chunk_uri = uri(f"chunk_{point_id}_{chunk.date_day}")
+            chunk_ref = chunk_uri(f"{point_id}_{chunk.date_day}")
 
-            triples.append(f'{point_uri} <{prefixes["ts"]}hasChunk> {chunk_uri} .')
-            triples.append(f'{chunk_uri} <{prefixes["ts"]}dateDay> {literal(chunk.date_day, "date")} .')
-            triples.append(f'{chunk_uri} <{prefixes["ts"]}timestamps> {literal(json.dumps(chunk.timestamps), "string")} .')
-            triples.append(f'{chunk_uri} <{prefixes["ts"]}values> {literal(json.dumps(chunk.values), "string")} .')
+            triples.append(f'{point_ref} <{prefixes["ts"]}hasChunk> {chunk_ref} .')
+            triples.append(f'{chunk_ref} <{prefixes["ts"]}dateDay> {literal(chunk.date_day, "date")} .')
+            triples.append(f'{chunk_ref} <{prefixes["ts"]}timestamps> {literal(json.dumps(chunk.timestamps), "string")} .')
+            triples.append(f'{chunk_ref} <{prefixes["ts"]}values> {literal(json.dumps(chunk.values), "string")} .')
             chunk_count += 1
 
         _print_progress(i, total_points, "          Points", start_time, every_n=500)
@@ -696,12 +714,17 @@ def export_oxigraph_aggregates_ntriples(
 
     triples = []
 
-    def uri(id_str: str) -> str:
-        # Sanitize IRI: replace invalid characters (space, backtick, quotes, brackets, etc.)
-        # Keep only alphanumeric, underscore, hyphen, dot, colon
+    def node_uri(id_str: str) -> str:
+        # Node URIs must match graph.nt for JOIN via hasDailyAgg
         import re
         sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
-        return f"<urn:{sanitized}>"
+        return f"<http://basetype.benchmark/{sanitized}>"
+
+    def agg_uri(id_str: str) -> str:
+        # Aggregate URIs can use urn: scheme
+        import re
+        sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
+        return f"<urn:agg:{sanitized}>"
 
     def literal(value, datatype: str) -> str:
         return f'"{value}"^^<{prefixes["xsd"]}{datatype}>'
@@ -710,17 +733,17 @@ def export_oxigraph_aggregates_ntriples(
     for point_id, group in ts_df.groupby("point_id"):
         samples = list(zip(group["timestamp"], group["value"]))
 
-        point_uri = uri(point_id)
+        point_ref = node_uri(point_id)
 
         for agg in generate_daily_aggregates(point_id, samples):
-            agg_uri = uri(f"agg_{point_id}_{agg.date.replace('-', '')}")
+            agg_ref = agg_uri(f"{point_id}_{agg.date.replace('-', '')}")
 
-            triples.append(f'{point_uri} <{prefixes["ts"]}hasDailyAgg> {agg_uri} .')
-            triples.append(f'{agg_uri} <{prefixes["ts"]}date> {literal(agg.date, "date")} .')
-            triples.append(f'{agg_uri} <{prefixes["ts"]}avg> {literal(agg.avg, "float")} .')
-            triples.append(f'{agg_uri} <{prefixes["ts"]}min> {literal(agg.min_val, "float")} .')
-            triples.append(f'{agg_uri} <{prefixes["ts"]}max> {literal(agg.max_val, "float")} .')
-            triples.append(f'{agg_uri} <{prefixes["ts"]}count> {literal(agg.count, "integer")} .')
+            triples.append(f'{point_ref} <{prefixes["ts"]}hasDailyAgg> {agg_ref} .')
+            triples.append(f'{agg_ref} <{prefixes["ts"]}date> {literal(agg.date, "date")} .')
+            triples.append(f'{agg_ref} <{prefixes["ts"]}avg> {literal(agg.avg, "float")} .')
+            triples.append(f'{agg_ref} <{prefixes["ts"]}min> {literal(agg.min_val, "float")} .')
+            triples.append(f'{agg_ref} <{prefixes["ts"]}max> {literal(agg.max_val, "float")} .')
+            triples.append(f'{agg_ref} <{prefixes["ts"]}count> {literal(agg.count, "integer")} .')
 
     # Write to file
     with open(output_dir / "aggregates.nt", "w", encoding="utf-8") as f:
