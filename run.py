@@ -1733,87 +1733,69 @@ def _extract_oxigraph_dataset_info(endpoint: str = "http://localhost:7878") -> D
         "ts_end": int(time.time()),
     }
 
-    # SPARQL query to get node types and IDs
-    # Uses btb: prefix aligned with export and queries
-    query = """
-    PREFIX btb: <http://basetype.benchmark/ontology#>
-    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-
-    SELECT ?id ?type WHERE {
-        ?id rdf:type ?type .
-        FILTER(STRSTARTS(STR(?type), "http://basetype.benchmark/ontology#"))
+    # SPARQL queries to get balanced samples of each node type
+    # We query each type separately to avoid Point nodes dominating
+    type_queries = {
+        "equipment": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Equipment } LIMIT 100
+        """,
+        "spaces": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Space } LIMIT 100
+        """,
+        "floors": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Floor } LIMIT 50
+        """,
+        "buildings": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Building } LIMIT 20
+        """,
+        "tenants": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Tenant } LIMIT 20
+        """,
+        "points": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Point } LIMIT 100
+        """,
+        "meters": """
+            PREFIX btb: <http://basetype.benchmark/ontology#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?id WHERE { ?id rdf:type btb:Meter } LIMIT 50
+        """,
     }
-    LIMIT 5000
-    """
 
     try:
-        resp = requests.get(
-            f"{endpoint}/query",
-            params={"query": query},
-            headers={"Accept": "application/sparql-results+json"},
-            timeout=30
-        )
-        if resp.status_code != 200:
-            print_warn(f"SPARQL query failed: {resp.status_code}")
-            return info
-
-        data = resp.json()
-        bindings = data.get("results", {}).get("bindings", [])
-
-        # Debug: show sample of what we found
-        if bindings:
-            sample = bindings[:3]
-            print_info(f"SPARQL found {len(bindings)} typed nodes (sample: {sample})")
-        else:
-            print_warn("SPARQL query returned 0 bindings - checking data...")
-            # Debug query to see what types exist
-            debug_query = """
-            SELECT DISTINCT ?type (COUNT(?s) AS ?count) WHERE {
-                ?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type .
-            }
-            GROUP BY ?type
-            LIMIT 20
-            """
-            debug_resp = requests.get(
+        # Query each type separately for balanced sampling
+        for info_key, query in type_queries.items():
+            resp = requests.get(
                 f"{endpoint}/query",
-                params={"query": debug_query},
+                params={"query": query},
                 headers={"Accept": "application/sparql-results+json"},
                 timeout=30
             )
-            if debug_resp.status_code == 200:
-                debug_data = debug_resp.json()
-                debug_bindings = debug_data.get("results", {}).get("bindings", [])
-                print_info(f"Types in store: {debug_bindings}")
+            if resp.status_code != 200:
+                continue
 
-        for binding in bindings:
-            node_id = binding.get("id", {}).get("value", "")
-            node_type = binding.get("type", {}).get("value", "").lower()
+            data = resp.json()
+            bindings = data.get("results", {}).get("bindings", [])
 
-            # Extract local name from URI (e.g., .../Brick#Equipment -> equipment)
-            if "#" in node_type:
-                node_type = node_type.split("#")[-1].lower()
+            for binding in bindings:
+                node_id = binding.get("id", {}).get("value", "")
+                if node_id:
+                    info[info_key].append(node_id)
 
-            if "meter" in node_type:
-                info["meters"].append(node_id)
-            elif node_type in ("equipment",) or "ahu" in node_type or "vav" in node_type or "fcu" in node_type:
-                info["equipment"].append(node_id)
-            elif "space" in node_type or "room" in node_type:
-                info["spaces"].append(node_id)
-            elif "floor" in node_type:
-                info["floors"].append(node_id)
-            elif "building" in node_type:
-                info["buildings"].append(node_id)
-            elif "tenant" in node_type or "organization" in node_type:
-                info["tenants"].append(node_id)
-            elif "zone" in node_type:
-                info["zones"].append(node_id)
-            elif "point" in node_type or "sensor" in node_type:
-                info["points"].append(node_id)
-
-        # Limit to avoid too many options
-        for key in info:
-            if isinstance(info[key], list) and len(info[key]) > 100:
-                info[key] = info[key][:100]
+        # Log what we found
+        counts = {k: len(v) for k, v in info.items() if isinstance(v, list)}
+        print_info(f"Dataset info from SPARQL: {counts}")
 
     except Exception as e:
         print_warn(f"Error extracting Oxigraph dataset info: {e}")
