@@ -2361,7 +2361,8 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
     # CSV format from exporter_v2: point_id, time, value
     ts_file = files["timeseries"]
     if ts_file.exists():
-        print(f"      Loading timeseries (COPY)...", end="", flush=True)
+        ts_size_mb = ts_file.stat().st_size / (1024 * 1024)
+        print(f"      Loading timeseries ({ts_size_mb:.0f} MB, COPY in progress)...", end="", flush=True)
         t0 = time.time()
         with open(ts_file, 'r', encoding='utf-8') as f:
             cur.copy_expert(
