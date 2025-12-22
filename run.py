@@ -401,11 +401,113 @@ def get_scenario_files(export_dir: Path, scenario: str) -> dict:
 # =============================================================================
 
 def workflow_dataset():
-    """Dataset generation workflow."""
+    """Dataset generation workflow.
+
+    Flow:
+    1. Choose source: HuggingFace (default) or local generation
+    2. If HuggingFace: list available datasets -> choose -> import
+    3. If local generation: choose scale -> duration -> seed -> generate
+    """
     print_header("DATASET GENERATION")
 
-    # Step 1: Choose scale
-    print(f"{BOLD}Step 1: Choose graph scale (number of measurement points){RESET}\n")
+    # Step 1: Choose source
+    print(f"{BOLD}Step 1: Choose data source{RESET}\n")
+    print(f"  1. {BOLD}HuggingFace Hub{RESET} (recommended for reproducibility)")
+    print(f"     {DIM}Download pre-generated dataset with verified fingerprint{RESET}\n")
+    print(f"  2. {BOLD}Generate locally{RESET}")
+    print(f"     {DIM}Generate dataset using deterministic seed (slower){RESET}\n")
+    print(f"  0. Back\n")
+
+    source_choice = prompt("Select source", "1")
+    if source_choice == "0":
+        return
+
+    use_huggingface = source_choice == "1"
+
+    if use_huggingface:
+        # HuggingFace flow: list available -> choose -> import
+        _workflow_dataset_huggingface()
+    else:
+        # Local generation flow: scale -> duration -> seed -> generate
+        _workflow_dataset_generate()
+
+    input("\nPress Enter...")
+
+
+def _workflow_dataset_huggingface():
+    """HuggingFace import sub-workflow."""
+    print_header("HUGGINGFACE IMPORT")
+
+    # Try to list available datasets
+    try:
+        from huggingface_hub import list_repo_files
+    except ImportError:
+        print_err("huggingface_hub not installed")
+        print_info("Install with: pip install huggingface_hub")
+        print_info("Or use local generation instead (option 2)")
+        return
+
+    print_info(f"Checking HuggingFace repository: {HF_DATASET_REPO}")
+
+    try:
+        files = list_repo_files(HF_DATASET_REPO, repo_type="dataset")
+        # Filter for dataset files (*.pkl.gz pattern)
+        dataset_files = [f for f in files if f.endswith("_seed42.pkl.gz")]
+
+        if not dataset_files:
+            print_warn("No datasets available on HuggingFace yet")
+            print_info("Use local generation instead (option 2)")
+            return
+
+        # Parse available profiles
+        available_profiles = []
+        for f in dataset_files:
+            # Extract profile from filename like "small-1w_seed42.pkl.gz"
+            profile = f.replace("_seed42.pkl.gz", "")
+            available_profiles.append(profile)
+
+        print(f"\n{BOLD}Available datasets on HuggingFace:{RESET}\n")
+        for i, profile in enumerate(available_profiles, 1):
+            size = SIZE_ESTIMATES.get(profile, "?")
+            status = f"{GREEN}[already downloaded]{RESET}" if check_dataset(profile) else ""
+            print(f"  {i}. {profile:12} (~{size} GB)  {status}")
+
+        print(f"\n  0. Back (use local generation)\n")
+
+        choice = prompt("Select dataset", "1")
+        if choice == "0":
+            return
+
+        try:
+            idx = int(choice) - 1
+            if not (0 <= idx < len(available_profiles)):
+                raise ValueError()
+            profile = available_profiles[idx]
+        except ValueError:
+            print_err("Invalid choice")
+            return
+
+        # Confirm and download
+        if check_dataset(profile):
+            print(f"\n{YELLOW}Dataset already exists locally.{RESET}")
+            if not prompt_yes_no("Re-download and overwrite?", False):
+                return
+
+        seed = 42  # HuggingFace datasets use seed=42
+        print_header(f"DOWNLOADING {profile} FROM HUGGINGFACE")
+        download_from_huggingface(profile, seed)
+
+    except Exception as e:
+        print_err(f"Failed to access HuggingFace: {e}")
+        print_info("Use local generation instead (option 2)")
+
+
+def _workflow_dataset_generate():
+    """Local generation sub-workflow."""
+    print_header("LOCAL GENERATION")
+
+    # Step 2a: Choose scale
+    print(f"{BOLD}Step 2a: Choose graph scale{RESET}\n")
     print("The scale determines the size of the building/campus model:\n")
 
     scale_list = list(SCALES.keys())
@@ -428,9 +530,9 @@ def workflow_dataset():
         print_err("Invalid choice")
         return
 
-    # Step 2: Choose duration
+    # Step 2b: Choose duration
     print_header("TIMESERIES DURATION")
-    print(f"{BOLD}Step 2: Choose timeseries duration{RESET}\n")
+    print(f"{BOLD}Step 2b: Choose timeseries duration{RESET}\n")
     print("The duration determines how much historical data is generated.")
     print("Longer durations = more timeseries samples = larger dataset.\n")
 
@@ -472,58 +574,33 @@ def workflow_dataset():
         if not prompt_yes_no("Regenerate?", False):
             return
 
-    # Choose source
-    print_header("DATA SOURCE")
-    print("Choose how to obtain the dataset:\n")
-    print(f"  1. {BOLD}Generate locally{RESET} (deterministic, uses seed)")
-    print(f"     {DIM}Generates dataset and exports to CSV files on disk{RESET}\n")
-    print(f"  2. {BOLD}Download from HuggingFace{RESET} (exact reproduction)")
-    print(f"     {DIM}Downloads pre-generated dataset for academic reproducibility{RESET}\n")
-    print(f"  0. Back\n")
-
-    source_choice = prompt("Select source", "1")
-    if source_choice == "0":
-        return
-
-    use_huggingface = source_choice == "2"
-
     seed = prompt("\nSeed (for reproducibility)", "42")
 
-    action = "Download" if use_huggingface else "Generate"
-    if not prompt_yes_no(f"\n{action} {profile}?"):
+    if not prompt_yes_no(f"\nGenerate {profile}?"):
         return
 
-    # Generate or download
-    if use_huggingface:
-        print_header(f"DOWNLOADING {profile} FROM HUGGINGFACE")
-        try:
-            download_from_huggingface(profile, int(seed))
-        except Exception as e:
-            print_err(f"Download failed: {e}")
-    else:
-        print_header(f"GENERATING {profile}")
-        try:
-            from basetype_benchmark.dataset.dataset_manager import DatasetManager
+    # Generate
+    print_header(f"GENERATING {profile}")
+    try:
+        from basetype_benchmark.dataset.dataset_manager import DatasetManager
 
-            manager = DatasetManager()
-            # Génère via V2 (generator_v2 + exporter_v2) et exporte 6 formats
-            export_path, summary, fingerprint = manager.generate_and_export(profile, int(seed))
-            print()
-            print_ok(f"Dataset ready at: {export_path}")
-            print_info(f"Fingerprint: {fingerprint['struct_hash'][:8]}...{fingerprint.get('ts_hash', 'N/A')[:8] if fingerprint.get('ts_hash') else 'N/A'}")
+        manager = DatasetManager()
+        # Génère via V2 (generator_v2 + exporter_v2) et exporte 6 formats
+        export_path, summary, fingerprint = manager.generate_and_export(profile, int(seed))
+        print()
+        print_ok(f"Dataset ready at: {export_path}")
+        print_info(f"Fingerprint: {fingerprint['struct_hash'][:8]}...{fingerprint.get('ts_hash', 'N/A')[:8] if fingerprint.get('ts_hash') else 'N/A'}")
 
-        except ImportError as e:
-            print_err(f"Import error: {e}")
-            print_info("Try: pip install -e . && pip install -r requirements.txt")
-        except KeyboardInterrupt:
-            print()
-            print_warn("Generation interrupted by user")
-        except Exception as e:
-            import traceback
-            print_err(f"Generation failed: {e}")
-            traceback.print_exc()
-
-    input("\nPress Enter...")
+    except ImportError as e:
+        print_err(f"Import error: {e}")
+        print_info("Try: pip install -e . && pip install -r requirements.txt")
+    except KeyboardInterrupt:
+        print()
+        print_warn("Generation interrupted by user")
+    except Exception as e:
+        import traceback
+        print_err(f"Generation failed: {e}")
+        traceback.print_exc()
 
 
 # =============================================================================

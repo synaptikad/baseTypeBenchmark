@@ -127,11 +127,10 @@ Select [2]:
 
 Option **2. Generate Dataset** :
 
-1. Choisir la source : Generation locale ou HuggingFace Hub
-2. Selectionner le profil "master" (ex: `large-1y`)
-3. Le generateur cree tous les formats (CSV, JSON, N-Triples)
-
-Les sous-profils (ex: `small-1w` depuis `large-1y`) sont extraits automatiquement pendant le benchmark.
+1. Choisir la source: HuggingFace Hub (defaut) ou generation locale
+2. Si source externe disponible: importer (choix scale/duree selon disponibilite)
+3. Sinon: generer localement (choix scale, duree, seed)
+4. Le generateur cree le graphe, l'exporteur produit le Parquet (format pivot) puis les 6 formats cibles (P1, P2, M1, M2, O1, O2)
 
 ### Execution du benchmark
 
