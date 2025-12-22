@@ -8,36 +8,29 @@ Benchmark comparatif des paradigmes de stockage pour les systemes d'information 
 
 ---
 
-## Contexte et motivation
+## Question de recherche
 
-### Transformation numerique des batiments
+> **Un graphe in-memory est-il justifie pour les systemes d'information batimentaires ?**
 
-La transformation numerique des batiments implique la consolidation progressive des donnees issues des systemes de gestion technique (GTB), du suivi energetique et de l'occupation. La generalisation des jumeaux numeriques et des graphes de connaissances conduit a des architectures orientees graphe, souvent maintenues entierement en memoire pour maximiser la reactivite. Cette approche augmente les couts d'infrastructure a mesure que le nombre de points de mesure et le volume d'evenements croissent.
+Ce benchmark fournit des **mesures empiriques reproductibles** pour eclairer ce choix architectural. Contrairement aux benchmarks existants (LDBC, gMark), il introduit la **RAM comme variable experimentale** et cible specifiquement le domaine batimentaire.
 
-### Contexte economique 2024-2025
+### Contribution principale
 
-Le marche de la memoire connait une tension structurelle :
+**Premier benchmark batimentaire avec analyse parametrique cout-memoire:**
 
-- Prix contractuels DRAM en hausse de plus de 170% en glissement annuel au T3 2025 (TrendForce)
-- Modules DDR5 64 Go RDIMM : doublement des prix prevu fin 2026 par rapport a debut 2025 (Counterpoint Research)
-- Reorientation de la production vers la memoire haute bande passante (HBM) pour les accelerateurs IA
-- Nouvelles capacites de production attendues en 2027-2028
+- Protocole RAM-Gradient: test systematique de 8 a 128 Go par moteur
+- Metriques d'efficience: performance / Go alloue
+- Formule de dimensionnement: `RAM_recommandee = RAM_min x 1.5`
 
-### Contexte energetique
+### Pourquoi ce benchmark ?
 
-La RAM consomme de l'energie en permanence, independamment de la charge :
+La transformation numerique des batiments conduit a des architectures orientees graphe, souvent en memoire. Mais:
 
-- Un module DIMM DDR4/DDR5 consomme typiquement 3-5 W en continu (rafraichissement cellulaire)
-- Un serveur avec 256 Go de RAM consomme 25-40 W uniquement pour maintenir la memoire active, soit 220-350 kWh par an
-- Les datacenters americains representaient 4,4% de la consommation electrique en 2023, avec des projections de 6,7-12% d'ici 2028 (Berkeley Lab, decembre 2024)
+- **Cout economique**: Prix DRAM +170% YoY (T3 2025, TrendForce)
+- **Cout energetique**: 256 Go RAM = 25-40 W permanent = 220-350 kWh/an
+- **Ratio structure/temporel**: Les donnees batimentaires sont 1:1000 a 1:3000 (structure vs timeseries)
 
-Par comparaison, un SSD NVMe consomme principalement pendant les operations d'E/S et reste quasi passif au repos.
-
-### Question centrale
-
-**Un graphe in-memory est-il justifie pour les systemes d'information batimentaires ?**
-
-Ce benchmark fournit des mesures empiriques pour eclairer ce choix architectural, dans une perspective d'ecologie de conception et d'efficience des ressources.
+Les traversees graphe dans un SI batimentaire sont **bornees** (profondeur < 10). L'hypothese in-memory merite verification empirique.
 
 ---
 
@@ -240,32 +233,37 @@ Pour chaque combinaison (profil, scenario, RAM) :
 
 ```
 BaseTypeBenchmark/
-├── run.py                      # Point d'entree principal (menu interactif)
+├── run.py                      # Menu interactif principal
+├── scripts/
+│   └── smoke_benchmark.py      # Execution non-interactive (CI/cloud)
 ├── config/
 │   ├── profiles/               # small.yaml, medium.yaml, large.yaml
-│   ├── space_types.yaml        # Types d'espaces et domaines
-│   └── equipment_distribution.yaml
+│   └── space_types.yaml        # Types d'espaces et domaines
 ├── docker/
 │   ├── docker-compose.yml      # TimescaleDB, Memgraph, Oxigraph
-│   └── .env
+│   └── .env                    # Credentials (copier depuis config/benchmark.env)
 ├── queries/
-│   ├── sql/                    # Q1-Q13 pour PostgreSQL
-│   ├── cypher/                 # Q1-Q13 pour Memgraph
-│   └── sparql/                 # Q1-Q13 pour Oxigraph
+│   ├── p1_p2/                  # SQL PostgreSQL (Q1-Q13)
+│   ├── m1/                     # Cypher standalone avec chunks
+│   ├── m2/graph/ + m2/ts/      # Cypher + SQL federation
+│   ├── o1/                     # SPARQL standalone avec chunks
+│   └── o2/graph/ + o2/ts/      # SPARQL + SQL federation
 ├── src/basetype_benchmark/
-│   ├── dataset/                # Generation et export
-│   │   ├── generator_v2.py     # Generateur synthetique
-│   │   ├── exporter_v2.py      # Export multi-format
-│   │   └── huggingface.py      # Integration HuggingFace
-│   ├── benchmark/              # Monitoring et metriques
-│   │   ├── resource_monitor.py # CPU, RAM, I/O, energie
-│   │   └── checkpoint.py       # Reprise apres interruption
+│   ├── dataset/
+│   │   ├── generator_v2.py     # Generateur synthetique (seed=42)
+│   │   ├── exporter_v2.py      # Export Parquet → CSV/N-Triples
+│   │   └── dataset_manager.py  # Workflow lazy export/prune
+│   ├── benchmark/
+│   │   └── resource_monitor.py # cgroup v2, RAM peak, CPU
 │   └── loaders/                # Chargement par moteur
-│       ├── postgres/
-│       ├── memgraph/
-│       └── oxigraph/
-├── deploy/                     # Scripts deploiement OVH
-└── docs_private/               # Article academique
+│       ├── postgres/load.py
+│       ├── memgraph/load.py
+│       └── oxigraph/load.py
+├── docs/
+│   ├── REFACTORING_CONSOLIDATED.md  # Architecture et roadmap
+│   └── B3_RUNBOOK.md                # Deploiement OVH
+├── deploy/                     # Scripts cloud
+└── benchmark_results/          # Resultats JSON
 ```
 
 ---
@@ -323,6 +321,100 @@ Chaque fichier JSON contient :
 
 ---
 
+## Reproduire l'experience
+
+### Execution complete
+
+```bash
+# Lancer le menu interactif
+python run.py
+
+# → Option 2: Generate Dataset (choisir profil, ex: small-1m)
+# → Option 3: Run Benchmark → F (Full Campaign)
+```
+
+Le benchmark execute automatiquement:
+- Generation du dataset (ou telechargement HuggingFace)
+- Test de chaque scenario (P1, P2, M1, M2, O1, O2)
+- Variation RAM (8, 16, 32, 64, 128 Go)
+- 13 requetes avec warmup et mesures repetees
+
+### Resultats attendus
+
+Apres execution, le dossier `benchmark_results/` contient:
+- Latences par requete (p50, p95)
+- RAM utilisee (steady-state, peak)
+- Statut OOM par configuration
+- Matrices RAM × Moteur pour analyse comparative
+
+---
+
+## Etendre le benchmark
+
+### Ajouter un nouveau moteur
+
+Ce benchmark est concu pour etre etendu. Pour ajouter un moteur (Neo4j, NebulaGraph, Stardog, etc.):
+
+1. **Fork** ce repository
+2. **Ajouter le container** dans `docker/docker-compose.yml`
+3. **Creer le loader** dans `src/basetype_benchmark/loaders/votre_moteur/`
+4. **Adapter les requetes** dans `queries/votre_scenario/`
+5. **Declarer le scenario** dans `run.py` (dict `SCENARIOS`)
+
+### Structure des requetes
+
+```
+queries/
+├── p1_p2/           # SQL PostgreSQL (P1 et P2 partagent)
+├── m1/              # Cypher Memgraph standalone (avec chunks)
+├── m2/
+│   ├── graph/       # Cypher pour la partie graphe
+│   └── ts/          # SQL pour la partie TimescaleDB
+├── o1/              # SPARQL Oxigraph standalone (avec chunks)
+└── o2/
+    ├── graph/       # SPARQL pour la partie graphe
+    └── ts/          # SQL pour la partie TimescaleDB
+```
+
+### Tester votre propre moteur BOS
+
+Editeurs de jumeaux numeriques, solutions BOS (Spinal, ProptechOS, etc.):
+
+1. Exporter le dataset Parquet vers votre format
+2. Implementer les 13 requetes dans votre langage
+3. Mesurer avec le protocole RAM-Gradient
+4. Comparer aux baselines P1/P2/M1/M2/O1/O2
+
+Le format Parquet (`exports/<profile>/parquet/`) sert de **reference neutre** pour garantir l'equivalence des donnees.
+
+---
+
+## Documentation technique
+
+| Document | Description |
+|----------|-------------|
+| [REFACTORING_CONSOLIDATED.md](docs/REFACTORING_CONSOLIDATED.md) | Architecture, corrections, roadmap |
+| [B3_RUNBOOK.md](docs/B3_RUNBOOK.md) | Runbook deploiement OVH B3 |
+| [methodology.md](docs/methodology.md) | Methodologie benchmark |
+
+---
+
 ## Licence
 
 Ce travail est distribue sous licence [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/).
+
+---
+
+## Citation
+
+Si vous utilisez ce benchmark dans vos travaux:
+
+```bibtex
+@misc{debienne2025basetype,
+  author = {Debienne, Antoine},
+  title = {BaseType Benchmark: Comparative Analysis of Storage Paradigms for Building Information Systems},
+  year = {2025},
+  publisher = {GitHub},
+  url = {https://github.com/synaptikad/baseTypeBenchmark}
+}
+```
