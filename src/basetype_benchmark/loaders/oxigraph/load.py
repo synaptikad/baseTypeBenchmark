@@ -93,6 +93,8 @@ def load_ntriples(endpoint: str, nt_path: Path, timeout: int = 600) -> float:
         timeout=timeout
     )
     if response.status_code not in [200, 201, 204]:
+        # Print response body for detailed error (e.g., parsing errors)
+        print(f"[ERROR] Oxigraph returned {response.status_code}: {response.text[:500]}")
         response.raise_for_status()
     elapsed = time.perf_counter() - t0
     size_mb = len(payload) / (1024 * 1024)
@@ -143,6 +145,7 @@ def load_ntriples_streaming(endpoint: str, nt_path: Path, chunk_size: int = 10 *
                 timeout=300
             )
             if response.status_code not in [200, 201, 204]:
+                print(f"[ERROR] Oxigraph returned {response.status_code}: {response.text[:500]}")
                 response.raise_for_status()
 
             total_bytes += len(to_send)
@@ -159,6 +162,7 @@ def load_ntriples_streaming(endpoint: str, nt_path: Path, chunk_size: int = 10 *
                 timeout=300
             )
             if response.status_code not in [200, 201, 204]:
+                print(f"[ERROR] Oxigraph returned {response.status_code}: {response.text[:500]}")
                 response.raise_for_status()
             total_bytes += len(buffer)
 

@@ -3168,6 +3168,7 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
             ts_conn.close()
 
     except Exception as e:
+        print_err(f"Oxigraph error: {e}")
         result["status"] = "error"
         result["error"] = str(e)
 
