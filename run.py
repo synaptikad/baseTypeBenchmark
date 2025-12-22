@@ -1760,6 +1760,31 @@ def _extract_oxigraph_dataset_info(endpoint: str = "http://localhost:7878") -> D
         data = resp.json()
         bindings = data.get("results", {}).get("bindings", [])
 
+        # Debug: show sample of what we found
+        if bindings:
+            sample = bindings[:3]
+            print_info(f"SPARQL found {len(bindings)} typed nodes (sample: {sample})")
+        else:
+            print_warn("SPARQL query returned 0 bindings - checking data...")
+            # Debug query to see what types exist
+            debug_query = """
+            SELECT DISTINCT ?type (COUNT(?s) AS ?count) WHERE {
+                ?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type .
+            }
+            GROUP BY ?type
+            LIMIT 20
+            """
+            debug_resp = requests.get(
+                f"{endpoint}/query",
+                params={"query": debug_query},
+                headers={"Accept": "application/sparql-results+json"},
+                timeout=30
+            )
+            if debug_resp.status_code == 200:
+                debug_data = debug_resp.json()
+                debug_bindings = debug_data.get("results", {}).get("bindings", [])
+                print_info(f"Types in store: {debug_bindings}")
+
         for binding in bindings:
             node_id = binding.get("id", {}).get("value", "")
             node_type = binding.get("type", {}).get("value", "").lower()
