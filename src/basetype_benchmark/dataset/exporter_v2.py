@@ -833,6 +833,12 @@ def export_for_target(
 
     elif target == "oxigraph":
         export_ntriples(parquet_dir, output_dir)
+        # Export timeseries for TimescaleDB (O2 is hybrid like M2)
+        if (parquet_dir / "timeseries.parquet").exists():
+            ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
+            ts_df.rename(columns={"timestamp": "time"}).to_csv(
+                output_dir / "timeseries.csv", index=False
+            )
 
     elif target == "oxigraph_o1":
         export_ntriples(parquet_dir, output_dir)
