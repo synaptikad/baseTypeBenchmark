@@ -557,7 +557,9 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
     triples = []
 
     def uri(id_str: str) -> str:
-        return f"<urn:{id_str}>"
+        # Sanitize IRI: replace spaces and invalid characters
+        sanitized = str(id_str).replace(' ', '_').replace('"', '').replace('<', '').replace('>', '')
+        return f"<urn:{sanitized}>"
 
     def literal(value: str, datatype: str = None) -> str:
         escaped = value.replace('"', '\\"').replace('\n', '\\n')
@@ -634,7 +636,9 @@ def export_oxigraph_chunks_ntriples(
     chunk_count = 0
 
     def uri(id_str: str) -> str:
-        return f"<urn:{id_str}>"
+        # Sanitize IRI: replace spaces and invalid characters
+        sanitized = str(id_str).replace(' ', '_').replace('"', '').replace('<', '').replace('>', '')
+        return f"<urn:{sanitized}>"
 
     def literal(value, datatype: str) -> str:
         return f'"{value}"^^<{prefixes["xsd"]}{datatype}>'
@@ -689,7 +693,9 @@ def export_oxigraph_aggregates_ntriples(
     triples = []
 
     def uri(id_str: str) -> str:
-        return f"<urn:{id_str}>"
+        # Sanitize IRI: replace spaces and invalid characters
+        sanitized = str(id_str).replace(' ', '_').replace('"', '').replace('<', '').replace('>', '')
+        return f"<urn:{sanitized}>"
 
     def literal(value, datatype: str) -> str:
         return f'"{value}"^^<{prefixes["xsd"]}{datatype}>'
