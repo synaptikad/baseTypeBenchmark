@@ -557,8 +557,10 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
     triples = []
 
     def uri(id_str: str) -> str:
-        # Sanitize IRI: replace spaces and invalid characters
-        sanitized = str(id_str).replace(' ', '_').replace('"', '').replace('<', '').replace('>', '')
+        # Sanitize IRI: replace invalid characters (space, backtick, quotes, brackets, etc.)
+        # Keep only alphanumeric, underscore, hyphen, dot, colon
+        import re
+        sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
         return f"<urn:{sanitized}>"
 
     def literal(value: str, datatype: str = None) -> str:
@@ -636,8 +638,10 @@ def export_oxigraph_chunks_ntriples(
     chunk_count = 0
 
     def uri(id_str: str) -> str:
-        # Sanitize IRI: replace spaces and invalid characters
-        sanitized = str(id_str).replace(' ', '_').replace('"', '').replace('<', '').replace('>', '')
+        # Sanitize IRI: replace invalid characters (space, backtick, quotes, brackets, etc.)
+        # Keep only alphanumeric, underscore, hyphen, dot, colon
+        import re
+        sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
         return f"<urn:{sanitized}>"
 
     def literal(value, datatype: str) -> str:
@@ -693,8 +697,10 @@ def export_oxigraph_aggregates_ntriples(
     triples = []
 
     def uri(id_str: str) -> str:
-        # Sanitize IRI: replace spaces and invalid characters
-        sanitized = str(id_str).replace(' ', '_').replace('"', '').replace('<', '').replace('>', '')
+        # Sanitize IRI: replace invalid characters (space, backtick, quotes, brackets, etc.)
+        # Keep only alphanumeric, underscore, hyphen, dot, colon
+        import re
+        sanitized = re.sub(r'[^a-zA-Z0-9_\-\.:]', '_', str(id_str))
         return f"<urn:{sanitized}>"
 
     def literal(value, datatype: str) -> str:
