@@ -1769,7 +1769,11 @@ def _extract_oxigraph_dataset_info(endpoint: str = "http://localhost:7878") -> D
         "meters": """
             PREFIX btb: <http://basetype.benchmark/ontology#>
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-            SELECT ?id WHERE { ?id rdf:type btb:Meter } LIMIT 50
+            SELECT ?id WHERE {
+                ?id rdf:type btb:Equipment .
+                ?id btb:equipment_type ?type .
+                FILTER(CONTAINS(?type, "Meter"))
+            } LIMIT 50
         """,
     }
 
