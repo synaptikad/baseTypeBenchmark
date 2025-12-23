@@ -1793,8 +1793,15 @@ def _extract_oxigraph_dataset_info(endpoint: str = "http://localhost:7878") -> D
             bindings = data.get("results", {}).get("bindings", [])
 
             for binding in bindings:
-                node_id = binding.get("id", {}).get("value", "")
-                if node_id:
+                node_uri = binding.get("id", {}).get("value", "")
+                if node_uri:
+                    # Extract local ID from URI (http://basetype.benchmark/equip_001 -> equip_001)
+                    # Queries use $METER_ID etc. which gets substituted into URI template
+                    if node_uri.startswith("http://basetype.benchmark/"):
+                        node_id = node_uri.replace("http://basetype.benchmark/", "")
+                    else:
+                        # Fallback: take last segment after /
+                        node_id = node_uri.rsplit("/", 1)[-1]
                     info[info_key].append(node_id)
 
         # Log what we found
