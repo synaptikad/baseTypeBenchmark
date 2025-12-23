@@ -1861,8 +1861,11 @@ def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
             for row in reader:
                 node_id = row.get("id", row.get("node_id", ""))
                 node_type = row.get("type", row.get("node_type", "")).lower()
+                # Equipment type (for Brick Schema: Equipment with equipment_type property)
+                equipment_type = row.get("equipment_type", "").lower()
 
-                if "meter" in node_type:
+                # Meters: check both type and equipment_type (Brick Schema uses Equipment + equipment_type)
+                if "meter" in node_type or "meter" in equipment_type:
                     info["meters"].append(node_id)
                 elif "equipment" in node_type or "ahu" in node_type or "vav" in node_type:
                     info["equipment"].append(node_id)
@@ -2852,7 +2855,11 @@ def run_hybrid_query(
                             cur.fetchall()
                             ts_conn.commit()
             except Exception:
-                pass
+                # Rollback to recover from transaction abort state
+                try:
+                    ts_conn.rollback()
+                except Exception:
+                    pass
 
         # Measured runs
         for _ in range(n_runs):
@@ -2897,6 +2904,11 @@ def run_hybrid_query(
 
             except Exception as e:
                 print_warn(f"Hybrid query error: {e}")
+                # Rollback to recover from transaction abort state
+                try:
+                    ts_conn.rollback()
+                except Exception:
+                    pass
 
     if not all_latencies:
         return None
