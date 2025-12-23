@@ -544,6 +544,7 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
     }
 
     # Relation mappings - use btb: to match queries (btb:feeds, btb:contains, etc.)
+    # 10 relation types matching README complexity description
     rel_mapping = {
         "CONTAINS": "btb:contains",
         "LOCATED_IN": "btb:locatedIn",
@@ -552,6 +553,9 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
         "SERVES": "btb:serves",
         "HAS_PART": "btb:hasPart",
         "OCCUPIES": "btb:occupies",
+        "CONTROLS": "btb:controls",
+        "MONITORS": "btb:monitors",
+        "IS_METERED_BY": "btb:isMeteredBy",
     }
 
     triples = []

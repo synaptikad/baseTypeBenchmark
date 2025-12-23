@@ -143,6 +143,32 @@ HAS_PART_RULES = {
     "UPS": ["Battery", "Inverter"],
 }
 
+# CONTROLS rules: controller type -> controlled equipment types
+# Represents BMS control relationships (Brick: controls)
+CONTROLS_RULES = {
+    "Thermostat": ["FCU", "VAV", "AHU"],
+    "Dimmer": ["LED_Luminaire"],
+    "VFD": ["Pump", "Fan"],
+    "FireAlarmPanel": ["SmokeDetector", "ManualCallPoint", "Emergency_Lighting"],
+}
+
+# MONITORS rules: sensor type -> monitored equipment types
+# Represents sensor monitoring relationships (inverse of hasPoint conceptually)
+MONITORS_RULES = {
+    "TemperatureSensor": ["FCU", "AHU", "Chiller"],
+    "CO2_Sensor": ["AHU", "VAV"],
+    "PressureSensor": ["AHU", "Pump"],
+    "FlowSensor": ["Pump", "Chiller"],
+    "CO_Sensor": ["ExhaustFan"],
+}
+
+# IS_METERED_BY rules: equipment types that are metered
+# Represents metering relationships (Haystack: submeterOf)
+METERED_EQUIPMENT = [
+    "ElectricalPanel", "TGBT", "UPS", "AHU", "Chiller", "Boiler",
+    "LED_Luminaire", "FCU", "CRAC", "PassengerElevator",
+]
+
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -236,6 +262,9 @@ class DatasetGeneratorV2:
         self._create_feeds_relations()
         self._create_serves_relations()
         self._create_has_part_relations()
+        self._create_controls_relations()
+        self._create_monitors_relations()
+        self._create_is_metered_by_relations()
         self._create_tenants()
 
         return Dataset(
@@ -432,7 +461,42 @@ class DatasetGeneratorV2:
                         # Create points for this equipment
                         self._create_equipment_points(equipment, equip_type, domain)
 
+                        # Create child components if this is a composite equipment
+                        if equip_type in HAS_PART_RULES:
+                            self._create_components(equipment, equip_type, domain, space)
+
                         equip_idx += 1
+
+    def _create_components(self, parent: Node, parent_type: str, domain: str, space: Node) -> None:
+        """Create child components for composite equipment.
+
+        These are internal components (Fan, Coil, Filter, etc.) that are part of
+        larger equipment (AHU, Chiller, etc.).
+        """
+        child_types = HAS_PART_RULES.get(parent_type, [])
+
+        for i, child_type in enumerate(child_types):
+            child_id = f"comp_{parent.id}_{child_type}_{i}"
+            child = Node(
+                child_id, "Equipment",
+                {
+                    "equipment_type": child_type,
+                    "name": f"{child_type}-{parent.id}",
+                    "parent_id": parent.id,
+                    "space_id": space.id,
+                    "floor_id": space.properties.get("floor_id"),
+                    "building_id": space.properties.get("building_id"),
+                    "domain": domain,
+                    "is_component": True,
+                }
+            )
+            self.nodes.append(child)
+
+            # Index component
+            self.equipments_by_type[child_type].append(child)
+            self.equipments_by_building[space.properties["building_id"]].append(child)
+
+            # HAS_PART edge is created in _create_has_part_relations
 
     def _create_equipment_points(self, equipment: Node, equip_type: str, domain: str) -> None:
         """Create points for an equipment based on definitions or defaults."""
@@ -642,6 +706,85 @@ class DatasetGeneratorV2:
                     )
                     if parent:
                         self.edges.append(Edge(parent.id, child.id, "HAS_PART"))
+
+    def _create_controls_relations(self) -> None:
+        """Create CONTROLS relations between controllers and controlled equipment.
+
+        Represents BMS control relationships (Brick: controls).
+        Example: Thermostat CONTROLS FCU
+        """
+        for controller_type, controlled_types in CONTROLS_RULES.items():
+            controllers = self.equipments_by_type.get(controller_type, [])
+
+            for controlled_type in controlled_types:
+                controlled = self.equipments_by_type.get(controlled_type, [])
+
+                # Group by building for logical pairing
+                for building_id in self.equipments_by_building:
+                    bld_controllers = [c for c in controllers if c.properties.get("building_id") == building_id]
+                    bld_controlled = [c for c in controlled if c.properties.get("building_id") == building_id]
+
+                    if not bld_controllers or not bld_controlled:
+                        continue
+
+                    # Round-robin: each controller controls multiple equipment
+                    for i, equip in enumerate(bld_controlled):
+                        controller = bld_controllers[i % len(bld_controllers)]
+                        self.edges.append(Edge(controller.id, equip.id, "CONTROLS"))
+
+    def _create_monitors_relations(self) -> None:
+        """Create MONITORS relations between sensors and monitored equipment.
+
+        Represents sensor monitoring relationships.
+        Example: TemperatureSensor MONITORS FCU
+        """
+        for sensor_type, monitored_types in MONITORS_RULES.items():
+            sensors = self.equipments_by_type.get(sensor_type, [])
+
+            for monitored_type in monitored_types:
+                monitored = self.equipments_by_type.get(monitored_type, [])
+
+                # Group by building
+                for building_id in self.equipments_by_building:
+                    bld_sensors = [s for s in sensors if s.properties.get("building_id") == building_id]
+                    bld_monitored = [m for m in monitored if m.properties.get("building_id") == building_id]
+
+                    if not bld_sensors or not bld_monitored:
+                        continue
+
+                    # Each sensor monitors one or more equipment (round-robin)
+                    for i, equip in enumerate(bld_monitored):
+                        sensor = bld_sensors[i % len(bld_sensors)]
+                        self.edges.append(Edge(sensor.id, equip.id, "MONITORS"))
+
+    def _create_is_metered_by_relations(self) -> None:
+        """Create IS_METERED_BY relations between equipment and sub-meters.
+
+        Represents metering relationships (Haystack: submeterOf).
+        Example: ElectricalPanel IS_METERED_BY SubMeter
+        """
+        sub_meters = self.equipments_by_type.get("SubMeter", [])
+
+        if not sub_meters:
+            return
+
+        # Collect all metered equipment
+        metered_equipment = []
+        for equip_type in METERED_EQUIPMENT:
+            metered_equipment.extend(self.equipments_by_type.get(equip_type, []))
+
+        # Group by building
+        for building_id in self.equipments_by_building:
+            bld_meters = [m for m in sub_meters if m.properties.get("building_id") == building_id]
+            bld_metered = [e for e in metered_equipment if e.properties.get("building_id") == building_id]
+
+            if not bld_meters or not bld_metered:
+                continue
+
+            # Distribute equipment across sub-meters
+            for i, equip in enumerate(bld_metered):
+                meter = bld_meters[i % len(bld_meters)]
+                self.edges.append(Edge(equip.id, meter.id, "IS_METERED_BY"))
 
     def _create_tenants(self) -> None:
         """Create tenants and OCCUPIES relations."""
