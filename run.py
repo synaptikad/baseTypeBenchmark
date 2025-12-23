@@ -2043,13 +2043,6 @@ def run_query_with_variants(
         # Substitute parameters in query
         query_text = substitute_params(base_query, params) if params else base_query
 
-        # Debug: print first variant's substituted query for O1/O2
-        if i == 0 and scenario.upper() in ("O1", "O2") and params:
-            print(f"    [DEBUG] Params: {params}")
-            # Show first 300 chars of substituted query
-            preview = query_text[:300].replace('\n', ' ')
-            print(f"    [DEBUG] Query preview: {preview}...")
-
         result = run_query_benchmark(
             query_id=query_id,
             query_text=query_text,
