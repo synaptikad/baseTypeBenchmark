@@ -383,8 +383,20 @@ def export_postgresql_jsonb_csv(parquet_dir: Path, output_dir: Path) -> None:
     nodes_df = pd.read_parquet(parquet_dir / "nodes.parquet")
     edges_df = pd.read_parquet(parquet_dir / "edges.parquet")
 
-    # Nodes with JSONB properties
-    nodes_df[["id", "type", "name", "properties"]].to_csv(
+    # Nodes with JSONB properties - extract equipment_type for meter detection
+    nodes_expanded = []
+    for _, row in nodes_df.iterrows():
+        props = json.loads(row["properties"]) if row["properties"] else {}
+        nodes_expanded.append({
+            "id": row["id"],
+            "type": row["type"],
+            "name": row.get("name", props.get("name", "")),
+            "building_id": props.get("building_id", ""),
+            "equipment_type": props.get("equipment_type", ""),  # For meter detection
+            "properties": row["properties"]
+        })
+
+    pd.DataFrame(nodes_expanded).to_csv(
         output_dir / "pg_jsonb_nodes.csv", index=False
     )
 

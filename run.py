@@ -2605,9 +2605,10 @@ def _load_memgraph_nodes_csv(session, nodes_file: Path) -> int:
             node = {
                 'id': row['id'],
                 'type': row['type'],
-                'name': row.get('name', '')
+                'name': row.get('name', ''),
+                'equipment_type': row.get('equipment_type', '')
             }
-            # Parse properties if present
+            # Parse properties if present (may override equipment_type)
             if row.get('properties'):
                 try:
                     props = json.loads(row['properties'])
@@ -2620,7 +2621,7 @@ def _load_memgraph_nodes_csv(session, nodes_file: Path) -> int:
             if len(batch) >= batch_size:
                 session.run(
                     "UNWIND $batch AS row "
-                    "CREATE (n:Node {id: row.id, type: row.type, name: row.name})",
+                    "CREATE (n:Node {id: row.id, type: row.type, name: row.name, equipment_type: row.equipment_type})",
                     batch=batch
                 )
                 total += len(batch)
@@ -2632,7 +2633,7 @@ def _load_memgraph_nodes_csv(session, nodes_file: Path) -> int:
         if batch:
             session.run(
                 "UNWIND $batch AS row "
-                "CREATE (n:Node {id: row.id, type: row.type, name: row.name})",
+                "CREATE (n:Node {id: row.id, type: row.type, name: row.name, equipment_type: row.equipment_type})",
                 batch=batch
             )
             total += len(batch)
