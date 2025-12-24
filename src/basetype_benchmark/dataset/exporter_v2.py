@@ -906,19 +906,24 @@ def export_all_targets(parquet_dir: Path, base_output_dir: Path) -> None:
     Args:
         parquet_dir: Directory containing Parquet files
         base_output_dir: Base output directory
-    """
-    targets = [
-        "postgresql",
-        "postgresql_jsonb",
-        "memgraph",
-        "memgraph_m1",
-        "oxigraph",
-        "oxigraph_o1",
-    ]
 
-    for target in targets:
-        output_dir = base_output_dir / target
-        print(f"\n=== Exporting to {target} ===")
+    Note:
+        Output directories use short names (p1, p2, m1, m2, o1, o2) to match
+        run.py:get_scenario_files() expectations.
+    """
+    # Map target format to short directory name (matches run.py expectations)
+    targets = {
+        "postgresql": "p1",
+        "postgresql_jsonb": "p2",
+        "memgraph_m1": "m1",
+        "memgraph": "m2",
+        "oxigraph_o1": "o1",
+        "oxigraph": "o2",
+    }
+
+    for target, dir_name in targets.items():
+        output_dir = base_output_dir / dir_name
+        print(f"\n=== Exporting {target} to {dir_name}/ ===")
         export_for_target(parquet_dir, target, output_dir)
 
 
