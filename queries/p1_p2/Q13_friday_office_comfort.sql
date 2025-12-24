@@ -16,7 +16,7 @@ WITH office_setpoints AS (
     WHERE p.type = 'Point'
       AND p.name ILIKE '%setpoint%'
       AND p.name ILIKE '%temp%'
-      AND sp.data->>'space_type' LIKE '$SPACE_TYPE'
+      AND sp.properties->>'space_type' LIKE '$SPACE_TYPE'
 ),
 office_occupancy AS (
     -- Find PeopleCounter points in offices
@@ -29,8 +29,8 @@ office_occupancy AS (
     JOIN edges e2 ON e2.src_id = eq.id AND e2.rel_type = 'LOCATED_IN'
     JOIN nodes sp ON sp.id = e2.dst_id AND sp.type = 'Space'
     WHERE p.type = 'Point'
-      AND eq.data->>'equipment_type' = 'PeopleCounter'
-      AND sp.data->>'space_type' LIKE '$SPACE_TYPE'
+      AND eq.properties->>'equipment_type' = 'PeopleCounter'
+      AND sp.properties->>'space_type' LIKE '$SPACE_TYPE'
 ),
 friday_setpoints AS (
     -- Get setpoint values on Fridays only in date range
