@@ -829,6 +829,8 @@ def generate_timeseries(
     show_progress: bool = True,
     use_simulation: bool = True,
     simulation_config_path: Optional[Path] = None,
+    parallel: bool = False,
+    n_workers: Optional[int] = None,
 ) -> Iterator[Tuple[str, datetime, float]]:
     """Generate timeseries data for all points.
 
@@ -840,6 +842,8 @@ def generate_timeseries(
         show_progress: Show progress bar (default: True)
         use_simulation: Use physical simulation with deadband (default: True)
         simulation_config_path: Path to simulation.yaml config file
+        parallel: Use parallel simulation with multiprocessing (default: False)
+        n_workers: Number of worker processes (default: CPU count)
 
     Yields:
         Tuples of (point_id, timestamp, value)
@@ -851,7 +855,8 @@ def generate_timeseries(
         # Use physical simulation engine with deadband filtering
         yield from _generate_timeseries_simulation(
             points, duration_days, rng, start_time,
-            show_progress, simulation_config_path
+            show_progress, simulation_config_path,
+            parallel=parallel, n_workers=n_workers
         )
     else:
         # Legacy mode: independent Gaussian samples
@@ -867,6 +872,8 @@ def _generate_timeseries_simulation(
     start_time: datetime,
     show_progress: bool,
     config_path: Optional[Path] = None,
+    parallel: bool = False,
+    n_workers: Optional[int] = None,
 ) -> Iterator[Tuple[str, datetime, float]]:
     """Generate timeseries using physical simulation with deadband.
 
@@ -874,6 +881,10 @@ def _generate_timeseries_simulation(
     - Using Ornstein-Uhlenbeck process for temporal correlation
     - Applying deadband filtering (only transmit on significant change)
     - Modeling occupancy and environmental context
+
+    Args:
+        parallel: Use multiprocessing for parallel simulation
+        n_workers: Number of worker processes (default: CPU count)
     """
     # Load simulation config
     if config_path is None:
@@ -903,8 +914,11 @@ def _generate_timeseries_simulation(
         start_time=start_time,
     )
 
-    # Generate samples
-    for sample in engine.generate(point_infos, duration_days, show_progress):
+    # Generate samples (with optional parallelization)
+    for sample in engine.generate(
+        point_infos, duration_days, show_progress,
+        parallel=parallel, n_workers=n_workers
+    ):
         yield (sample.point_id, sample.timestamp, sample.value)
 
 

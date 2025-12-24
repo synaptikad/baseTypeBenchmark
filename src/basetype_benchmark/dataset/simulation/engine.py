@@ -248,6 +248,8 @@ class SimulationEngine:
         points: list[PointInfo],
         duration_days: float,
         show_progress: bool = True,
+        parallel: bool = False,
+        n_workers: int | None = None,
     ) -> Iterator[SimulationSample]:
         """
         Generate timeseries data for all points.
@@ -256,10 +258,54 @@ class SimulationEngine:
             points: List of points to simulate
             duration_days: Duration of simulation in days
             show_progress: Whether to show progress bar
+            parallel: Use parallel simulation with multiprocessing
+            n_workers: Number of worker processes (default: CPU count)
 
         Yields:
             SimulationSample for each value that exceeds deadband
         """
+        # Dispatch to parallel implementation if requested
+        if parallel:
+            from .parallel import generate_parallel, PointInfo as ParallelPointInfo
+
+            # Convert PointInfo to parallel module's version
+            parallel_points = [
+                ParallelPointInfo(
+                    id=p.id,
+                    name=p.name,
+                    equipment_id=p.equipment_id,
+                    equipment_type=p.equipment_type,
+                    unit=p.unit,
+                    setpoint=p.setpoint,
+                )
+                for p in points
+            ]
+
+            # Build config dict for parallel module
+            config_dict = {
+                "point_behaviors": self.config.point_behaviors,
+                "simulation": self.config.simulation,
+                "environment": self.config.environment,
+                "occupancy": self.config.occupancy,
+            }
+
+            sim_config = self.config.simulation or {}
+            step_seconds = sim_config.get("base_step_seconds", 60)
+            warmup_hours = sim_config.get("warmup_hours", 2)
+
+            yield from generate_parallel(
+                points=parallel_points,
+                duration_days=duration_days,
+                config=config_dict,
+                start_time=self.start_time,
+                base_seed=self.rng.randint(0, 2**31),
+                n_workers=n_workers,
+                show_progress=show_progress,
+                warmup_hours=warmup_hours,
+                step_seconds=step_seconds,
+            )
+            return
+
         from tqdm import tqdm
 
         # Initialize states for all points

@@ -234,7 +234,9 @@ def export_parquet_streaming(
     dataset: Dataset,
     output_dir: Path,
     duration_days: int = 30,
-    batch_size: int = 100000
+    batch_size: int = 500000,
+    parallel: bool = False,
+    n_workers: int | None = None,
 ) -> None:
     """Export dataset to Parquet with streaming for large datasets.
 
@@ -242,7 +244,9 @@ def export_parquet_streaming(
         dataset: Generated dataset
         output_dir: Output directory
         duration_days: Duration for timeseries generation
-        batch_size: Number of timeseries rows per batch
+        batch_size: Number of timeseries rows per batch (default 500k for parallel)
+        parallel: Use parallel simulation with multiprocessing
+        n_workers: Number of worker processes (default: CPU count)
     """
     import random
     import pyarrow as pa
@@ -281,7 +285,8 @@ def export_parquet_streaming(
     total_rows = 0
 
     for point_id, timestamp, value in generate_timeseries(
-        dataset.points, duration_days, rng
+        dataset.points, duration_days, rng,
+        parallel=parallel, n_workers=n_workers
     ):
         batch.append({"point_id": point_id, "timestamp": timestamp, "value": value})
 

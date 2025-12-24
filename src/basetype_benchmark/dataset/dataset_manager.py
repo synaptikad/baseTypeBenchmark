@@ -92,7 +92,9 @@ class DatasetManager:
         self,
         profile_name: str,
         seed: int = DEFAULT_SEED,
-        formats: list = None
+        formats: list = None,
+        parallel: bool = False,
+        n_workers: int = None,
     ) -> Tuple[Path, Dict[str, Any], Dict[str, Any]]:
         """Génère un dataset et l'exporte directement sur disque.
 
@@ -110,6 +112,8 @@ class DatasetManager:
             formats: Liste des formats d'export (None = tous)
                     Options: 'parquet', 'postgresql', 'postgresql_jsonb',
                              'memgraph', 'memgraph_m1', 'oxigraph', 'oxigraph_o1'
+            parallel: Use parallel simulation with multiprocessing
+            n_workers: Number of worker processes (default: CPU count)
 
         Returns:
             Tuple (chemin_export, summary_dict, fingerprint_dict)
@@ -176,7 +180,8 @@ class DatasetManager:
 
         if use_streaming:
             exporter_v2.export_parquet_streaming(
-                dataset, parquet_dir, duration_days=duration_days
+                dataset, parquet_dir, duration_days=duration_days,
+                parallel=parallel, n_workers=n_workers
             )
         else:
             exporter_v2.export_parquet(
@@ -432,7 +437,9 @@ class DatasetManager:
     def generate_parquet_only(
         self,
         profile_name: str,
-        seed: int = DEFAULT_SEED
+        seed: int = DEFAULT_SEED,
+        parallel: bool = False,
+        n_workers: int = None,
     ) -> Tuple[Path, Dict[str, Any]]:
         """Génère uniquement le Parquet pivot (sans les exports scénarios).
 
@@ -444,6 +451,8 @@ class DatasetManager:
         Args:
             profile_name: Nom du profil
             seed: Graine
+            parallel: Use parallel simulation with multiprocessing
+            n_workers: Number of worker processes (default: CPU count)
 
         Returns:
             Tuple (parquet_dir, fingerprint)
@@ -491,7 +500,10 @@ class DatasetManager:
         # Phase 2: Export Parquet
         print(f"    [2/2] Exporting to Parquet pivot...")
         if use_streaming:
-            exporter_v2.export_parquet_streaming(dataset, parquet_dir, duration_days=duration_days)
+            exporter_v2.export_parquet_streaming(
+                dataset, parquet_dir, duration_days=duration_days,
+                parallel=parallel, n_workers=n_workers
+            )
         else:
             exporter_v2.export_parquet(dataset, parquet_dir, duration_days=duration_days)
 
