@@ -160,12 +160,13 @@ DOCKER_COMPOSE_CMD = get_docker_compose_cmd()
 # =============================================================================
 
 SCENARIOS = {
+    # Order optimized: P1/P2 (pure SQL), then M2/O2 (hybrid with TimescaleDB), then M1/O1 (full-graph)
     "P1": {"name": "PostgreSQL Relational", "containers": ["timescaledb"]},
     "P2": {"name": "PostgreSQL JSONB", "containers": ["timescaledb"]},
-    "M1": {"name": "Memgraph + Chunks", "containers": ["memgraph"]},  # Timeseries as array nodes
     "M2": {"name": "Memgraph + TimescaleDB", "containers": ["memgraph", "timescaledb"]},
-    "O1": {"name": "Oxigraph + Chunks", "containers": ["oxigraph"]},  # Timeseries as RDF chunks
     "O2": {"name": "Oxigraph + TimescaleDB", "containers": ["oxigraph", "timescaledb"]},
+    "M1": {"name": "Memgraph + Chunks", "containers": ["memgraph"]},  # Timeseries as array nodes
+    "O1": {"name": "Oxigraph + Chunks", "containers": ["oxigraph"]},  # Timeseries as RDF chunks
 }
 
 # Scale definitions
