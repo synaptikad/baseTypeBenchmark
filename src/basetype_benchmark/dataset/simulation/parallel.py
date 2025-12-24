@@ -188,33 +188,39 @@ def _worker_init(worker_id: int, points_data: List[Dict], config_data: Dict, bas
 
 def _worker_task(args: Tuple) -> List[Dict[str, Any]]:
     """
-    Process one timestep for a worker.
+    Process a BATCH of timesteps for a worker.
     Worker state must be initialized via _worker_init.
+
+    Args:
+        args: Tuple of (timesteps_data,) where timesteps_data is a list of
+              (current_time, occupancy_data, environment_data, is_warmup) tuples
     """
     global _worker_state
 
-    current_time, occupancy_data, environment_data, is_warmup = args
+    timesteps_data = args[0]
 
     if _worker_state is None:
         return []  # Worker not initialized
 
-    # Reconstruct context objects
-    occupancy = OccupancyContext(**occupancy_data)
-    environment = EnvironmentContext(**environment_data)
+    all_samples = []
 
-    # Process all points in this worker's partition
-    samples = []
-    for point_id, (point, point_type, state) in _worker_state.point_states.items():
-        simulator = _worker_state.get_simulator(point_type)
-        sample = simulator.simulate(state, current_time, occupancy, environment)
-        if sample is not None and not is_warmup:
-            samples.append({
-                "point_id": sample.point_id,
-                "timestamp": sample.timestamp,
-                "value": sample.value,
-            })
+    for current_time, occupancy_data, environment_data, is_warmup in timesteps_data:
+        # Reconstruct context objects
+        occupancy = OccupancyContext(**occupancy_data)
+        environment = EnvironmentContext(**environment_data)
 
-    return samples
+        # Process all points in this worker's partition
+        for point_id, (point, point_type, state) in _worker_state.point_states.items():
+            simulator = _worker_state.get_simulator(point_type)
+            sample = simulator.simulate(state, current_time, occupancy, environment)
+            if sample is not None and not is_warmup:
+                all_samples.append({
+                    "point_id": sample.point_id,
+                    "timestamp": sample.timestamp,
+                    "value": sample.value,
+                })
+
+    return all_samples
 
 
 # ============================================================================
@@ -339,6 +345,10 @@ def generate_parallel(
         )
         pools.append(pool)
 
+    # Batch size for timesteps per IPC call (reduces overhead dramatically)
+    # 100 timesteps = ~1.7 hours of simulation per batch
+    TIMESTEP_BATCH_SIZE = 100
+
     try:
         # Progress bar
         if show_progress:
@@ -352,31 +362,42 @@ def generate_parallel(
         samples_generated = 0
 
         while current_time < end_time:
-            # Pre-compute context in main process
-            occupancy = occupancy_model.get_occupancy(current_time)
-            environment = environment_model.get_environment(current_time)
+            # Build a batch of timesteps
+            timesteps_batch = []
 
-            is_warmup = current_time < start_time
+            for _ in range(TIMESTEP_BATCH_SIZE):
+                if current_time >= end_time:
+                    break
 
-            # Serialize context for workers (small payload now!)
-            occupancy_data = {
-                "is_occupied": occupancy.is_occupied,
-                "occupancy_level": occupancy.occupancy_level,
-                "people_density": occupancy.people_density,
-            }
-            environment_data = {
-                "outdoor_temp": environment.outdoor_temp,
-                "outdoor_humidity": environment.outdoor_humidity,
-                "solar_intensity": environment.solar_intensity,
-                "is_daytime": environment.is_daytime,
-                "season_factor": environment.season_factor,
-            }
+                # Pre-compute context in main process
+                occupancy = occupancy_model.get_occupancy(current_time)
+                environment = environment_model.get_environment(current_time)
 
-            # Task args (no points data - already in worker state)
-            task_args = (current_time, occupancy_data, environment_data, is_warmup)
+                is_warmup = current_time < start_time
 
-            # Submit to all workers in parallel
-            async_results = [pool.apply_async(_worker_task, (task_args,)) for pool in pools]
+                # Serialize context for workers
+                occupancy_data = {
+                    "is_occupied": occupancy.is_occupied,
+                    "occupancy_level": occupancy.occupancy_level,
+                    "people_density": occupancy.people_density,
+                }
+                environment_data = {
+                    "outdoor_temp": environment.outdoor_temp,
+                    "outdoor_humidity": environment.outdoor_humidity,
+                    "solar_intensity": environment.solar_intensity,
+                    "is_daytime": environment.is_daytime,
+                    "season_factor": environment.season_factor,
+                }
+
+                timesteps_batch.append((current_time, occupancy_data, environment_data, is_warmup))
+                current_time += timedelta(seconds=step_seconds)
+
+            if not timesteps_batch:
+                break
+
+            # Submit batch to all workers in parallel
+            # Note: wrap batch in tuple for apply_async args format
+            async_results = [pool.apply_async(_worker_task, ((timesteps_batch,),)) for pool in pools]
 
             # Collect samples from all workers
             for async_result in async_results:
@@ -389,14 +410,11 @@ def generate_parallel(
                         value=sample_data["value"],
                     )
 
-            # Advance time
-            current_time += timedelta(seconds=step_seconds)
-            step_count += 1
-
+            # Update progress
+            step_count += len(timesteps_batch)
             if show_progress:
-                pbar.update(1)
-                if step_count % 100 == 0:
-                    pbar.set_postfix(samples=samples_generated)
+                pbar.update(len(timesteps_batch))
+                pbar.set_postfix(samples=samples_generated)
 
         if show_progress:
             pbar.close()
