@@ -4361,7 +4361,8 @@ def workflow_purge():
 
     if export_dir.exists():
         for subdir in export_dir.iterdir():
-            if subdir.is_dir() and any(subdir.glob("*.csv")):
+            # V2 format: check for fingerprint.json (consistent with get_available_profiles)
+            if subdir.is_dir() and (subdir / "fingerprint.json").exists():
                 size_mb = sum(f.stat().st_size for f in subdir.rglob('*') if f.is_file()) / (1024 * 1024)
                 dataset_items.append({
                     'path': subdir,
