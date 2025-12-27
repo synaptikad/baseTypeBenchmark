@@ -3632,6 +3632,151 @@ def ensure_dataset_extracted(master_dir: Path, target_profile: str) -> Path:
     return extractor.extract(target_profile)
 
 
+# =============================================================================
+# ON-DEMAND EXPORT WORKFLOW (Disk-Efficient)
+# =============================================================================
+
+def run_scenario_with_ondemand_export(
+    scenario: str,
+    export_dir: Path,
+    profile: str,
+    ram_gb: int = 8,
+    cleanup_after: bool = True,
+) -> Dict:
+    """Run benchmark with on-demand export and cleanup.
+
+    This workflow minimizes disk usage by:
+    1. Exporting timeseries.csv ONCE (shared by P1/P2/M2/O2)
+    2. Exporting scenario-specific files just before loading
+    3. Running the benchmark
+    4. Cleaning up scenario files after (optional)
+
+    For gros datasets (e.g., medium-1w with 8GB parquet), this keeps
+    disk usage around 10-15GB instead of 40GB+.
+
+    Args:
+        scenario: P1, P2, M1, M2, O1, O2
+        export_dir: Base export directory (e.g., exports/small-1w_seed42)
+        profile: Profile name for protocol config
+        ram_gb: RAM limit for containers
+        cleanup_after: If True, delete scenario files after benchmark
+
+    Returns:
+        Benchmark result dict
+    """
+    from basetype_benchmark.dataset.dataset_manager import DatasetManager
+    from basetype_benchmark.dataset import exporter_v2
+
+    parquet_dir = export_dir / "parquet"
+    scenario_upper = scenario.upper()
+    scenario_lower = scenario.lower()
+    scenario_dir = export_dir / scenario_lower
+
+    # Step 1: Export shared timeseries.csv if needed (for P1/P2/M2/O2)
+    needs_timeseries = scenario_upper in ("P1", "P2", "M2", "O2")
+    shared_ts_path = export_dir / "timeseries.csv"
+
+    if needs_timeseries and not shared_ts_path.exists():
+        print_info("Exporting shared timeseries.csv...")
+        exporter_v2.export_timeseries_csv_shared(parquet_dir, shared_ts_path)
+
+    # Step 2: Export scenario-specific files on-demand
+    print_info(f"Exporting {scenario_upper} format on-demand...")
+    manager = DatasetManager()
+
+    # Use the scenario export from DatasetManager
+    try:
+        # Get profile from export_dir name
+        profile_name = export_dir.name.rsplit("_seed", 1)[0]
+        seed = 42
+        manager.export_scenario_only(profile_name, scenario, seed)
+    except Exception as e:
+        print_err(f"On-demand export failed: {e}")
+        raise
+
+    # For scenarios that need shared timeseries, symlink/copy it
+    if needs_timeseries and shared_ts_path.exists():
+        if scenario_upper in ("P1", "P2"):
+            ts_filename = "pg_timeseries.csv"
+        else:
+            ts_filename = "timeseries.csv"
+        exporter_v2.symlink_or_copy_timeseries(shared_ts_path, scenario_dir, ts_filename)
+
+    # Step 3: Start containers and run benchmark
+    if not start_containers_with_ram(SCENARIOS[scenario_upper]["containers"], ram_gb):
+        return {"status": "container_failed", "error": "Failed to start containers"}
+
+    try:
+        result = run_scenario_benchmark(scenario_upper, export_dir, profile)
+        result["ram_gb"] = ram_gb
+        result["ondemand_export"] = True
+    finally:
+        stop_all_containers()
+
+    # Step 4: Cleanup scenario files (optional)
+    if cleanup_after:
+        print_info(f"Cleaning up {scenario_upper} files...")
+        # Keep shared timeseries.csv, delete scenario-specific files
+        manager.prune_scenario(profile_name, scenario, seed, keep_shared_timeseries=True)
+
+    return result
+
+
+def run_all_scenarios_ondemand(
+    export_dir: Path,
+    profile: str,
+    ram_gb: int = 8,
+    scenarios: List[str] = None,
+    cleanup_between: bool = True,
+) -> Dict[str, Dict]:
+    """Run all scenarios with on-demand export workflow.
+
+    Optimal order for disk efficiency:
+    1. P1, P2, M2, O2 (share timeseries.csv)
+    2. M1, O1 (need chunks, different format)
+
+    Args:
+        export_dir: Base export directory
+        profile: Profile name
+        ram_gb: RAM limit
+        scenarios: List of scenarios to run (default: all in optimal order)
+        cleanup_between: If True, cleanup each scenario after running
+
+    Returns:
+        Dict of scenario -> result
+    """
+    if scenarios is None:
+        # Optimal order: shared timeseries first, then chunks
+        scenarios = ["P1", "P2", "M2", "O2", "M1", "O1"]
+
+    results = {}
+
+    for scenario in scenarios:
+        print_header(f"{scenario} ({SCENARIOS[scenario]['name']})")
+
+        try:
+            result = run_scenario_with_ondemand_export(
+                scenario=scenario,
+                export_dir=export_dir,
+                profile=profile,
+                ram_gb=ram_gb,
+                cleanup_after=cleanup_between,
+            )
+            results[scenario] = result
+        except Exception as e:
+            print_err(f"Scenario {scenario} failed: {e}")
+            results[scenario] = {"status": "error", "error": str(e)}
+
+    # Final cleanup: remove shared timeseries.csv
+    if cleanup_between:
+        shared_ts_path = export_dir / "timeseries.csv"
+        if shared_ts_path.exists():
+            print_info("Cleaning up shared timeseries.csv...")
+            shared_ts_path.unlink()
+
+    return results
+
+
 def select_ram_levels() -> List[int]:
     """Interactive RAM level selection."""
     print_header("SELECT RAM LEVELS")
@@ -3791,16 +3936,26 @@ def _run_quick_benchmark(master_dir: Path, configs: Dict):
     # Select RAM level
     ram_level = int(prompt("RAM level (GB)", "8"))
 
+    # Ask about on-demand export mode
+    estimated_size = SIZE_ESTIMATES.get(profile, 10)
+    use_ondemand = False
+    if estimated_size >= 2:  # Recommend for datasets >= 2GB
+        print(f"\n{YELLOW}Disk-efficient mode available:{RESET}")
+        print(f"  - Standard: Export all formats upfront (~{estimated_size * 4:.0f} GB disk)")
+        print(f"  - On-demand: Export per scenario, cleanup after (~{estimated_size * 1.5:.0f} GB max)")
+        use_ondemand = prompt_yes_no("Use disk-efficient on-demand mode?", True)
+
     # Confirm
     print_header("CONFIRM QUICK BENCHMARK")
     print(f"Profile: {profile}")
     print(f"Engines: ALL (P1, P2, M1, M2, O1, O2)")
     print(f"RAM: {ram_level} GB (fixed)")
+    print(f"Mode: {'On-demand (disk-efficient)' if use_ondemand else 'Standard'}")
 
     if not prompt_yes_no("\nStart quick benchmark?"):
         return
 
-    # Run
+    # Prepare dataset
     try:
         export_dir = ensure_dataset_extracted(master_dir, profile)
         scale = get_scale_from_profile(profile)
@@ -3812,23 +3967,39 @@ def _run_quick_benchmark(master_dir: Path, configs: Dict):
     results_dir = Path("benchmark_results") / f"quick_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    all_results = {}
-    for engine in SCENARIOS.keys():
-        print_header(f"{engine} ({SCENARIOS[engine]['name']})")
-
-        if not start_containers_with_ram(SCENARIOS[engine]["containers"], ram_level):
-            all_results[engine] = {"status": "container_failed"}
-            continue
-
-        try:
-            result = run_scenario_benchmark(engine, export_dir, profile)
-            result["ram_gb"] = ram_level
-            all_results[engine] = result
-
+    # Run benchmarks
+    if use_ondemand:
+        # Use on-demand export workflow
+        all_results = run_all_scenarios_ondemand(
+            export_dir=export_dir,
+            profile=profile,
+            ram_gb=ram_level,
+            scenarios=list(SCENARIOS.keys()),
+            cleanup_between=True,
+        )
+        # Save individual results
+        for engine, result in all_results.items():
             with open(results_dir / f"{engine}.json", 'w') as f:
                 json.dump(result, f, indent=2, default=str)
-        finally:
-            stop_all_containers()
+    else:
+        # Standard mode (all exports upfront)
+        all_results = {}
+        for engine in SCENARIOS.keys():
+            print_header(f"{engine} ({SCENARIOS[engine]['name']})")
+
+            if not start_containers_with_ram(SCENARIOS[engine]["containers"], ram_level):
+                all_results[engine] = {"status": "container_failed"}
+                continue
+
+            try:
+                result = run_scenario_benchmark(engine, export_dir, profile)
+                result["ram_gb"] = ram_level
+                all_results[engine] = result
+
+                with open(results_dir / f"{engine}.json", 'w') as f:
+                    json.dump(result, f, indent=2, default=str)
+            finally:
+                stop_all_containers()
 
     # Summary
     with open(results_dir / "summary.json", 'w') as f:
@@ -3836,6 +4007,7 @@ def _run_quick_benchmark(master_dir: Path, configs: Dict):
             "mode": "quick",
             "profile": profile,
             "ram_gb": ram_level,
+            "ondemand": use_ondemand,
             "results": all_results,
             "timestamp": datetime.now().isoformat()
         }, f, indent=2, default=str)

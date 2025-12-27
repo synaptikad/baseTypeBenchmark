@@ -351,15 +351,115 @@ def export_parquet_streaming(
 
 
 # =============================================================================
+# SHARED TIMESERIES EXPORT (for P1, P2, M2, O2)
+# =============================================================================
+
+def export_timeseries_csv_shared(
+    parquet_dir: Path,
+    shared_ts_path: Path,
+    force: bool = False
+) -> bool:
+    """Export timeseries.csv ONCE for all scenarios that need it (P1, P2, M2, O2).
+
+    This function is idempotent: if timeseries.csv already exists at the target
+    path, it will skip the export (unless force=True).
+
+    Args:
+        parquet_dir: Directory containing timeseries.parquet
+        shared_ts_path: Target path for the shared timeseries.csv
+        force: If True, re-export even if file exists
+
+    Returns:
+        True if exported, False if skipped (already exists)
+    """
+    ts_parquet = parquet_dir / "timeseries.parquet"
+
+    if not ts_parquet.exists():
+        print(f"[WARN] timeseries.parquet not found at {parquet_dir}")
+        return False
+
+    if shared_ts_path.exists() and not force:
+        size_mb = shared_ts_path.stat().st_size / (1024 * 1024)
+        print(f"[SKIP] timeseries.csv already exists ({size_mb:.0f} MB)")
+        return False
+
+    # Ensure parent directory exists
+    shared_ts_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[EXPORT] timeseries.csv (shared)...", end=" ", flush=True)
+    start_time = time.time()
+
+    ts_df = pd.read_parquet(ts_parquet)
+    ts_df.rename(columns={"timestamp": "time"}).to_csv(shared_ts_path, index=False)
+
+    elapsed = time.time() - start_time
+    size_mb = shared_ts_path.stat().st_size / (1024 * 1024)
+    print(f"done ({size_mb:.0f} MB in {elapsed:.1f}s)")
+
+    return True
+
+
+def get_shared_timeseries_path(export_dir: Path) -> Path:
+    """Get the path for the shared timeseries.csv file.
+
+    Args:
+        export_dir: Base export directory (e.g., exports/small-1w_seed42)
+
+    Returns:
+        Path to shared timeseries.csv (stored in export_dir root)
+    """
+    return export_dir / "timeseries.csv"
+
+
+def symlink_or_copy_timeseries(
+    shared_ts_path: Path,
+    scenario_dir: Path,
+    filename: str = "timeseries.csv"
+) -> None:
+    """Create symlink (or copy on Windows) of timeseries.csv into scenario dir.
+
+    Args:
+        shared_ts_path: Path to the shared timeseries.csv
+        scenario_dir: Target scenario directory (e.g., p1/, m2/)
+        filename: Target filename (default: timeseries.csv, can be pg_timeseries.csv)
+    """
+    import shutil
+    import platform
+
+    target_path = scenario_dir / filename
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+
+    if target_path.exists():
+        target_path.unlink()
+
+    # On Windows, symlinks require admin privileges, so copy instead
+    if platform.system() == "Windows":
+        shutil.copy2(shared_ts_path, target_path)
+    else:
+        # On Unix, use relative symlink
+        try:
+            rel_path = Path("..") / shared_ts_path.name
+            target_path.symlink_to(rel_path)
+        except (OSError, NotImplementedError):
+            # Fallback to copy if symlink fails
+            shutil.copy2(shared_ts_path, target_path)
+
+
+# =============================================================================
 # POSTGRESQL CSV EXPORT
 # =============================================================================
 
-def export_postgresql_csv(parquet_dir: Path, output_dir: Path) -> None:
+def export_postgresql_csv(
+    parquet_dir: Path,
+    output_dir: Path,
+    skip_timeseries: bool = False,
+) -> None:
     """Export Parquet to PostgreSQL CSV format.
 
     Args:
         parquet_dir: Directory containing Parquet files
         output_dir: Output directory for CSV files
+        skip_timeseries: If True, don't export timeseries (use shared version)
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -396,7 +496,7 @@ def export_postgresql_csv(parquet_dir: Path, output_dir: Path) -> None:
     )
 
     # Timeseries
-    if (parquet_dir / "timeseries.parquet").exists():
+    if not skip_timeseries and (parquet_dir / "timeseries.parquet").exists():
         ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
         ts_df.rename(columns={"timestamp": "time"}).to_csv(
             output_dir / "pg_timeseries.csv", index=False
@@ -405,12 +505,17 @@ def export_postgresql_csv(parquet_dir: Path, output_dir: Path) -> None:
     print(f"Exported PostgreSQL CSV: {output_dir}")
 
 
-def export_postgresql_jsonb_csv(parquet_dir: Path, output_dir: Path) -> None:
+def export_postgresql_jsonb_csv(
+    parquet_dir: Path,
+    output_dir: Path,
+    skip_timeseries: bool = False,
+) -> None:
     """Export Parquet to PostgreSQL JSONB CSV format.
 
     Args:
         parquet_dir: Directory containing Parquet files
         output_dir: Output directory for CSV files
+        skip_timeseries: If True, don't export timeseries (use shared version)
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -440,7 +545,7 @@ def export_postgresql_jsonb_csv(parquet_dir: Path, output_dir: Path) -> None:
     edges_df.to_csv(output_dir / "pg_jsonb_edges.csv", index=False)
 
     # Timeseries (same format)
-    if (parquet_dir / "timeseries.parquet").exists():
+    if not skip_timeseries and (parquet_dir / "timeseries.parquet").exists():
         ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
         ts_df.rename(columns={"timestamp": "time"}).to_csv(
             output_dir / "pg_timeseries.csv", index=False
@@ -453,12 +558,17 @@ def export_postgresql_jsonb_csv(parquet_dir: Path, output_dir: Path) -> None:
 # MEMGRAPH CSV EXPORT
 # =============================================================================
 
-def export_memgraph_csv(parquet_dir: Path, output_dir: Path) -> None:
+def export_memgraph_csv(
+    parquet_dir: Path,
+    output_dir: Path,
+    skip_timeseries: bool = False,
+) -> None:
     """Export Parquet to Memgraph CSV format.
 
     Args:
         parquet_dir: Directory containing Parquet files
         output_dir: Output directory for CSV files
+        skip_timeseries: If True, don't export timeseries (use shared version)
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -491,8 +601,8 @@ def export_memgraph_csv(parquet_dir: Path, output_dir: Path) -> None:
         output_dir / "mg_edges.csv", index=False
     )
 
-    # Timeseries for TimescaleDB
-    if (parquet_dir / "timeseries.parquet").exists():
+    # Timeseries for TimescaleDB (M2 hybrid)
+    if not skip_timeseries and (parquet_dir / "timeseries.parquet").exists():
         ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
         ts_df.rename(columns={"timestamp": "time"}).to_csv(
             output_dir / "timeseries.csv", index=False
@@ -893,7 +1003,8 @@ def save_fingerprint(fingerprint: dict, output_dir: Path) -> None:
 def export_for_target(
     parquet_dir: Path,
     target: str,
-    output_dir: Path
+    output_dir: Path,
+    skip_timeseries: bool = False,
 ) -> None:
     """Export Parquet to a specific target format.
 
@@ -901,33 +1012,36 @@ def export_for_target(
         parquet_dir: Directory containing Parquet files
         target: Target format (postgresql, postgresql_jsonb, memgraph, oxigraph)
         output_dir: Output directory
+        skip_timeseries: If True, don't export timeseries.csv (use shared version instead)
     """
     parquet_dir = Path(parquet_dir)
     output_dir = Path(output_dir)
 
     if target == "postgresql":
-        export_postgresql_csv(parquet_dir, output_dir)
+        export_postgresql_csv(parquet_dir, output_dir, skip_timeseries=skip_timeseries)
 
     elif target == "postgresql_jsonb":
-        export_postgresql_jsonb_csv(parquet_dir, output_dir)
+        export_postgresql_jsonb_csv(parquet_dir, output_dir, skip_timeseries=skip_timeseries)
 
     elif target == "memgraph":
-        export_memgraph_csv(parquet_dir, output_dir)
+        export_memgraph_csv(parquet_dir, output_dir, skip_timeseries=skip_timeseries)
 
     elif target == "memgraph_m1":
-        export_memgraph_csv(parquet_dir, output_dir)
+        # M1 uses chunks, not timeseries.csv
+        export_memgraph_csv(parquet_dir, output_dir, skip_timeseries=True)
         export_memgraph_chunks_csv(parquet_dir, output_dir)
 
     elif target == "oxigraph":
         export_ntriples(parquet_dir, output_dir)
         # Export timeseries for TimescaleDB (O2 is hybrid like M2)
-        if (parquet_dir / "timeseries.parquet").exists():
+        if not skip_timeseries and (parquet_dir / "timeseries.parquet").exists():
             ts_df = pd.read_parquet(parquet_dir / "timeseries.parquet")
             ts_df.rename(columns={"timestamp": "time"}).to_csv(
                 output_dir / "timeseries.csv", index=False
             )
 
     elif target == "oxigraph_o1":
+        # O1 uses chunks, not timeseries.csv
         export_ntriples(parquet_dir, output_dir)
         export_oxigraph_chunks_ntriples(parquet_dir, output_dir)
         export_oxigraph_aggregates_ntriples(parquet_dir, output_dir)

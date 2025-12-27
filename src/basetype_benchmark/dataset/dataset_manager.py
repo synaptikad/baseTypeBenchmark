@@ -390,7 +390,8 @@ class DatasetManager:
         self,
         profile_name: str,
         scenario: str,
-        seed: int = DEFAULT_SEED
+        seed: int = DEFAULT_SEED,
+        skip_timeseries: bool = False,
     ) -> Path:
         """Exporte uniquement un scénario spécifique depuis le Parquet pivot.
 
@@ -403,6 +404,7 @@ class DatasetManager:
             profile_name: Nom du profil
             scenario: Code scénario (P1, P2, M1, M2, O1, O2)
             seed: Graine
+            skip_timeseries: If True, don't export timeseries (use shared version)
 
         Returns:
             Path vers le répertoire du scénario
@@ -435,8 +437,12 @@ class DatasetManager:
 
         target = target_mapping[scenario_upper]
 
+        # Check if shared timeseries exists
+        shared_ts_path = export_path / "timeseries.csv"
+        use_skip_ts = skip_timeseries or shared_ts_path.exists()
+
         print(f"[EXPORT] {scenario_upper} ({target})...")
-        exporter_v2.export_for_target(parquet_dir, target, output_dir)
+        exporter_v2.export_for_target(parquet_dir, target, output_dir, skip_timeseries=use_skip_ts)
         print(f"[EXPORT] {scenario_upper} done -> {output_dir}")
 
         return output_dir
