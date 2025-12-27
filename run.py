@@ -577,22 +577,8 @@ def _workflow_dataset_generate():
 
     seed = prompt("\nSeed (for reproducibility)", "42")
 
-    # Ask about parallel simulation
-    import multiprocessing
-    cpu_count = multiprocessing.cpu_count()
-    use_parallel = prompt_yes_no(f"\nUse parallel simulation? ({cpu_count} CPUs available)", True)
-    n_workers = None
-    if use_parallel:
-        workers_str = prompt(f"Number of workers (1-{cpu_count})", str(min(cpu_count, 32)))
-        try:
-            n_workers = int(workers_str)
-            if n_workers < 1:
-                n_workers = 1
-            elif n_workers > cpu_count:
-                n_workers = cpu_count
-        except ValueError:
-            n_workers = min(cpu_count, 32)
-        print_info(f"Using {n_workers} parallel workers")
+    # Simulation mode: vectorized is the default and recommended (fastest)
+    mode = "vectorized"
 
     if not prompt_yes_no(f"\nGenerate {profile}?"):
         return
@@ -605,8 +591,9 @@ def _workflow_dataset_generate():
         manager = DatasetManager()
         # Génère via V2 (generator_v2 + exporter_v2) et exporte 6 formats
         export_path, summary, fingerprint = manager.generate_and_export(
-            profile, int(seed),
-            parallel=use_parallel, n_workers=n_workers
+            profile,
+            int(seed),
+            mode=mode,
         )
         print()
         print_ok(f"Dataset ready at: {export_path}")

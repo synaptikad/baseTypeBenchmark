@@ -93,7 +93,6 @@ class DatasetManager:
         profile_name: str,
         seed: int = DEFAULT_SEED,
         formats: list = None,
-        parallel: bool = False,
         n_workers: int = None,
         mode: str = "vectorized",
     ) -> Tuple[Path, Dict[str, Any], Dict[str, Any]]:
@@ -113,12 +112,11 @@ class DatasetManager:
             formats: Liste des formats d'export (None = tous)
                     Options: 'parquet', 'postgresql', 'postgresql_jsonb',
                              'memgraph', 'memgraph_m1', 'oxigraph', 'oxigraph_o1'
-            parallel: Use parallel simulation with multiprocessing (deprecated)
-            n_workers: Number of worker processes (for parallel mode only)
+            n_workers: Number of worker processes (for mode='parallel' only)
             mode: Simulation mode:
                 - "vectorized": NumPy vectorized (100-500x faster, RECOMMENDED)
                 - "sequential": Original Python step-by-step
-                - "parallel": Multiprocessing (deprecated, use vectorized)
+                - "parallel": Multiprocessing (deprecated; usually slower than vectorized)
 
         Returns:
             Tuple (chemin_export, summary_dict, fingerprint_dict)
@@ -183,10 +181,7 @@ class DatasetManager:
 
         parquet_dir = export_subdir / "parquet"
 
-        # Handle legacy 'parallel' parameter
         effective_mode = mode
-        if parallel and mode == "vectorized":
-            effective_mode = "parallel"
 
         # Always use streaming export for vectorized mode (uses direct Parquet write)
         # For other modes, use streaming only for large datasets
@@ -450,7 +445,6 @@ class DatasetManager:
         self,
         profile_name: str,
         seed: int = DEFAULT_SEED,
-        parallel: bool = False,
         n_workers: int = None,
         mode: str = "vectorized",
     ) -> Tuple[Path, Dict[str, Any]]:
@@ -464,12 +458,11 @@ class DatasetManager:
         Args:
             profile_name: Nom du profil
             seed: Graine
-            parallel: Use parallel simulation with multiprocessing (deprecated)
-            n_workers: Number of worker processes (for parallel mode only)
+            n_workers: Number of worker processes (for mode='parallel' only)
             mode: Simulation mode:
                 - "vectorized": NumPy vectorized (100-500x faster, RECOMMENDED)
                 - "sequential": Original Python step-by-step
-                - "parallel": Multiprocessing (deprecated, use vectorized)
+                - "parallel": Multiprocessing (deprecated; usually slower than vectorized)
 
         Returns:
             Tuple (parquet_dir, fingerprint)
@@ -517,12 +510,11 @@ class DatasetManager:
         # Phase 2: Export Parquet
         print(f"    [2/2] Exporting to Parquet pivot...")
 
-        # Handle legacy 'parallel' parameter
         effective_mode = mode
-        if parallel and mode == "vectorized":
-            effective_mode = "parallel"
 
-        if use_streaming:
+        # Always use streaming export for vectorized mode (uses direct Parquet write)
+        # For other modes, use streaming only for large datasets
+        if effective_mode == "vectorized" or use_streaming:
             exporter_v2.export_parquet_streaming(
                 dataset, parquet_dir, duration_days=duration_days,
                 mode=effective_mode, n_workers=n_workers

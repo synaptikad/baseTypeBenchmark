@@ -829,7 +829,6 @@ def generate_timeseries(
     show_progress: bool = True,
     use_simulation: bool = True,
     simulation_config_path: Optional[Path] = None,
-    parallel: bool = False,
     n_workers: Optional[int] = None,
     mode: str = "vectorized",
 ) -> Iterator[Tuple[str, datetime, float]]:
@@ -843,22 +842,17 @@ def generate_timeseries(
         show_progress: Show progress bar (default: True)
         use_simulation: Use physical simulation with deadband (default: True)
         simulation_config_path: Path to simulation.yaml config file
-        parallel: Use parallel simulation with multiprocessing (deprecated)
-        n_workers: Number of worker processes (for parallel mode only)
+        n_workers: Number of worker processes (for mode='parallel' only)
         mode: Simulation mode:
             - "vectorized": NumPy vectorized (100-500x faster, RECOMMENDED)
             - "sequential": Original Python step-by-step
-            - "parallel": Multiprocessing (deprecated, use vectorized)
+            - "parallel": Multiprocessing (deprecated; usually slower than vectorized)
 
     Yields:
         Tuples of (point_id, timestamp, value)
     """
     if start_time is None:
         start_time = datetime(2024, 1, 1)
-
-    # Handle legacy 'parallel' parameter
-    if parallel and mode == "vectorized":
-        mode = "parallel"
 
     if use_simulation:
         # Use physical simulation engine with deadband filtering

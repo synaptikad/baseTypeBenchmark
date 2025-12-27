@@ -235,7 +235,6 @@ def export_parquet_streaming(
     output_dir: Path,
     duration_days: int = 30,
     batch_size: int = 500000,
-    parallel: bool = False,
     n_workers: int | None = None,
     mode: str = "vectorized",
 ) -> None:
@@ -245,13 +244,12 @@ def export_parquet_streaming(
         dataset: Generated dataset
         output_dir: Output directory
         duration_days: Duration for timeseries generation
-        batch_size: Number of timeseries rows per batch (default 500k for parallel)
-        parallel: Use parallel simulation with multiprocessing (deprecated)
-        n_workers: Number of worker processes (for parallel mode only)
+        batch_size: Number of timeseries rows per batch
+        n_workers: Number of worker processes (for mode='parallel' only)
         mode: Simulation mode:
             - "vectorized": NumPy vectorized (100-500x faster, RECOMMENDED)
             - "sequential": Original Python step-by-step
-            - "parallel": Multiprocessing (deprecated, use vectorized)
+            - "parallel": Multiprocessing (deprecated; usually slower than vectorized)
     """
     import random
     import pyarrow as pa
@@ -275,10 +273,7 @@ def export_parquet_streaming(
     ]
     pd.DataFrame(edges_data).to_parquet(output_dir / "edges.parquet", index=False)
 
-    # Handle legacy 'parallel' parameter
     effective_mode = mode
-    if parallel and mode == "vectorized":
-        effective_mode = "parallel"
 
     # Use direct Parquet export for vectorized mode (10-50x faster)
     if effective_mode == "vectorized":

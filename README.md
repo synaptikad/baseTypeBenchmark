@@ -81,11 +81,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # Installer les dependances
-pip install -e .
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pip install -e .
 
 # Lancer le menu interactif
 python run.py
+
+# (Alternative sans activer le venv)
+# .venv/bin/python run.py
 ```
 
 ### Script de deploiement cloud
@@ -102,7 +105,7 @@ bash deploy/ovh_setup.sh
 ### Menu principal interactif
 
 ```bash
-python run.py
+.venv/bin/python run.py
 ```
 
 Affiche le menu :
@@ -131,6 +134,10 @@ Option **2. Generate Dataset** :
 2. Si source externe disponible: importer (choix scale/duree selon disponibilite)
 3. Sinon: generer localement (choix scale, duree, seed)
 4. Le generateur cree le graphe, l'exporteur produit le Parquet (format pivot) puis les 6 formats cibles (P1, P2, M1, M2, O1, O2)
+
+Notes (perf):
+- La generation utilise par defaut le mode **vectorized** et l'export Parquet **direct** par lots (barre de progression "Writing batches").
+- Le mode parallel historique a ete retire du workflow interactif car il est generalement moins performant que vectorized pour ce workload.
 
 ### Execution du benchmark
 
