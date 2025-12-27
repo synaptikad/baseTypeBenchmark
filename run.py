@@ -305,8 +305,32 @@ def start_containers(containers: List[str]) -> bool:
 def check_dataset(profile: str, seed: int = 42) -> bool:
     """Check if dataset has been exported to disk (V2 format)."""
     export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{profile}_seed{seed}"
-    # V2 format uses fingerprint.json as completion marker
-    return (export_dir / "fingerprint.json").exists()
+    # Prefer fingerprint.json (written at the end), but accept partial exports too
+    # so interrupted generations still show up in purge/UI.
+    parquet_dir = export_dir / "parquet"
+    return (
+        (export_dir / "fingerprint.json").exists()
+        or (parquet_dir / "timeseries.parquet").exists()
+        or (parquet_dir / "nodes.parquet").exists()
+    )
+
+
+def _is_export_dir(subdir: Path) -> bool:
+    """Return True if subdir looks like a V2 export directory.
+
+    We consider a dataset "present" if either:
+    - fingerprint.json exists (complete export)
+    - or Parquet pivot exists (partial export, e.g. interrupted before fingerprint)
+    """
+    if not subdir.is_dir():
+        return False
+    if (subdir / "fingerprint.json").exists():
+        return True
+    parquet_dir = subdir / "parquet"
+    return (
+        (parquet_dir / "timeseries.parquet").exists()
+        or (parquet_dir / "nodes.parquet").exists()
+    )
 
 
 def get_available_profiles() -> List[str]:
@@ -315,7 +339,7 @@ def get_available_profiles() -> List[str]:
     export_dir = Path("src/basetype_benchmark/dataset/exports")
     if export_dir.exists():
         for subdir in export_dir.iterdir():
-            if subdir.is_dir() and (subdir / "fingerprint.json").exists():
+            if _is_export_dir(subdir):
                 # Extract profile name from directory name (e.g., "small-1w_seed42" -> "small-1w")
                 name = subdir.name.rsplit("_seed", 1)[0]
                 if name not in available:
@@ -4349,8 +4373,8 @@ def get_export_size_info() -> Tuple[int, float]:
     total_size = 0.0
 
     for subdir in export_dir.iterdir():
-        # V2 format: check for fingerprint.json (created after successful export)
-        if subdir.is_dir() and (subdir / "fingerprint.json").exists():
+        # Count both complete and partial exports
+        if _is_export_dir(subdir):
             count += 1
             total_size += sum(f.stat().st_size for f in subdir.rglob('*') if f.is_file()) / (1024 * 1024)
 
@@ -4368,8 +4392,8 @@ def workflow_purge():
 
     if export_dir.exists():
         for subdir in export_dir.iterdir():
-            # V2 format: check for fingerprint.json (consistent with get_available_profiles)
-            if subdir.is_dir() and (subdir / "fingerprint.json").exists():
+            # Include both complete and partial exports
+            if _is_export_dir(subdir):
                 size_mb = sum(f.stat().st_size for f in subdir.rglob('*') if f.is_file()) / (1024 * 1024)
                 dataset_items.append({
                     'path': subdir,
