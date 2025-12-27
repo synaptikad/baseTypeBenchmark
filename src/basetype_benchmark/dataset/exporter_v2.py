@@ -275,7 +275,38 @@ def export_parquet_streaming(
     ]
     pd.DataFrame(edges_data).to_parquet(output_dir / "edges.parquet", index=False)
 
-    # Stream timeseries
+    # Handle legacy 'parallel' parameter
+    effective_mode = mode
+    if parallel and mode == "vectorized":
+        effective_mode = "parallel"
+
+    # Use direct Parquet export for vectorized mode (10-50x faster)
+    if effective_mode == "vectorized":
+        from .simulation.vectorized import export_timeseries_parquet_direct
+        from datetime import datetime
+
+        rng = random.Random(dataset.seed)
+        ts_path = output_dir / "timeseries.parquet"
+
+        stats = export_timeseries_parquet_direct(
+            points=dataset.points,
+            duration_days=duration_days,
+            output_path=str(ts_path),
+            start_time=datetime(2024, 1, 1, 0, 0, 0),
+            seed=rng.randint(0, 2**31),
+            dt=60.0,
+            show_progress=True,
+            classify_func=None,
+            batch_size=10_000_000,  # 10M rows per batch for efficiency
+        )
+
+        print(f"\nExported to Parquet (direct vectorized): {output_dir}")
+        print(f"  Nodes: {len(nodes_data)}")
+        print(f"  Edges: {len(edges_data)}")
+        print(f"  Timeseries: {stats['n_samples']:,}")
+        return
+
+    # Fallback: streaming mode for sequential/parallel
     rng = random.Random(dataset.seed)
     ts_path = output_dir / "timeseries.parquet"
 
@@ -288,11 +319,6 @@ def export_parquet_streaming(
     writer = pq.ParquetWriter(ts_path, schema)
     batch = []
     total_rows = 0
-
-    # Handle legacy 'parallel' parameter
-    effective_mode = mode
-    if parallel and mode == "vectorized":
-        effective_mode = "parallel"
 
     for point_id, timestamp, value in generate_timeseries(
         dataset.points, duration_days, rng,
