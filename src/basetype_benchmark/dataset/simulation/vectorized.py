@@ -120,16 +120,19 @@ class VectorizedSimulator:
     TYPE_STATUS: int = 2
     TYPE_ALARM: int = 3
 
-    def generate_all(self, seed: int) -> np.ndarray:
+    def generate_all(self, seed: int, show_progress: bool = False) -> np.ndarray:
         """
         Generate ALL trajectories in a single vectorized pass.
 
         Args:
             seed: Random seed for reproducibility
+            show_progress: Whether to show progress bar
 
         Returns:
             trajectories: Array of shape (n_points, n_timesteps)
         """
+        from tqdm import tqdm
+
         rng = np.random.default_rng(seed)
 
         # Pre-compute OU coefficients (constant for all timesteps)
@@ -160,7 +163,16 @@ class VectorizedSimulator:
         trajectories[:, 0] = np.clip(trajectories[:, 0], self.min_values, self.max_values)
 
         # Vectorized OU simulation (single loop over time, all points in parallel)
-        for t in range(1, self.n_timesteps):
+        time_range = range(1, self.n_timesteps)
+        if show_progress:
+            time_range = tqdm(
+                time_range,
+                desc="  Simulating timesteps",
+                unit="steps",
+                leave=False,
+            )
+
+        for t in time_range:
             # OU step: X[t] = μ + (X[t-1] - μ) × decay + noise
             trajectories[:, t] = (
                 self.means +
@@ -434,9 +446,10 @@ def generate_timeseries_vectorized(
 
     # Generate all trajectories
     if show_progress:
-        print("  Generating trajectories...")
+        mem_estimate_gb = (n_points * n_timesteps * 8) / (1024**3)
+        print(f"  Allocating {mem_estimate_gb:.2f} GB for trajectories...")
 
-    trajectories = simulator.generate_all(seed)
+    trajectories = simulator.generate_all(seed, show_progress=show_progress)
 
     if show_progress:
         print(f"  Trajectories shape: {trajectories.shape}")
