@@ -188,7 +188,9 @@ class DatasetManager:
         if parallel and mode == "vectorized":
             effective_mode = "parallel"
 
-        if use_streaming:
+        # Always use streaming export for vectorized mode (uses direct Parquet write)
+        # For other modes, use streaming only for large datasets
+        if effective_mode == "vectorized" or use_streaming:
             exporter_v2.export_parquet_streaming(
                 dataset, parquet_dir, duration_days=duration_days,
                 mode=effective_mode, n_workers=n_workers
