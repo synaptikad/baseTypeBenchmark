@@ -403,7 +403,7 @@ class DatasetGeneratorV2:
             )
             self.points.append(point)
 
-            # Create point node
+            # Create point node - inherit location from meter
             quantity = self._infer_quantity(pt_def["name"])
             point_node = Node(
                 point_id, "Point",
@@ -411,12 +411,15 @@ class DatasetGeneratorV2:
                     "name": pt_def["name"],
                     "equipment_id": meter.id,
                     "unit": pt_def["unit"],
-                    "quantity": quantity
+                    "quantity": quantity,
+                    "building_id": meter.properties.get("building_id", ""),
+                    "floor_id": meter.properties.get("floor_id", ""),
+                    "space_id": meter.properties.get("space_id", ""),
                 }
             )
             self.nodes.append(point_node)
             self.edges.append(Edge(meter.id, point_id, "HAS_POINT"))
-            
+
             # Add MEASURES edge
             self.edges.append(Edge(point_id, quantity.capitalize(), "MEASURES"))
 
@@ -536,7 +539,7 @@ class DatasetGeneratorV2:
             )
             self.points.append(point)
 
-            # Create point node
+            # Create point node - inherit location from equipment
             quantity = self._infer_quantity(pt_def["name"])
             point_node = Node(
                 point_id, "Point",
@@ -544,12 +547,15 @@ class DatasetGeneratorV2:
                     "name": pt_def["name"],
                     "equipment_id": equipment.id,
                     "unit": pt_def.get("unit", "-"),
-                    "quantity": quantity
+                    "quantity": quantity,
+                    "building_id": equipment.properties.get("building_id", ""),
+                    "floor_id": equipment.properties.get("floor_id", ""),
+                    "space_id": equipment.properties.get("space_id", ""),
                 }
             )
             self.nodes.append(point_node)
             self.edges.append(Edge(equipment.id, point_id, "HAS_POINT"))
-            
+
             # Add MEASURES edge
             self.edges.append(Edge(point_id, quantity.capitalize(), "MEASURES"))
 
