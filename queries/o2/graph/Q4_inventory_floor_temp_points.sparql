@@ -16,7 +16,9 @@ WHERE {
   ?floor btb:contains ?space .
   ?space rdf:type btb:Space .
 
-  ?space btb:contains|btb:serves ?eq .
+  # Equipment either CONTAINED by Space or SERVES the Space
+  # Generator creates Equipment -> SERVES -> Space, so we use ^btb:serves (inverse)
+  { ?space btb:contains ?eq } UNION { ?eq btb:serves ?space }
   ?eq rdf:type btb:Equipment ;
       btb:id ?equipment_id ;
       btb:name ?equipment_name .

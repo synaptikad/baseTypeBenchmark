@@ -13,14 +13,16 @@ SELECT
 FROM nodes f
 JOIN edges e1 ON e1.src_id = f.id
 JOIN nodes sp ON sp.id = e1.dst_id AND sp.type = 'Space'
-JOIN edges e2 ON e2.src_id = sp.id
-JOIN nodes eq ON eq.id = e2.dst_id AND eq.type = 'Equipment'
+-- Equipment either CONTAINED by Space or SERVES the Space
+JOIN edges e2 ON (e2.src_id = sp.id AND e2.rel_type = 'CONTAINS')
+              OR (e2.dst_id = sp.id AND e2.rel_type = 'SERVES')
+JOIN nodes eq ON eq.id = CASE WHEN e2.rel_type = 'CONTAINS' THEN e2.dst_id ELSE e2.src_id END
+             AND eq.type = 'Equipment'
 JOIN edges e3 ON e3.src_id = eq.id
 JOIN nodes p ON p.id = e3.dst_id AND p.type = 'Point'
 JOIN edges e4 ON e4.src_id = p.id AND e4.rel_type = 'MEASURES'
 WHERE f.id = '$FLOOR_ID'
   AND e1.rel_type = 'CONTAINS'
-  AND e2.rel_type IN ('CONTAINS', 'SERVES')
   AND e3.rel_type = 'HAS_POINT'
   AND e4.dst_id = 'Temperature'
 ORDER BY p.name;

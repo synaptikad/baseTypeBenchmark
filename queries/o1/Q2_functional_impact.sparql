@@ -10,8 +10,9 @@ WHERE {
   # Start from specified equipment
   BIND(<http://basetype.benchmark/$EQUIPMENT_ID> AS ?eq)
 
-  # Find affected spaces/floors/zones via reverse traversal (up to 8 hops)
-  ?affected (btb:contains|btb:serves|btb:feeds)+ ?eq .
+  # Find affected spaces/floors/zones via reverse traversal
+  # Note: btb:serves direction is Equipment->Space, so we use ^btb:serves
+  ?affected (btb:contains|^btb:serves|btb:feeds)+ ?eq .
   ?affected rdf:type ?type .
 
   FILTER(?type IN (btb:Space, btb:Floor, btb:Zone))
