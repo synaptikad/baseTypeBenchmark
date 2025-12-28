@@ -27,7 +27,7 @@
 | Call Car | cmd-point | floor | -5 à 100 | Analog | Appel cabine à étage |
 | Door Control | cmd-point | - | OPEN/CLOSE/HOLD | Enum | Commande portes |
 | Operation Mode | cmd-point | - | NORMAL/INSPECTION/FIRE | Enum | Mode opérationnel |
-| Out of Service | cmd-point | - | ENABLE/DISABLE | Binaire | Mise hors service |
+| Out of Service Cmd | cmd-point | - | ENABLE/DISABLE | Binaire | Mise hors service |
 | Emergency Stop | cmd-point | - | STOP/RELEASE | Binaire | Arrêt d'urgence |
 | Priority Call | cmd-point | floor | -5 à 100 | Analog | Appel prioritaire (pompiers) |
 
@@ -44,7 +44,7 @@
 | Fire Mode Status | status-point | Enum | INACTIVE/PHASE1/PHASE2 | Mode incendie |
 | Emergency Power | status-point | Enum | NORMAL/ON_BACKUP | Alimentation secours |
 | Inspection Mode | status-point | Boolean | FALSE/TRUE | Mode inspection |
-| Out of Service | status-point | Boolean | FALSE/TRUE | Hors service |
+| Out of Service Status | status-point | Boolean | FALSE/TRUE | Hors service |
 | Door Zone | status-point | Boolean | FALSE/TRUE | En zone portes |
 | Alarm Active | status-point | Boolean | FALSE/TRUE | Alarme cabine active |
 | Communication Status | status-point | Enum | OK/FAULT | État interphone cabine |

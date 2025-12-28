@@ -154,9 +154,15 @@ def parse_points_multiformat(content: str) -> List[dict]:
             elif 'alarme' in line.lower():
                 current_section = "alarme"
             continue
+        
+        # Skip non-point sections (mappings, protocols, sources, etc.)
+        if line.startswith('##') and ('mapping' in line.lower() or 'protocol' in line.lower() or 
+                                       'source' in line.lower() or 'référence' in line.lower()):
+            current_section = None  # Disable parsing until next valid section
+            continue
 
-        # Ignorer les lignes non-table
-        if not line.startswith('|'):
+        # Ignorer les lignes non-table ou si dans une section non-point
+        if not line.startswith('|') or current_section is None:
             continue
 
         cells = [c.strip() for c in line.split('|')[1:-1]]
@@ -190,9 +196,37 @@ def is_header_row(cells: List[str]) -> bool:
     Returns:
         True si c'est une ligne d'en-tête
     """
-    header_words = ['point', 'code', 'nom', 'tag', 'unité', 'unit', 'description', 'plage', 'range']
-    first_cell_lower = cells[0].lower() if cells else ""
-    return any(w in first_cell_lower for w in header_words)
+    if not cells:
+        return False
+    
+    first_cell = cells[0].strip()
+    # Exact matches for common header names
+    exact_headers = ['Point', 'Code', 'Nom', 'Name']
+    if first_cell in exact_headers:
+        return True
+    
+    # Check if it looks like a header (short words, multiple columns with header-like names)
+    # Exclude cells with numeric/measurement values (e.g., "0-120%", "1s")
+    header_indicators = ['unité', 'unit', 'description', 'plage', 'range', 'tag', 'haystack', 'brick', 'fréquence']
+    
+    # Count header indicators, but only in cells without numeric values
+    header_count = 0
+    numeric_indicators = 0
+    for cell in cells:
+        cell_lower = cell.lower()
+        # Skip cells with obvious data values (numbers, ranges, units)
+        if any(c.isdigit() for c in cell) or cell in ('%', '-', 'kW', 'kWh', '°C', 'Pa', 'V', 'A'):
+            numeric_indicators += 1
+            continue
+        if any(ind in cell_lower for ind in header_indicators):
+            header_count += 1
+    
+    # If we have numeric/data values, it's probably not a header
+    if numeric_indicators >= 2:
+        return False
+    
+    # If multiple columns have header-like words, it's likely a header
+    return header_count >= 2
 
 
 def build_column_map(cells: List[str], fmt: Optional[str]) -> Dict[str, int]:
@@ -206,11 +240,23 @@ def build_column_map(cells: List[str], fmt: Optional[str]) -> Dict[str, int]:
         Dict nom_colonne -> index
     """
     mapping = {}
+    name_column_priority = []  # Track candidates for name column
+    
     for i, cell in enumerate(cells):
-        cell_lower = cell.lower().strip()
-        if 'point' in cell_lower or 'code' in cell_lower:
-            mapping['name'] = i
-        elif 'unité' in cell_lower or 'unit' in cell_lower:
+        cell_stripped = cell.strip()
+        cell_lower = cell_stripped.lower()
+        
+        # Exact match for primary name columns (highest priority)
+        if cell_stripped in ('Point', 'Code', 'Nom', 'Name'):
+            name_column_priority.insert(0, i)  # Prepend (highest priority)
+        # Partial match for name-like columns (lower priority)
+        elif 'point' in cell_lower or 'code' in cell_lower or 'nom' in cell_lower:
+            # Exclude tag columns (Haystack, Brick) from being used as name
+            if 'haystack' not in cell_lower and 'brick' not in cell_lower and 'tag' not in cell_lower:
+                name_column_priority.append(i)
+        
+        # Map other columns
+        if 'unité' in cell_lower or 'unit' in cell_lower:
             mapping['unit'] = i
         elif 'plage' in cell_lower or 'range' in cell_lower:
             mapping['range'] = i
@@ -222,6 +268,11 @@ def build_column_map(cells: List[str], fmt: Optional[str]) -> Dict[str, int]:
             mapping['brick'] = i
         elif 'description' in cell_lower:
             mapping['description'] = i
+    
+    # Assign name column using priority list (first match = highest priority)
+    if name_column_priority:
+        mapping['name'] = name_column_priority[0]
+    
     return mapping
 
 

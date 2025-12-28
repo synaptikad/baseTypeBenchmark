@@ -918,21 +918,35 @@ def export_oxigraph_aggregates_ntriples(
 # FINGERPRINT
 # =============================================================================
 
-def compute_fingerprint(parquet_dir: Path) -> dict:
+def compute_fingerprint(
+    parquet_dir: Path,
+    *,
+    include_timeseries_hash: bool = False,
+    ts_hash_mode: str = "file",
+) -> dict:
     """Compute a deterministic fingerprint of the dataset.
+
+    Important: timeseries hashing can be extremely expensive for large datasets.
+    By default, we compute *counts* from Parquet metadata and skip hashing the
+    full timeseries content.
 
     Args:
         parquet_dir: Directory containing Parquet files
+        include_timeseries_hash: If True, compute a content hash for timeseries.parquet
+        ts_hash_mode: "file" (stream hash file bytes), "row" (slow per-row canonical hash)
 
     Returns:
         Fingerprint dictionary
     """
     parquet_dir = Path(parquet_dir)
 
-    nodes_df = pd.read_parquet(parquet_dir / "nodes.parquet")
-    edges_df = pd.read_parquet(parquet_dir / "edges.parquet")
+    nodes_path = parquet_dir / "nodes.parquet"
+    edges_path = parquet_dir / "edges.parquet"
+    ts_path = parquet_dir / "timeseries.parquet"
 
-    # Counts
+    nodes_df = pd.read_parquet(nodes_path, columns=["id", "type"])
+    edges_df = pd.read_parquet(edges_path, columns=["src_id", "dst_id", "rel_type"])
+
     counts = {
         "nodes": len(nodes_df),
         "edges": len(edges_df),
@@ -940,41 +954,53 @@ def compute_fingerprint(parquet_dir: Path) -> dict:
         "edge_types": dict(sorted(edges_df["rel_type"].value_counts().items())),
     }
 
-    # Timeseries counts
-    ts_path = parquet_dir / "timeseries.parquet"
+    # Timeseries count from metadata (fast, no full read)
     if ts_path.exists():
-        ts_df = pd.read_parquet(ts_path)
-        counts["timeseries"] = len(ts_df)
+        try:
+            pf = pq.ParquetFile(ts_path)
+            counts["timeseries"] = int(pf.metadata.num_rows)
+        except Exception:
+            # Fallback if metadata can't be read
+            ts_df = pd.read_parquet(ts_path, columns=["point_id"])
+            counts["timeseries"] = len(ts_df)
 
-    # Structural hash
+    # Structural hash (cheap; nodes/edges are comparatively small)
     node_ids = "\n".join(sorted(nodes_df["id"].tolist()))
     edge_keys = "\n".join(sorted(
-        f"{row['src_id']}|{row['rel_type']}|{row['dst_id']}"
-        for _, row in edges_df.iterrows()
+        f"{row.src_id}|{row.rel_type}|{row.dst_id}"
+        for row in edges_df.itertuples(index=False)
     ))
 
-    struct_hash = hashlib.sha256(
-        (node_ids + edge_keys).encode("utf-8")
-    ).hexdigest()[:16]
+    struct_hash = hashlib.sha256((node_ids + edge_keys).encode("utf-8")).hexdigest()[:16]
 
-    # Timeseries hash (true streaming via PyArrow row groups)
-    # Note: Hash is order-dependent. We process row groups sequentially and
-    # sort within each group. For deterministic results, the parquet file
-    # should be written with consistent row group ordering.
     ts_hash = None
-    if ts_path.exists():
-        hasher = hashlib.sha256()
-        pf = pq.ParquetFile(ts_path)
-        for batch in pf.iter_batches(
-            batch_size=100_000,
-            columns=["point_id", "timestamp", "value"]
-        ):
-            # Convert batch to pandas, sort within batch, hash rows
-            df = batch.to_pandas().sort_values(["point_id", "timestamp"])
-            for row in df.itertuples(index=False):
-                line = f"{row.point_id}|{row.timestamp}|{round(row.value, 6)}\n"
-                hasher.update(line.encode("utf-8"))
-        ts_hash = hasher.hexdigest()[:16]
+    ts_hash_mode_out = "none"
+    if ts_path.exists() and include_timeseries_hash:
+        if ts_hash_mode not in {"file", "row"}:
+            raise ValueError(f"Invalid ts_hash_mode={ts_hash_mode!r}. Expected 'file' or 'row'.")
+
+        if ts_hash_mode == "file":
+            # Stream hash the Parquet file bytes (fast, low-memory).
+            hasher = hashlib.sha256()
+            with open(ts_path, "rb") as f:
+                for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+                    hasher.update(chunk)
+            ts_hash = hasher.hexdigest()[:16]
+            ts_hash_mode_out = "file"
+        else:
+            # Slow canonical per-row hash (legacy behavior).
+            hasher = hashlib.sha256()
+            pf = pq.ParquetFile(ts_path)
+            for batch in pf.iter_batches(
+                batch_size=100_000,
+                columns=["point_id", "timestamp", "value"],
+            ):
+                df = batch.to_pandas().sort_values(["point_id", "timestamp"])
+                for row in df.itertuples(index=False):
+                    line = f"{row.point_id}|{row.timestamp}|{round(row.value, 6)}\n"
+                    hasher.update(line.encode("utf-8"))
+            ts_hash = hasher.hexdigest()[:16]
+            ts_hash_mode_out = "row"
 
     return {
         "version": "2.0",
@@ -982,6 +1008,7 @@ def compute_fingerprint(parquet_dir: Path) -> dict:
         "counts": counts,
         "struct_hash": struct_hash,
         "ts_hash": ts_hash,
+        "ts_hash_mode": ts_hash_mode_out,
     }
 
 

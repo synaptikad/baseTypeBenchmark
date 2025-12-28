@@ -13,6 +13,7 @@ import sys
 import subprocess
 import time
 import json
+import math
 import getpass
 from pathlib import Path
 from datetime import datetime
@@ -119,6 +120,286 @@ def run_cmd(cmd: str, cwd: str = None) -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+class _CopyProgressFile:
+    """File wrapper that prints progress while psycopg2 COPY reads the file.
+
+    psycopg2's copy_expert() pulls data via file.read(). For large CSVs this can
+    appear to "hang" for minutes, so we emit periodic progress.
+    """
+
+    def __init__(
+        self,
+        raw_file,
+        total_bytes: int,
+        label: str,
+        print_every_s: float = 2.0,
+    ):
+        self._f = raw_file
+        self._total = max(int(total_bytes), 1)
+        self._label = label
+        self._print_every_s = print_every_s
+        self._read = 0
+        self._t0 = time.time()
+        self._last_print = 0.0
+
+    def read(self, size: int = -1):
+        chunk = self._f.read(size)
+        if chunk:
+            self._read += len(chunk)
+
+            now = time.time()
+            if (now - self._last_print) >= self._print_every_s:
+                elapsed = now - self._t0
+                pct = min(100.0, (self._read / self._total) * 100.0)
+                mb_read = self._read / (1024 * 1024)
+                mb_total = self._total / (1024 * 1024)
+                rate = mb_read / elapsed if elapsed > 0 else 0.0
+                remaining_mb = max(0.0, mb_total - mb_read)
+                eta_s = (remaining_mb / rate) if rate > 0 else 0.0
+
+                eta_str = f" ETA:{eta_s:,.0f}s" if eta_s > 1 else ""
+                print(
+                    f"\r      COPY {self._label}: {pct:5.1f}% "
+                    f"({mb_read:,.0f}/{mb_total:,.0f} MB) {rate:,.1f} MB/s{eta_str}...",
+                    end="",
+                    flush=True,
+                )
+                self._last_print = now
+        return chunk
+
+    def __getattr__(self, name: str):
+        return getattr(self._f, name)
+
+
+def _copy_timeseries_with_progress(cur, conn, ts_file: Path, label: str) -> None:
+    """COPY timeseries CSV into PostgreSQL/TimescaleDB with client + server progress.
+
+    Why:
+    - Client-side: reading a multi-GB CSV can take minutes; without prints it looks frozen.
+    - Server-side: if the backend stalls (locks, IO wait), we still want feedback.
+
+    This function:
+    - Wraps the input file so we can report bytes read / throughput.
+    - Starts a background poller that queries pg_stat_progress_copy and pg_stat_activity
+      for the COPY backend pid, emitting status every few seconds.
+    """
+    import os
+    import threading
+
+    backend_pid = None
+    try:
+        cur.execute("SELECT pg_backend_pid()")
+        backend_pid = int(cur.fetchone()[0])
+    except Exception:
+        backend_pid = None
+
+    stop_evt = threading.Event()
+
+    # Ergonomic dev mode (opt-in):
+    #   BTB_DEV=1
+    # which implies faster feedback on stalls.
+    # Explicit env vars still override:
+    # - BTB_COPY_STALL_WARN_S: seconds without server-side progress before warning
+    # - BTB_COPY_STALL_CANCEL_S: seconds without progress before cancel (0 = disabled)
+    dev_mode = (os.getenv("BTB_DEV", "").strip().lower() in ("1", "true", "yes", "y"))
+    default_warn = "60" if dev_mode else "120"
+    default_cancel = "180" if dev_mode else "0"
+    stall_warn_s = int(os.getenv("BTB_COPY_STALL_WARN_S", default_warn) or default_warn)
+    stall_cancel_s = int(os.getenv("BTB_COPY_STALL_CANCEL_S", default_cancel) or default_cancel)
+
+    def _monitor():
+        if not backend_pid:
+            return
+        try:
+            # Use a separate connection so we can observe the COPY session.
+            from basetype_benchmark.loaders.postgres.load import get_connection
+            mon_conn = get_connection()
+            mon_conn.autocommit = True
+            last_line_t = 0.0
+            last_progress = None
+            last_progress_t = time.time()
+
+            with mon_conn.cursor() as mon_cur:
+                while not stop_evt.is_set():
+                    now = time.time()
+                    progress = None
+                    try:
+                        mon_cur.execute(
+                            """
+                            SELECT bytes_processed, bytes_total, tuples_processed
+                            FROM pg_stat_progress_copy
+                            WHERE pid = %s
+                            """,
+                            (backend_pid,),
+                        )
+                        row = mon_cur.fetchone()
+                        if row:
+                            progress = {
+                                "bytes_processed": int(row[0]) if row[0] is not None else None,
+                                "bytes_total": int(row[1]) if row[1] is not None else None,
+                                "tuples_processed": int(row[2]) if row[2] is not None else None,
+                            }
+                    except Exception:
+                        progress = None
+
+                    # Poll wait info too (helps detect lock/IO waits)
+                    wait_info = None
+                    try:
+                        mon_cur.execute(
+                            """
+                            SELECT state, wait_event_type, wait_event
+                            FROM pg_stat_activity
+                            WHERE pid = %s
+                            """,
+                            (backend_pid,),
+                        )
+                        row = mon_cur.fetchone()
+                        if row:
+                            wait_info = {
+                                "state": row[0],
+                                "wait_event_type": row[1],
+                                "wait_event": row[2],
+                            }
+                    except Exception:
+                        wait_info = None
+
+                    # Only print a server-side line occasionally to avoid spam.
+                    if now - last_line_t >= 10.0:
+                        if progress and progress.get("tuples_processed") is not None:
+                            tp = progress["tuples_processed"]
+                            we = ""
+                            if wait_info and (wait_info.get("wait_event_type") or wait_info.get("wait_event")):
+                                we = f" wait={wait_info.get('wait_event_type')}:{wait_info.get('wait_event')}"
+                            print(f"\n      Server COPY {label}: tuples_processed={tp:,}{we}", flush=True)
+                            last_line_t = now
+                        elif wait_info and wait_info.get("state"):
+                            we = ""
+                            if wait_info.get("wait_event_type") or wait_info.get("wait_event"):
+                                we = f" wait={wait_info.get('wait_event_type')}:{wait_info.get('wait_event')}"
+                            print(f"\n      Server COPY {label}: state={wait_info.get('state')}{we}", flush=True)
+                            last_line_t = now
+
+                    # Stall hint: if pg_stat_progress_copy exists but does not change for a while.
+                    if progress is not None:
+                        if progress != last_progress:
+                            last_progress = progress
+                            last_progress_t = now
+                        else:
+                            stalled_for = now - last_progress_t
+                            if stalled_for >= float(stall_warn_s):
+                                # Lightweight diagnostics: blockers + wait event.
+                                try:
+                                    mon_cur.execute("SELECT pg_blocking_pids(%s)", (backend_pid,))
+                                    blockers = mon_cur.fetchone()[0] or []
+                                except Exception:
+                                    blockers = []
+
+                                if blockers:
+                                    try:
+                                        mon_cur.execute(
+                                            """
+                                            SELECT pid, state, wait_event_type, wait_event
+                                            FROM pg_stat_activity
+                                            WHERE pid = ANY(%s)
+                                            """,
+                                            (blockers,),
+                                        )
+                                        blocker_rows = mon_cur.fetchall() or []
+                                    except Exception:
+                                        blocker_rows = []
+
+                                    print(
+                                        f"\n{YELLOW}[!] COPY appears stalled for ~{int(stalled_for)}s. "
+                                        f"Blocking pids={blockers}{RESET}",
+                                        flush=True,
+                                    )
+                                    for pid, state, wet, we in blocker_rows:
+                                        print(
+                                            f"      blocker pid={pid} state={state} wait={wet}:{we}",
+                                            flush=True,
+                                        )
+                                else:
+                                    we = ""
+                                    if wait_info and (wait_info.get("wait_event_type") or wait_info.get("wait_event")):
+                                        we = f" wait={wait_info.get('wait_event_type')}:{wait_info.get('wait_event')}"
+                                    print(
+                                        f"\n{YELLOW}[!] COPY appears stalled for ~{int(stalled_for)}s.{we} "
+                                        f"(Set BTB_COPY_STALL_CANCEL_S to auto-cancel){RESET}",
+                                        flush=True,
+                                    )
+
+                                # Optional auto-cancel for dev if it stays stalled.
+                                if stall_cancel_s and stalled_for >= float(stall_cancel_s):
+                                    try:
+                                        mon_cur.execute("SELECT pg_cancel_backend(%s)", (backend_pid,))
+                                        cancelled = bool(mon_cur.fetchone()[0])
+                                        if cancelled:
+                                            print(
+                                                f"\n{RED}[!] Cancelled stalled COPY backend pid={backend_pid}.{RESET}",
+                                                flush=True,
+                                            )
+                                    except Exception:
+                                        pass
+
+                                # Don't spam warnings every loop.
+                                last_progress_t = now
+
+                    stop_evt.wait(2.0)
+        except Exception:
+            return
+        finally:
+            try:
+                mon_conn.close()
+            except Exception:
+                pass
+
+    mon_thread = threading.Thread(target=_monitor, name="copy-monitor", daemon=True)
+    mon_thread.start()
+
+    total_bytes = ts_file.stat().st_size
+    if dev_mode:
+        print(
+            f"      {DIM}Dev mode: stall_warn={stall_warn_s}s stall_cancel={stall_cancel_s}s "
+            f"(override with BTB_COPY_STALL_WARN_S/BTB_COPY_STALL_CANCEL_S){RESET}",
+            flush=True,
+        )
+    with open(ts_file, 'rb') as raw:
+        progress_file = _CopyProgressFile(raw, total_bytes, label=label)
+        try:
+            cur.copy_expert(
+                "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
+                progress_file,
+            )
+        except Exception as e:
+            # Surface as much diagnostic info as possible (dev-friendly).
+            try:
+                import psycopg2
+                if isinstance(e, psycopg2.Error):
+                    pgerror = getattr(e, "pgerror", None)
+                    diag = getattr(e, "diag", None)
+                    msg_primary = getattr(diag, "message_primary", None) if diag else None
+                    detail = getattr(diag, "message_detail", None) if diag else None
+                    hint = getattr(diag, "message_hint", None) if diag else None
+                    print_err(f"COPY failed ({label}): {msg_primary or str(e)}")
+                    if detail:
+                        print_warn(f"COPY detail: {detail}")
+                    if hint:
+                        print_warn(f"COPY hint: {hint}")
+                    if pgerror and pgerror != msg_primary:
+                        print_warn(f"COPY pgerror: {pgerror.strip()}")
+                else:
+                    print_err(f"COPY failed ({label}): {e}")
+            except Exception:
+                print_err(f"COPY failed ({label}): {e}")
+            raise
+        finally:
+            stop_evt.set()
+            try:
+                mon_thread.join(timeout=1.0)
+            except Exception:
+                pass
 
 
 def get_docker_compose_cmd() -> str:
@@ -613,12 +894,14 @@ def _workflow_dataset_generate():
         from basetype_benchmark.dataset.dataset_manager import DatasetManager
 
         manager = DatasetManager()
-        # Génère via V2 (generator_v2 + exporter_v2) et exporte 6 formats
-        export_path, summary, fingerprint = manager.generate_and_export(
+        # On-demand workflow: generate ONLY the Parquet pivot.
+        # Scenario formats (P1/P2/M1/M2/O1/O2) are exported just-in-time during benchmarks.
+        parquet_dir, fingerprint = manager.generate_parquet_only(
             profile,
             int(seed),
             mode=mode,
         )
+        export_path = parquet_dir.parent
         print()
         print_ok(f"Dataset ready at: {export_path}")
         print_info(f"Fingerprint: {fingerprint['struct_hash'][:8]}...{fingerprint.get('ts_hash', 'N/A')[:8] if fingerprint.get('ts_hash') else 'N/A'}")
@@ -633,6 +916,121 @@ def _workflow_dataset_generate():
         import traceback
         print_err(f"Generation failed: {e}")
         traceback.print_exc()
+
+
+def _scenario_required_files(export_dir: Path, scenario: str) -> list[Path]:
+    scenario_upper = scenario.upper()
+    scenario_lower = scenario_upper.lower()
+    scenario_dir = export_dir / scenario_lower
+
+    if scenario_upper == "P1":
+        return [
+            scenario_dir / "pg_nodes.csv",
+            scenario_dir / "pg_edges.csv",
+            scenario_dir / "pg_timeseries.csv",
+        ]
+    if scenario_upper == "P2":
+        return [
+            scenario_dir / "pg_jsonb_nodes.csv",
+            scenario_dir / "pg_jsonb_edges.csv",
+            scenario_dir / "pg_timeseries.csv",
+        ]
+    if scenario_upper == "M1":
+        return [
+            scenario_dir / "mg_nodes.csv",
+            scenario_dir / "mg_edges.csv",
+            scenario_dir / "mg_chunks.csv",
+        ]
+    if scenario_upper == "M2":
+        return [
+            scenario_dir / "mg_nodes.csv",
+            scenario_dir / "mg_edges.csv",
+            scenario_dir / "timeseries.csv",
+        ]
+    if scenario_upper == "O1":
+        return [
+            scenario_dir / "graph.nt",
+            scenario_dir / "chunks.nt",
+            scenario_dir / "aggregates.nt",
+        ]
+    if scenario_upper == "O2":
+        return [
+            scenario_dir / "graph.nt",
+            scenario_dir / "timeseries.csv",
+        ]
+
+    raise ValueError(f"Unknown scenario: {scenario}")
+
+
+def _parse_profile_seed_from_export_dir(export_dir: Path) -> tuple[str, int]:
+    """Parse exports/<profile>_seed<seed> directory name."""
+    name = export_dir.name
+    if "_seed" not in name:
+        return name, 42
+    profile_name, seed_str = name.rsplit("_seed", 1)
+    try:
+        return profile_name, int(seed_str)
+    except ValueError:
+        return profile_name, 42
+
+
+def ensure_scenario_exported_ondemand(export_dir: Path, scenario: str) -> dict:
+    """Ensure scenario export exists; create it from Parquet pivot if missing.
+
+    Returns a dict with flags:
+      - ondemand_used: True if we had to export scenario files
+      - shared_timeseries_created: True if we created exports/<profile>_seed42/timeseries.csv
+    """
+    from basetype_benchmark.dataset.dataset_manager import DatasetManager
+    from basetype_benchmark.dataset import exporter_v2
+
+    scenario_upper = scenario.upper()
+    parquet_dir = export_dir / "parquet"
+    if not parquet_dir.exists():
+        raise FileNotFoundError(
+            f"Parquet pivot not found at {parquet_dir}. "
+            "Generate the dataset first (Parquet pivot only)."
+        )
+
+    required = _scenario_required_files(export_dir, scenario_upper)
+    already_ok = all(p.exists() for p in required)
+    if already_ok:
+        return {"ondemand_used": False, "shared_timeseries_created": False}
+
+    needs_timeseries = scenario_upper in ("P1", "P2", "M2", "O2")
+    shared_ts_path = export_dir / "timeseries.csv"
+    shared_created = False
+
+    # If scenario needs timeseries and doesn't already have it, we prefer exporting a shared file once.
+    scenario_ts = None
+    for p in required:
+        if p.name in ("pg_timeseries.csv", "timeseries.csv"):
+            scenario_ts = p
+            break
+
+    if needs_timeseries and (scenario_ts is None or not scenario_ts.exists()) and not shared_ts_path.exists():
+        print_info("Exporting shared timeseries.csv...")
+        exporter_v2.export_timeseries_csv_shared(parquet_dir, shared_ts_path)
+        shared_created = True
+
+    manager = DatasetManager()
+    profile_name, seed = _parse_profile_seed_from_export_dir(export_dir)
+
+    print_info(f"Exporting {scenario_upper} format on-demand...")
+    manager.export_scenario_only(profile_name, scenario_upper, seed)
+
+    # For scenarios that use shared timeseries, ensure the per-scenario expected filename exists.
+    if needs_timeseries and shared_ts_path.exists():
+        scenario_dir = export_dir / scenario_upper.lower()
+        ts_filename = "pg_timeseries.csv" if scenario_upper in ("P1", "P2") else "timeseries.csv"
+        exporter_v2.symlink_or_copy_timeseries(shared_ts_path, scenario_dir, ts_filename)
+
+    # Re-check
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"On-demand export incomplete; missing: {missing}")
+
+    return {"ondemand_used": True, "shared_timeseries_created": shared_created}
 
 
 # =============================================================================
@@ -651,6 +1049,62 @@ MIN_RAM_BY_SCALE = {
 
 # Performance plateau threshold (if improvement < this %, stop iterating)
 PERF_PLATEAU_THRESHOLD = 10  # 10% improvement threshold
+
+
+def _get_host_ram_gb() -> Optional[int]:
+    """Best-effort detection of host RAM (GB).
+
+    Used to avoid attempting Docker MEMORY_LIMIT values that exceed the machine.
+    Returns None if it cannot be determined.
+    """
+    # Linux: /proc/meminfo is the most reliable without extra deps.
+    if IS_LINUX:
+        try:
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            kb = int(parts[1])
+                            gb = kb / (1024 * 1024)
+                            return max(1, int(gb))
+        except Exception:
+            pass
+
+    # Fallback: sysconf on POSIX.
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        pages = os.sysconf("SC_PHYS_PAGES")
+        gb = (page_size * pages) / (1024 ** 3)
+        return max(1, int(gb))
+    except Exception:
+        return None
+
+
+def _effective_max_ram_gb(strategy_max_gb: int) -> int:
+    """Cap max RAM to something realistic for the host.
+
+    Keeps a safety margin for the OS and Docker overhead.
+    """
+    host_gb = _get_host_ram_gb()
+    if not host_gb:
+        return strategy_max_gb
+
+    # Keep ~10% headroom, at least 2GB.
+    headroom_gb = max(2, int(round(host_gb * 0.10)))
+    cap = max(1, host_gb - headroom_gb)
+    return min(strategy_max_gb, cap)
+
+
+def _duration_ram_multiplier(duration: str) -> float:
+    """Heuristic multiplier for minimum RAM based on timeseries duration."""
+    return {
+        "2d": 1.0,
+        "1w": 1.0,
+        "1m": 1.25,
+        "6m": 1.75,
+        "1y": 2.5,
+    }.get(duration, 1.0)
 
 
 def get_scale_from_profile(profile: str) -> str:
@@ -737,7 +1191,7 @@ def select_engines() -> List[str]:
     return selected
 
 
-def get_ram_strategy(scenario: str, scale: str) -> Dict:
+def get_ram_strategy(scenario: str, scale: str, duration: Optional[str] = None) -> Dict:
     """Get RAM testing strategy for a scenario.
 
     Returns dict with:
@@ -745,7 +1199,13 @@ def get_ram_strategy(scenario: str, scale: str) -> Dict:
         - strategy: 'iterate_up' (P1/P2) or 'escalate_on_oom' (M/O)
         - max_ram: maximum RAM to test
     """
-    min_ram = MIN_RAM_BY_SCALE.get(scale, MIN_RAM_BY_SCALE["small"]).get(scenario, 8)
+    base_min_ram = MIN_RAM_BY_SCALE.get(scale, MIN_RAM_BY_SCALE["small"]).get(scenario, 8)
+
+    # Duration-aware bump for graph-heavy engines where longer history tends to amplify memory pressure.
+    if duration and scenario.startswith(("M", "O")):
+        min_ram = int(math.ceil(base_min_ram * _duration_ram_multiplier(duration)))
+    else:
+        min_ram = base_min_ram
 
     if scenario.startswith("P"):
         # PostgreSQL: start from minimum, iterate up until plateau
@@ -1513,29 +1973,37 @@ def load_query(scenario: str, query_id: str, params: Optional[Dict] = None) -> O
     scenario_upper = scenario.upper()
 
     if scenario_upper in ("P1", "P2"):
-        query_dir = QUERIES_DIR / "p1_p2"
+        # Prefer scenario-specific overrides when present.
+        # This allows P1 (relational columns) and P2 (JSONB properties) to diverge
+        # for queries where schemas differ (e.g., Q13).
+        preferred_dir = QUERIES_DIR / scenario_upper.lower()
+        fallback_dir = QUERIES_DIR / "p1_p2"
+        query_dirs = [preferred_dir, fallback_dir]
         ext = "sql"
     elif scenario_upper == "M1":
-        query_dir = QUERIES_DIR / "m1"
+        query_dirs = [QUERIES_DIR / "m1"]
         ext = "cypher"
     elif scenario_upper == "M2":
-        query_dir = QUERIES_DIR / "m2" / "graph"
+        query_dirs = [QUERIES_DIR / "m2" / "graph"]
         ext = "cypher"
     elif scenario_upper == "O1":
-        query_dir = QUERIES_DIR / "o1"
+        query_dirs = [QUERIES_DIR / "o1"]
         ext = "sparql"
     elif scenario_upper == "O2":
-        query_dir = QUERIES_DIR / "o2" / "graph"
+        query_dirs = [QUERIES_DIR / "o2" / "graph"]
         ext = "sparql"
     else:
         return None
 
-    # Find query file
-    for f in query_dir.glob(f"{query_id}_*.{ext}"):
-        query_text = f.read_text(encoding="utf-8")
-        if params:
-            query_text = substitute_params(query_text, params)
-        return query_text
+    # Find query file (first match wins, prefer earlier dirs).
+    for query_dir in query_dirs:
+        if not query_dir.exists():
+            continue
+        for f in query_dir.glob(f"{query_id}_*.{ext}"):
+            query_text = f.read_text(encoding="utf-8")
+            if params:
+                query_text = substitute_params(query_text, params)
+            return query_text
     return None
 
 
@@ -1567,7 +2035,23 @@ def load_ts_query(scenario: str, query_id: str, params: Optional[Dict] = None) -
     for f in query_dir.glob(f"{query_id}_*.sql"):
         query_text = f.read_text(encoding="utf-8")
         if params:
-            query_text = substitute_params(query_text, params)
+            # Timescale templates use ::timestamptz, so they expect ISO-like timestamps.
+            # Hybrid graph scenarios (notably M2) often generate unix seconds for the
+            # graph side. Convert date params here to avoid passing unix seconds into
+            # timestamptz casts.
+            scenario_upper = scenario.upper()
+            converted_params = params
+            if scenario_upper == "M2":
+                from datetime import datetime, timezone
+                converted_params = dict(params)
+                for key in ("date_start", "date_end"):
+                    value = converted_params.get(key)
+                    if isinstance(value, (int, float)):
+                        converted_params[key] = datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat()
+                    elif isinstance(value, str) and value.isdigit():
+                        converted_params[key] = datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat()
+
+            query_text = substitute_params(query_text, converted_params)
         return query_text
     return None
 
@@ -1896,6 +2380,18 @@ def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
                 # Equipment type (for Brick Schema: Equipment with equipment_type property)
                 equipment_type = row.get("equipment_type", "").lower()
 
+                # Also collect hierarchy IDs from extracted columns (P1 CSV has these columns; P2 may too).
+                # This avoids missing buildings/floors when the first 100 rows contain mostly spaces/points.
+                bldg = row.get("building_id", "")
+                if bldg:
+                    info["buildings"].append(bldg)
+                floor = row.get("floor_id", "")
+                if floor:
+                    info["floors"].append(floor)
+                space = row.get("space_id", "")
+                if space:
+                    info["spaces"].append(space)
+
                 # Meters: check both type and equipment_type (Brick Schema uses Equipment + equipment_type)
                 if "meter" in node_type or "meter" in equipment_type:
                     info["meters"].append(node_id)
@@ -1913,6 +2409,19 @@ def extract_dataset_info(export_dir: Path, scenario: str) -> Dict:
                     info["zones"].append(node_id)
                 elif "point" in node_type or "sensor" in node_type:
                     info["points"].append(node_id)
+
+        # Deduplicate while preserving order (helps keep diverse samples).
+        for key, value in list(info.items()):
+            if not isinstance(value, list):
+                continue
+            seen = set()
+            deduped = []
+            for x in value:
+                if not x or x in seen:
+                    continue
+                seen.add(x)
+                deduped.append(x)
+            info[key] = deduped
 
         # Limit to avoid too many options
         for key in info:
@@ -2168,6 +2677,7 @@ def run_scenario_benchmark(scenario: str, export_dir: Path, profile: str = "smal
         "profile": profile,
         "protocol": {"n_warmup": n_warmup, "n_runs": n_runs, "n_variants": n_variants},
         "system_info": system_info,
+        "ondemand_export": False,
         "status": "pending",
         "load_time_s": 0.0,
         "queries": {},
@@ -2177,6 +2687,18 @@ def run_scenario_benchmark(scenario: str, export_dir: Path, profile: str = "smal
     start_total = time.time()
 
     try:
+        # If scenario export files are missing, export them just-in-time from Parquet pivot.
+        # This is required when datasets are generated in Parquet-only mode.
+        try:
+            flags = ensure_scenario_exported_ondemand(export_dir, scenario)
+            result["ondemand_export"] = bool(flags.get("ondemand_used"))
+        except Exception as e:
+            # If scenario files already exist, ensure_scenario_exported_ondemand() is a no-op.
+            # If it fails, surface the error early.
+            result["status"] = "error"
+            result["error"] = f"On-demand export failed: {e}"
+            return result
+
         if scenario in ["P1", "P2"]:
             result = _run_postgres_benchmark(scenario, export_dir, result, n_warmup, n_runs, profile)
         elif scenario in ["M1", "M2"]:
@@ -2209,7 +2731,7 @@ def _ensure_timescaledb_timeseries(export_dir: Path, scenario: str) -> bool:
         conn = get_connection()
         cur = conn.cursor()
 
-        # Check if timeseries table exists and has data
+        # Check if timeseries table exists and has data (fast path)
         cur.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables
@@ -2219,10 +2741,11 @@ def _ensure_timescaledb_timeseries(export_dir: Path, scenario: str) -> bool:
         table_exists = cur.fetchone()[0]
 
         if table_exists:
-            cur.execute("SELECT COUNT(*) FROM timeseries")
-            count = cur.fetchone()[0]
-            if count > 0:
-                print_info(f"TimescaleDB timeseries already loaded ({count:,} rows)")
+            # COUNT(*) on a large hypertable can be very slow; use a cheap existence check.
+            cur.execute("SELECT EXISTS (SELECT 1 FROM timeseries LIMIT 1)")
+            has_any = cur.fetchone()[0]
+            if has_any:
+                print_info("TimescaleDB timeseries already loaded")
                 cur.close()
                 conn.close()
                 return True
@@ -2254,17 +2777,16 @@ def _ensure_timescaledb_timeseries(export_dir: Path, scenario: str) -> bool:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
             conn.commit()
 
-        # Load timeseries via COPY
+        # Load timeseries via COPY (with progress)
         ts_size_mb = ts_file.stat().st_size / (1024 * 1024)
         print_info(f"Loading timeseries for {scenario} ({ts_size_mb:.0f} MB)...")
         t0 = time.time()
 
-        with open(ts_file, 'r', encoding='utf-8') as f:
-            cur.copy_expert(
-                "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
-                f
-            )
+        _copy_timeseries_with_progress(cur, conn, ts_file, label=f"timeseries ({scenario})")
         conn.commit()
+
+        # Finish line after \r progress updates
+        print()
 
         elapsed = time.time() - t0
         cur.execute("SELECT COUNT(*) FROM timeseries")
@@ -2293,39 +2815,123 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
     print_info(f"Connecting to PostgreSQL...")
     conn = get_connection()
 
+    # Dev ergonomics: optionally reuse the on-disk PG volume between RAM levels.
+    # This can save minutes per step by avoiding re-COPY of multi-GB timeseries.
+    import os
+    dev_mode = (os.getenv("BTB_DEV", "").strip().lower() in ("1", "true", "yes", "y"))
+    reuse_env = os.getenv("BTB_REUSE_DB", "").strip().lower()
+    reuse_db = (reuse_env in ("1", "true", "yes", "y")) if reuse_env else dev_mode
+
+    # Tag this load so we can safely detect if the existing volume matches.
     try:
-        # Clear and load with resource monitoring
-        print_info("Clearing database...")
-        clear_database(conn)
+        profile_name, seed = _parse_profile_seed_from_export_dir(export_dir)
+    except Exception:
+        profile_name, seed = profile, 42
+    expected_tag = f"{profile_name}_seed{seed}_{scenario}"
 
-        print_info(f"Loading data ({scenario} schema)...")
+    def _pg_reuse_diagnostics() -> Tuple[bool, str]:
+        try:
+            with conn.cursor() as cur:
+                # Timeseries must exist and have at least one row.
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = 'timeseries'
+                    )
+                    """
+                )
+                if not cur.fetchone()[0]:
+                    return False, "no timeseries table"
+                cur.execute("SELECT EXISTS (SELECT 1 FROM timeseries LIMIT 1)")
+                if not cur.fetchone()[0]:
+                    return False, "timeseries is empty"
 
-        # Get and display file paths for debugging
-        files = get_scenario_files(export_dir, scenario)
-        print_info(f"Export dir: {export_dir}")
-        print_info(f"Files to load:")
-        for key, path in files.items():
-            exists = "OK" if path.exists() else "MISSING"
-            print(f"          - {key}: {path.name} [{exists}]")
+                # Check our meta tag.
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = 'btb_load_meta'
+                    )
+                    """
+                )
+                if not cur.fetchone()[0]:
+                    return False, "no btb_load_meta table (first run after update will reload once)"
+                cur.execute("SELECT value FROM btb_load_meta WHERE key='tag'")
+                row = cur.fetchone()
+                if not row:
+                    return False, "btb_load_meta.tag missing"
+                if row[0] != expected_tag:
+                    return False, f"tag mismatch (have={row[0]!r} want={expected_tag!r})"
+                return True, "tag match"
+        except Exception as e:
+            return False, f"reuse check failed: {e}"
 
-        load_monitor = ResourceMonitor(container_name, interval_s=1.0)
-        load_monitor.start()
-        load_start = time.time()
+    try:
+        # Clear and load with resource monitoring (or reuse if enabled)
+        reused = False
+        need_load = True
+        if reuse_db:
+            can_reuse, reason = _pg_reuse_diagnostics()
+            if can_reuse:
+                reused = True
+                need_load = False
+                result["load_time_s"] = 0.0
+                result["load_resources"] = {"skipped": True}
+                print_info(f"Reusing existing TimescaleDB volume for {expected_tag} (skipping load)")
+            else:
+                print_info(f"DB reuse enabled but not possible, loading normally: {reason}")
 
-        # Load using V2 file structure
-        load_result = _load_postgres_from_csv(conn, export_dir, scenario)
+        if need_load:
+            print_info("Clearing database...")
+            clear_database(conn)
 
-        result["load_time_s"] = time.time() - load_start
-        result["load_resources"] = load_monitor.stop()
-        # Remove raw samples to reduce result size
-        if "samples" in result["load_resources"]:
-            del result["load_resources"]["samples"]
+            print_info(f"Loading data ({scenario} schema)...")
 
-        print_ok(f"Data loaded in {result['load_time_s']:.1f}s "
-                 f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
-                 f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
+            # Get and display file paths for debugging
+            files = get_scenario_files(export_dir, scenario)
+            print_info(f"Export dir: {export_dir}")
+            print_info(f"Files to load:")
+            for key, path in files.items():
+                exists = "OK" if path.exists() else "MISSING"
+                print(f"          - {key}: {path.name} [{exists}]")
 
-        # Reset memory.peak after ingestion to measure query impact only
+            load_monitor = ResourceMonitor(container_name, interval_s=1.0)
+            load_monitor.start()
+            load_start = time.time()
+
+            # Load using V2 file structure
+            _load_postgres_from_csv(conn, export_dir, scenario)
+
+            # Record a meta tag so subsequent RAM levels can reuse safely.
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("CREATE TABLE IF NOT EXISTS btb_load_meta (key TEXT PRIMARY KEY, value TEXT)")
+                    cur.execute(
+                        "INSERT INTO btb_load_meta(key, value) VALUES('tag', %s) "
+                        "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                        (expected_tag,),
+                    )
+                conn.commit()
+            except Exception:
+                # Meta is best-effort; don't fail the benchmark.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+
+            result["load_time_s"] = time.time() - load_start
+            result["load_resources"] = load_monitor.stop()
+            # Remove raw samples to reduce result size
+            if "samples" in result["load_resources"]:
+                del result["load_resources"]["samples"]
+
+            print_ok(f"Data loaded in {result['load_time_s']:.1f}s "
+                     f"(peak RAM: {result['load_resources']['mem_mb']['max']:.0f}MB, "
+                     f"avg CPU: {result['load_resources']['cpu_pct']['avg']:.1f}%)")
+
+        # Reset memory.peak after ingestion (or reuse) to measure query impact only
         cgroup_path = get_container_cgroup_path(container_name)
         if cgroup_path:
             reset_memory_peak(cgroup_path)
@@ -2344,6 +2950,17 @@ def _run_postgres_benchmark(scenario: str, export_dir: Path, result: Dict,
 
         # Extract dataset info for query parameterization
         dataset_info = extract_dataset_info(export_dir, scenario)
+        # Align time windows with the dataset instead of wall-clock time.
+        # Many TS queries use $DATE_START/$DATE_END derived from dataset_info['ts_end'].
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT EXTRACT(EPOCH FROM MAX(time)) FROM timeseries")
+                max_epoch = cur.fetchone()[0]
+                if max_epoch:
+                    dataset_info["ts_end"] = int(max_epoch)
+        except Exception:
+            # Keep fallback ts_end
+            pass
         print_info(f"Dataset info: {len(dataset_info['meters'])} meters, "
                    f"{len(dataset_info['equipment'])} equipment, "
                    f"{len(dataset_info['spaces'])} spaces")
@@ -2436,7 +3053,7 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                 building_id TEXT,
                 floor_id TEXT,
                 space_id TEXT,
-                data JSONB DEFAULT '{}'
+                properties JSONB DEFAULT '{}'
             )
         """)
     else:  # P2 - JSONB schema (with building_id extracted for filtering)
@@ -2520,7 +3137,7 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                     if scenario == "P1":
                         execute_batch(cur, """
                             INSERT INTO nodes (id, type, name, domain, equipment_type, space_type,
-                                             building_id, floor_id, space_id, data)
+                                             building_id, floor_id, space_id, properties)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             ON CONFLICT (id) DO NOTHING
                         """, batch)
@@ -2540,7 +3157,7 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
                 if scenario == "P1":
                     execute_batch(cur, """
                         INSERT INTO nodes (id, type, name, domain, equipment_type, space_type,
-                                         building_id, floor_id, space_id, data)
+                                         building_id, floor_id, space_id, properties)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO NOTHING
                     """, batch)
@@ -2590,18 +3207,14 @@ def _load_postgres_from_csv(conn, export_dir: Path, scenario: str) -> Dict:
         rate = total_edges / elapsed if elapsed > 0 else 0
         print(f"\r      Loaded {total_edges:,} edges in {elapsed:.1f}s ({rate:.0f}/s)          ")
 
-    # Load timeseries from CSV (use COPY for performance)
+    # Load timeseries from CSV (use COPY for performance + progress)
     # CSV format from exporter_v2: point_id, time, value
     ts_file = files["timeseries"]
     if ts_file.exists():
         ts_size_mb = ts_file.stat().st_size / (1024 * 1024)
-        print(f"      Loading timeseries ({ts_size_mb:.0f} MB, COPY in progress)...", end="", flush=True)
+        print(f"      Loading timeseries ({ts_size_mb:.0f} MB, COPY starting)...", end="", flush=True)
         t0 = time.time()
-        with open(ts_file, 'r', encoding='utf-8') as f:
-            cur.copy_expert(
-                "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
-                f
-            )
+        _copy_timeseries_with_progress(cur, conn, ts_file, label=f"timeseries ({scenario})")
         conn.commit()
         elapsed = time.time() - t0
         # Get row count
@@ -2863,12 +3476,38 @@ def run_hybrid_query(
 
     query_type = HYBRID_QUERY_TYPE.get(query_id, "graph_only")
 
+    def _params_for_timescale(raw_params: Dict) -> Dict:
+        """Timescale SQL templates expect ISO timestamps for ::timestamptz.
+
+        Hybrid scenarios (M2/O2) may generate graph-friendly timestamps
+        (e.g., unix seconds). Convert only the date parameters for the
+        Timescale step; keep all other params unchanged.
+        """
+        if not raw_params:
+            return raw_params
+
+        # Only M2 currently generates unix seconds via get_query_variants().
+        # O2 generates xsd:date (YYYY-MM-DD) which PostgreSQL can cast.
+        scenario_upper = scenario.upper()
+        if scenario_upper != "M2":
+            return raw_params
+
+        from datetime import datetime, timezone
+
+        converted = dict(raw_params)
+        for key in ("date_start", "date_end"):
+            value = converted.get(key)
+            if isinstance(value, (int, float)):
+                converted[key] = datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat()
+        return converted
+
     for params in variants[:n_variants]:
         graph_query = load_query(scenario, query_id, params)
         if not graph_query:
             continue
 
-        ts_query_template = load_ts_query(scenario, query_id, params)
+        ts_params = _params_for_timescale(params)
+        ts_query_template = load_ts_query(scenario, query_id, ts_params)
 
         # Warmup
         for _ in range(n_warmup):
@@ -3083,23 +3722,28 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
         with driver.session() as session:
             return list(session.run(query))
 
-    # For M2: Connect to TimescaleDB for hybrid queries
+    # Decide which queries will run (used to decide whether TimescaleDB is needed).
+    queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
+
+    # For M2: Connect to TimescaleDB for hybrid queries (only if needed)
     ts_conn = None
     ts_container = "btb_timescaledb"
     if scenario == "M2":
+        needs_ts = any(HYBRID_QUERY_TYPE.get(q, "graph_only") in ("ts_direct", "hybrid") for q in queries_to_run)
         try:
             from basetype_benchmark.loaders.postgres.load import get_connection
-            print_info("Connecting to TimescaleDB for hybrid queries...")
+            if needs_ts:
+                print_info("Connecting to TimescaleDB for hybrid queries...")
 
-            # Ensure timeseries data is loaded (idempotent)
-            if not _ensure_timescaledb_timeseries(export_dir, scenario):
-                print_warn("TimescaleDB timeseries not available - Q6 will fail")
+                # Ensure timeseries data is loaded (idempotent)
+                if not _ensure_timescaledb_timeseries(export_dir, scenario):
+                    print_warn("TimescaleDB timeseries not available - Q6 will fail")
 
-            ts_conn = get_connection()
-            # Reset memory.peak on TimescaleDB container too
-            ts_cgroup = get_container_cgroup_path(ts_container)
-            if ts_cgroup:
-                reset_memory_peak(ts_cgroup)
+                ts_conn = get_connection()
+                # Reset memory.peak on TimescaleDB container too
+                ts_cgroup = get_container_cgroup_path(ts_container)
+                if ts_cgroup:
+                    reset_memory_peak(ts_cgroup)
         except Exception as e:
             print_warn(f"Failed to connect to TimescaleDB: {e}")
 
@@ -3110,7 +3754,6 @@ def _run_memgraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                f"{len(dataset_info['spaces'])} spaces")
 
     # Execute queries with variants
-    queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
     total_queries = len(queries_to_run)
     query_start_time = time.time()
     errors_count = 0
@@ -3312,23 +3955,28 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                 return data.get("results", {}).get("bindings", [])
             return []
 
-        # For O2: Connect to TimescaleDB for hybrid queries
+        # Decide which queries will run (used to decide whether TimescaleDB is needed).
+        queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
+
+        # For O2: Connect to TimescaleDB for hybrid queries (only if needed)
         ts_conn = None
         ts_container = "btb_timescaledb"
         if scenario == "O2":
+            needs_ts = any(HYBRID_QUERY_TYPE.get(q, "graph_only") in ("ts_direct", "hybrid") for q in queries_to_run)
             try:
                 from basetype_benchmark.loaders.postgres.load import get_connection
-                print_info("Connecting to TimescaleDB for hybrid queries...")
+                if needs_ts:
+                    print_info("Connecting to TimescaleDB for hybrid queries...")
 
-                # Ensure timeseries data is loaded (idempotent)
-                if not _ensure_timescaledb_timeseries(export_dir, scenario):
-                    print_warn("TimescaleDB timeseries not available - Q6 will fail")
+                    # Ensure timeseries data is loaded (idempotent)
+                    if not _ensure_timescaledb_timeseries(export_dir, scenario):
+                        print_warn("TimescaleDB timeseries not available - Q6 will fail")
 
-                ts_conn = get_connection()
-                # Reset memory.peak on TimescaleDB container too
-                ts_cgroup = get_container_cgroup_path(ts_container)
-                if ts_cgroup:
-                    reset_memory_peak(ts_cgroup)
+                    ts_conn = get_connection()
+                    # Reset memory.peak on TimescaleDB container too
+                    ts_cgroup = get_container_cgroup_path(ts_container)
+                    if ts_cgroup:
+                        reset_memory_peak(ts_cgroup)
             except Exception as e:
                 print_warn(f"Failed to connect to TimescaleDB: {e}")
 
@@ -3339,7 +3987,6 @@ def _run_oxigraph_benchmark(scenario: str, export_dir: Path, result: Dict,
                    f"{len(dataset_info['spaces'])} spaces")
 
         # Execute queries with variants
-        queries_to_run = QUERIES_BY_SCENARIO.get(scenario, [])
         total_queries = len(queries_to_run)
         query_start_time = time.time()
         errors_count = 0
@@ -3446,26 +4093,53 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, profile: str, re
 
     Returns dict with results per RAM level.
     """
-    # Extract scale from profile (e.g., 'small-2d' -> 'small')
-    scale = profile.split("-")[0] if "-" in profile else profile
-    strategy = get_ram_strategy(scenario, scale)
+    # Extract scale/duration from profile (e.g., 'small-2d' -> ('small','2d'))
+    scale = get_scale_from_profile(profile)
+    duration = get_duration_from_profile(profile) if "-" in profile else None
+    strategy = get_ram_strategy(scenario, scale, duration)
     containers = SCENARIOS[scenario]["containers"]
     main_container = f"btb_{containers[0]}"
 
     ram_results = {}
     prev_p95 = float('inf')
-    current_ram = strategy["start_ram"]
+
+    # Cap the max RAM we will attempt based on host RAM.
+    effective_max_ram = _effective_max_ram_gb(int(strategy["max_ram"]))
+    start_ram = int(strategy["start_ram"])
+    if start_ram > effective_max_ram:
+        ram_results["setup"] = {
+            "status": "skipped",
+            "reason": f"start_ram={start_ram}GB exceeds host cap={effective_max_ram}GB",
+        }
+        return ram_results
+
+    # Build the concrete RAM levels list: only feasible levels, in ascending order.
+    # Ensure start_ram is included even if it's not in RAM_LEVELS.
+    ram_levels = sorted({lvl for lvl in RAM_LEVELS if start_ram <= lvl <= effective_max_ram} | {start_ram})
+
+    if not ram_levels:
+        ram_results["setup"] = {"status": "skipped", "reason": "no feasible RAM levels"}
+        return ram_results
+
+    ondemand_used = False
+    try:
+        flags = ensure_scenario_exported_ondemand(export_dir, scenario)
+        ondemand_used = bool(flags.get("ondemand_used"))
+    except Exception as e:
+        ram_results["setup"] = {"status": "error", "error": f"On-demand export failed: {e}"}
+        return ram_results
 
     print_info(f"RAM Strategy: {strategy['description']}")
-    print_info(f"Starting RAM: {current_ram}GB, Max: {strategy['max_ram']}GB")
+    if effective_max_ram != int(strategy["max_ram"]):
+        print_info(f"Host RAM cap applied: max {effective_max_ram}GB (strategy max was {strategy['max_ram']}GB)")
+    print_info(f"Testing RAM levels: {ram_levels}")
 
-    while current_ram <= strategy["max_ram"]:
+    for current_ram in ram_levels:
         print(f"\n{BOLD}--- Testing {scenario} @ {current_ram}GB RAM ---{RESET}")
 
         # Start containers with RAM limit
         if not start_containers_with_ram(containers, current_ram):
             ram_results[current_ram] = {"status": "container_failed"}
-            current_ram = _next_ram_level(current_ram)
             continue
 
         try:
@@ -3476,7 +4150,6 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, profile: str, re
             if check_container_oom(main_container):
                 print_warn(f"OOM detected at {current_ram}GB")
                 ram_results[current_ram] = {"status": "oom", "ram_gb": current_ram}
-                current_ram = _next_ram_level(current_ram)
                 stop_all_containers()
                 continue
 
@@ -3490,7 +4163,6 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, profile: str, re
                     "ram_gb": current_ram
                 }
                 # Escalate to next RAM level
-                current_ram = _next_ram_level(current_ram)
                 stop_all_containers()
                 continue
 
@@ -3503,7 +4175,6 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, profile: str, re
                 }
                 # For M/O, connection errors might indicate memory issues
                 if scenario.startswith(("M", "O")):
-                    current_ram = _next_ram_level(current_ram)
                     stop_all_containers()
                     continue
                 break
@@ -3537,7 +4208,15 @@ def run_ram_gradient_benchmark(scenario: str, export_dir: Path, profile: str, re
         finally:
             stop_all_containers()
 
-        current_ram = _next_ram_level(current_ram)
+    # Cleanup scenario files if we generated them on-demand.
+    if ondemand_used:
+        try:
+            from basetype_benchmark.dataset.dataset_manager import DatasetManager
+            manager = DatasetManager()
+            profile_name, seed = _parse_profile_seed_from_export_dir(export_dir)
+            manager.prune_scenario(profile_name, scenario, seed, keep_shared_timeseries=True)
+        except Exception as e:
+            ram_results["cleanup"] = {"status": "warn", "error": str(e)}
 
     return ram_results
 
@@ -3617,11 +4296,18 @@ def ensure_dataset_extracted(master_dir: Path, target_profile: str) -> Path:
     if target_profile == master_name:
         return master_dir
 
-    # Check if already extracted
+    # Check if already available (V2 parquet-only OR legacy extraction)
     target_dir = master_dir.parent / f"{target_profile}_seed42"
-    if target_dir.exists() and (target_dir / "nodes.csv").exists():
-        print_info(f"Using existing extraction: {target_profile}")
+    if target_dir.exists() and _is_export_dir(target_dir):
+        print_info(f"Using existing dataset: {target_profile}")
         return target_dir
+
+    # If master is V2 Parquet-only, legacy extraction is not supported.
+    if (master_dir / "parquet").exists() and not (master_dir / "nodes.csv").exists() and not (master_dir / "nodes.json").exists():
+        raise RuntimeError(
+            f"Cannot extract {target_profile} from {master_name} for V2 Parquet-only datasets. "
+            "Generate the target profile first (Generate Dataset), then retry the benchmark."
+        )
 
     # Extract
     if not can_extract(master_name, target_profile):
@@ -3687,8 +4373,7 @@ def run_scenario_with_ondemand_export(
     # Use the scenario export from DatasetManager
     try:
         # Get profile from export_dir name
-        profile_name = export_dir.name.rsplit("_seed", 1)[0]
-        seed = 42
+        profile_name, seed = _parse_profile_seed_from_export_dir(export_dir)
         manager.export_scenario_only(profile_name, scenario, seed)
     except Exception as e:
         print_err(f"On-demand export failed: {e}")
@@ -3827,7 +4512,22 @@ def workflow_benchmark():
         return
 
     master_profile, master_dir = master_info
-    configs = get_extractable_configs(master_profile)
+
+    # V2 Parquet-only datasets cannot be subset-extracted with the legacy SubsetExtractor
+    # (it expects CSV/JSON exports). In that case, benchmark only profiles that already exist.
+    available_profiles = get_available_profiles()
+    has_legacy_exports = (master_dir / "nodes.csv").exists() or (master_dir / "nodes.json").exists()
+    if has_legacy_exports:
+        configs = get_extractable_configs(master_profile)
+    else:
+        scales = sorted({get_scale_from_profile(p) for p in available_profiles})
+        durations = sorted({get_duration_from_profile(p) for p in available_profiles})
+        configs = {
+            "scales": scales,
+            "durations": durations,
+            "profiles": available_profiles,
+            "master": master_profile,
+        }
 
     print(f"Master dataset: {BOLD}{master_profile}{RESET}")
     print(f"Available scales: {', '.join(configs['scales'])}")
@@ -3900,6 +4600,14 @@ def _run_full_benchmark(master_dir: Path, configs: Dict):
 
             all_results["profiles"][profile] = profile_results
 
+            # Cleanup shared timeseries.csv (created by on-demand exports)
+            shared_ts_path = export_dir / "timeseries.csv"
+            if shared_ts_path.exists():
+                try:
+                    shared_ts_path.unlink()
+                except Exception:
+                    pass
+
         except Exception as e:
             print_err(f"Failed on {profile}: {e}")
             all_results["profiles"][profile] = {"error": str(e)}
@@ -3936,14 +4644,8 @@ def _run_quick_benchmark(master_dir: Path, configs: Dict):
     # Select RAM level
     ram_level = int(prompt("RAM level (GB)", "8"))
 
-    # Ask about on-demand export mode
-    estimated_size = SIZE_ESTIMATES.get(profile, 10)
-    use_ondemand = False
-    if estimated_size >= 2:  # Recommend for datasets >= 2GB
-        print(f"\n{YELLOW}Disk-efficient mode available:{RESET}")
-        print(f"  - Standard: Export all formats upfront (~{estimated_size * 4:.0f} GB disk)")
-        print(f"  - On-demand: Export per scenario, cleanup after (~{estimated_size * 1.5:.0f} GB max)")
-        use_ondemand = prompt_yes_no("Use disk-efficient on-demand mode?", True)
+    # Disk-efficient on-demand mode is the default.
+    use_ondemand = True
 
     # Confirm
     print_header("CONFIRM QUICK BENCHMARK")
@@ -3967,39 +4669,18 @@ def _run_quick_benchmark(master_dir: Path, configs: Dict):
     results_dir = Path("benchmark_results") / f"quick_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run benchmarks
-    if use_ondemand:
-        # Use on-demand export workflow
-        all_results = run_all_scenarios_ondemand(
-            export_dir=export_dir,
-            profile=profile,
-            ram_gb=ram_level,
-            scenarios=list(SCENARIOS.keys()),
-            cleanup_between=True,
-        )
-        # Save individual results
-        for engine, result in all_results.items():
-            with open(results_dir / f"{engine}.json", 'w') as f:
-                json.dump(result, f, indent=2, default=str)
-    else:
-        # Standard mode (all exports upfront)
-        all_results = {}
-        for engine in SCENARIOS.keys():
-            print_header(f"{engine} ({SCENARIOS[engine]['name']})")
-
-            if not start_containers_with_ram(SCENARIOS[engine]["containers"], ram_level):
-                all_results[engine] = {"status": "container_failed"}
-                continue
-
-            try:
-                result = run_scenario_benchmark(engine, export_dir, profile)
-                result["ram_gb"] = ram_level
-                all_results[engine] = result
-
-                with open(results_dir / f"{engine}.json", 'w') as f:
-                    json.dump(result, f, indent=2, default=str)
-            finally:
-                stop_all_containers()
+    # Run benchmarks (on-demand)
+    all_results = run_all_scenarios_ondemand(
+        export_dir=export_dir,
+        profile=profile,
+        ram_gb=ram_level,
+        scenarios=list(SCENARIOS.keys()),
+        cleanup_between=True,
+    )
+    # Save individual results
+    for engine, result in all_results.items():
+        with open(results_dir / f"{engine}.json", 'w') as f:
+            json.dump(result, f, indent=2, default=str)
 
     # Summary
     with open(results_dir / "summary.json", 'w') as f:
@@ -4121,6 +4802,14 @@ def _run_selective_benchmark(master_dir: Path, configs: Dict):
                     json.dump(ram_results, f, indent=2, default=str)
 
             all_results["profiles"][profile] = profile_results
+
+            # Cleanup shared timeseries.csv (created by on-demand exports)
+            shared_ts_path = export_dir / "timeseries.csv"
+            if shared_ts_path.exists():
+                try:
+                    shared_ts_path.unlink()
+                except Exception:
+                    pass
 
         except Exception as e:
             print_err(f"Failed on {profile}: {e}")
@@ -4290,11 +4979,13 @@ def _run_resume_benchmark(resumable: List[Dict]):
     master_profile, master_dir = master_info
 
     # Resume execution
+    touched_profiles: set[str] = set()
     for profile, engine in missing:
         print_header(f"RESUMING: {profile} x {engine}")
 
         try:
             export_dir = ensure_dataset_extracted(master_dir, profile)
+            touched_profiles.add(profile)
 
             ram_results = _run_custom_ram_gradient(
                 engine, export_dir, profile, ram_levels, campaign_dir
@@ -4307,6 +4998,16 @@ def _run_resume_benchmark(resumable: List[Dict]):
 
         except Exception as e:
             print_err(f"Failed: {profile} x {engine}: {e}")
+
+    # Best-effort cleanup of shared timeseries.csv for profiles we touched
+    for profile in touched_profiles:
+        export_dir = Path("src/basetype_benchmark/dataset/exports") / f"{profile}_seed42"
+        shared_ts_path = export_dir / "timeseries.csv"
+        if shared_ts_path.exists():
+            try:
+                shared_ts_path.unlink()
+            except Exception:
+                pass
 
     # Update summary
     print_header("RESUME COMPLETE")
@@ -4329,6 +5030,13 @@ def _run_custom_ram_gradient(scenario: str, export_dir: Path, profile: str,
     main_container = f"btb_{containers[0]}"
 
     ram_results = {}
+
+    ondemand_used = False
+    try:
+        flags = ensure_scenario_exported_ondemand(export_dir, scenario)
+        ondemand_used = bool(flags.get("ondemand_used"))
+    except Exception as e:
+        return {"setup": {"status": "error", "error": f"On-demand export failed: {e}"}}
 
     for ram_gb in ram_levels:
         print(f"\n--- {scenario} @ {ram_gb}GB RAM ---")
@@ -4360,6 +5068,15 @@ def _run_custom_ram_gradient(scenario: str, export_dir: Path, profile: str,
 
         finally:
             stop_all_containers()
+
+    if ondemand_used:
+        try:
+            from basetype_benchmark.dataset.dataset_manager import DatasetManager
+            manager = DatasetManager()
+            profile_name, seed = _parse_profile_seed_from_export_dir(export_dir)
+            manager.prune_scenario(profile_name, scenario, seed, keep_shared_timeseries=True)
+        except Exception as e:
+            ram_results["cleanup"] = {"status": "warn", "error": str(e)}
 
     return ram_results
 

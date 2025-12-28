@@ -10,10 +10,15 @@ Le workflow actuel exporte TOUS les formats cibles (P1, P2, M1, M2, O1, O2) pend
 ## Objectif
 
 Implémenter un workflow **on-demand** où:
-1. `python run.py generate` génère UNIQUEMENT le Parquet pivot
+1. La génération locale génère UNIQUEMENT le Parquet pivot
 2. Chaque format cible est exporté JUSTE AVANT son benchmark
 3. Après le benchmark, le répertoire du scénario est nettoyé
 4. Pas de modes multiples - c'est LE workflow par défaut
+
+Notes (état actuel du repo, 2025-12):
+- Le mode de simulation par défaut est **vectorized** (et l’export timeseries Parquet direct affiche "Writing batches").
+- Le workflow interactif `run.py` ne prend pas de sous-commandes CLI du type `python run.py generate ...` : la génération/benchmark se fait via le menu.
+- Les exports peuvent être partiels (ex: interruption avant `fingerprint.json`). L’UI “Purge Datasets” les détecte maintenant même sans fingerprint.
 
 ## Analyse: Timeseries Partagé
 
@@ -100,7 +105,7 @@ def export_scenario_only(self, profile_name, scenario, seed=DEFAULT_SEED, skip_t
 
 ## PROBLÈME: Ce qui n'a PAS été modifié
 
-### `dataset_manager.py` - Phase 3 toujours active (lignes 203-237)
+### `dataset_manager.py` - Phase 3 toujours active
 
 ```python
 # PHASE 3: Exporter vers les formats cibles   <-- CECI DOIT ÊTRE SUPPRIMÉ
@@ -112,14 +117,16 @@ for fmt in formats:
 
 Cette Phase 3 exporte TOUS les formats pendant `generate_and_export()`, ce qui annule le workflow on-demand.
 
+➡️ Sur B3, pour maîtriser l’espace disque et le temps, il faut que le chemin “Generate Dataset” fasse **Parquet pivot only** (puis export on-demand au moment du benchmark).
+
 ## Modifications à Effectuer
 
-### 1. Supprimer Phase 3 dans `dataset_manager.py`
+### 1. Désactiver Phase 3 (exports cibles) dans `dataset_manager.py`
 
 Fichier: `src/basetype_benchmark/dataset/dataset_manager.py`
 Lignes: 202-237
 
-**Supprimer ou commenter ce bloc:**
+**Supprimer / bypass ce bloc** (ou introduire un flag explicite `export_targets: bool = False`):
 
 ```python
         # =====================================================================
@@ -174,21 +181,15 @@ exporter_v2.symlink_or_copy_timeseries(shared_ts_path, o2_dir, filename="timeser
 
 ### Test 1: Génération ne doit créer QUE Parquet
 
-```bash
-python run.py generate medium-1w
-ls exports/medium-1w_seed42/
-# Attendu: parquet/ fingerprint.json (PAS de p1/ p2/ m1/ m2/ o1/ o2/)
-```
+Le script `run.py` est interactif. Pour vérifier:
+1. Lance `(.venv) python run.py`
+2. Menu → Generate Dataset → Generate locally → choisis un profil
+3. Vérifie que `src/basetype_benchmark/dataset/exports/{profile}_seed42/` ne contient que `parquet/` (+ éventuellement `fingerprint.json` si calculé).
 
 ### Test 2: Benchmark doit exporter on-demand
 
-```bash
-python run.py benchmark
-# Observer:
-# - Export P1 → benchmark P1 → cleanup p1/
-# - Export P2 → benchmark P2 → cleanup p2/
-# - etc.
-```
+Via le menu `run.py` (Run Benchmark), observer:
+- Export on-demand du scénario → benchmark → cleanup du répertoire du scénario
 
 ### Test 3: Espace disque maîtrisé
 
@@ -215,6 +216,8 @@ exporter_v2.export_for_target(parquet_dir, target, output_dir, skip_timeseries=T
 # Dans dataset_manager.py (déjà implémenté):
 manager.export_scenario_only(profile, scenario, seed, skip_timeseries=True)
 manager.prune_scenario(profile, scenario, seed)
+
+Note: ces helpers existent déjà dans le code. Le travail principal est de rendre la génération “Parquet only” par défaut sur B3 (pas d’exports cibles en phase 3), puis d’assurer que le workflow benchmark appelle systématiquement l’export on-demand.
 ```
 
 ## Résumé

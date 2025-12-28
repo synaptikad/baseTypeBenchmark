@@ -95,13 +95,14 @@ class DatasetManager:
         formats: list = None,
         n_workers: int = None,
         mode: str = "vectorized",
+        export_targets: bool = False,
     ) -> Tuple[Path, Dict[str, Any], Dict[str, Any]]:
         """Génère un dataset et l'exporte directement sur disque.
 
-        Workflow V2:
+        Workflow V2 (disk-efficient default):
         1. Génère le graphe avec generator_v2 (depuis Exploration + YAML)
         2. Exporte vers Parquet (format pivot)
-        3. Exporte vers les 6 formats cibles (P1, P2, M1, M2, O1, O2)
+        3. (Optionnel) Exporte vers les formats cibles (P1, P2, M1, M2, O1, O2)
         4. Calcule le fingerprint pour validation
 
         Pour les gros datasets (>5 GB), utilise le mode streaming.
@@ -122,8 +123,12 @@ class DatasetManager:
             Tuple (chemin_export, summary_dict, fingerprint_dict)
         """
         if formats is None:
-            formats = ['parquet', 'postgresql', 'postgresql_jsonb',
-                      'memgraph', 'memgraph_m1', 'oxigraph', 'oxigraph_o1']
+            formats = ['parquet']
+
+        # Backward-compat: if caller explicitly requested non-parquet formats,
+        # enable target exports.
+        if any(fmt != 'parquet' for fmt in formats):
+            export_targets = True
 
         # Parser le profil
         scale, duration_days = self._parse_profile(profile_name)
@@ -155,7 +160,8 @@ class DatasetManager:
         # =====================================================================
         # PHASE 1: Générer le graphe avec generator_v2
         # =====================================================================
-        print(f"    [1/3] Generating graph structure...")
+        total_steps = 3 if export_targets else 2
+        print(f"    [1/{total_steps}] Generating graph structure...")
         graph_start = time_module.time()
 
         generator = DatasetGeneratorV2(
@@ -176,7 +182,7 @@ class DatasetManager:
         # =====================================================================
         # PHASE 2: Exporter vers Parquet (format pivot)
         # =====================================================================
-        print(f"    [2/3] Exporting to Parquet pivot...")
+        print(f"    [2/{total_steps}] Exporting to Parquet pivot...")
         parquet_start = time_module.time()
 
         parquet_dir = export_subdir / "parquet"
@@ -199,42 +205,43 @@ class DatasetManager:
         print(f"          Done in {parquet_time:.1f}s")
         print()
 
-        # =====================================================================
-        # PHASE 3: Exporter vers les formats cibles
-        # =====================================================================
-        print(f"    [3/3] Exporting to target formats...")
-        export_start = time_module.time()
+        if export_targets:
+            # =====================================================================
+            # PHASE 3: Exporter vers les formats cibles (optional)
+            # =====================================================================
+            print(f"    [3/{total_steps}] Exporting to target formats...")
+            export_start = time_module.time()
 
-        target_mapping = {
-            'postgresql': ('postgresql', 'P1'),
-            'postgresql_jsonb': ('postgresql_jsonb', 'P2'),
-            'memgraph': ('memgraph', 'M2'),
-            'memgraph_m1': ('memgraph_m1', 'M1'),
-            'oxigraph': ('oxigraph', 'O2'),
-            'oxigraph_o1': ('oxigraph_o1', 'O1'),
-        }
+            target_mapping = {
+                'postgresql': ('postgresql', 'P1'),
+                'postgresql_jsonb': ('postgresql_jsonb', 'P2'),
+                'memgraph': ('memgraph', 'M2'),
+                'memgraph_m1': ('memgraph_m1', 'M1'),
+                'oxigraph': ('oxigraph', 'O2'),
+                'oxigraph_o1': ('oxigraph_o1', 'O1'),
+            }
 
-        for fmt in formats:
-            if fmt == 'parquet':
-                continue  # Already done
+            for fmt in formats:
+                if fmt == 'parquet':
+                    continue  # Already done
 
-            if fmt not in target_mapping:
-                print(f"          - {fmt}: skipped (unknown)")
-                continue
+                if fmt not in target_mapping:
+                    print(f"          - {fmt}: skipped (unknown)")
+                    continue
 
-            target, scenario = target_mapping[fmt]
-            output_dir = export_subdir / scenario.lower()
+                target, scenario = target_mapping[fmt]
+                output_dir = export_subdir / scenario.lower()
 
-            try:
-                print(f"          - {scenario} ({target})...", end=" ", flush=True)
-                exporter_v2.export_for_target(parquet_dir, target, output_dir)
-                print("done")
-            except Exception as e:
-                print(f"failed: {e}")
+                try:
+                    print(f"          - {scenario} ({target})...", end=" ", flush=True)
+                    exporter_v2.export_for_target(parquet_dir, target, output_dir)
+                    print("done")
+                except Exception as e:
+                    print(f"failed: {e}")
 
-        export_time = time_module.time() - export_start
-        print(f"          Done in {export_time:.1f}s")
-        print()
+            export_time = time_module.time() - export_start
+            print(f"          Done in {export_time:.1f}s")
+            print()
 
         # =====================================================================
         # FINALISATION
@@ -486,6 +493,10 @@ class DatasetManager:
         if (parquet_dir / "timeseries.parquet").exists():
             print(f"[i] Parquet pivot already exists: {parquet_dir}")
             fingerprint = exporter_v2.compute_fingerprint(parquet_dir)
+            fingerprint["profile"] = resolved_profile
+            fingerprint["seed"] = seed
+            fingerprint["duration_days"] = duration_days
+            exporter_v2.save_fingerprint(fingerprint, export_subdir)
             return parquet_dir, fingerprint
 
         if export_subdir.exists():
@@ -598,11 +609,20 @@ class DatasetManager:
         with open(fingerprint_path) as f:
             stored_fp = json.load(f)
 
-        current_fp = exporter_v2.compute_fingerprint(parquet_dir)
+        stored_ts_mode = stored_fp.get("ts_hash_mode", "row" if stored_fp.get("ts_hash") else "none")
+        if stored_ts_mode == "none":
+            current_fp = exporter_v2.compute_fingerprint(parquet_dir, include_timeseries_hash=False)
+            return stored_fp["struct_hash"] == current_fp["struct_hash"]
+
+        current_fp = exporter_v2.compute_fingerprint(
+            parquet_dir,
+            include_timeseries_hash=True,
+            ts_hash_mode=stored_ts_mode,
+        )
 
         return (
-            stored_fp['struct_hash'] == current_fp['struct_hash'] and
-            stored_fp.get('ts_hash') == current_fp.get('ts_hash')
+            stored_fp["struct_hash"] == current_fp["struct_hash"]
+            and stored_fp.get("ts_hash") == current_fp.get("ts_hash")
         )
 
 
@@ -630,8 +650,10 @@ def main():
     if command == 'generate':
         profile = sys.argv[2]
         seed = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_SEED
-        export_path, summary, fingerprint = manager.generate_and_export(profile, seed)
-        print(f"\n[OK] Dataset: {summary['node_count']} nodes, {summary['edge_count']} edges")
+        parquet_dir, fingerprint = manager.generate_parquet_only(profile, seed)
+        export_path = parquet_dir.parent
+        print(f"\n[OK] Parquet pivot ready at: {export_path}")
+        print(f"     Nodes: {fingerprint['counts']['nodes']:,}, Edges: {fingerprint['counts']['edges']:,}")
 
     elif command == 'list':
         datasets = manager.list_exported_datasets()

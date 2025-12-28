@@ -404,16 +404,22 @@ class DatasetGeneratorV2:
             self.points.append(point)
 
             # Create point node
+            quantity = self._infer_quantity(pt_def["name"])
             point_node = Node(
                 point_id, "Point",
                 {
                     "name": pt_def["name"],
                     "equipment_id": meter.id,
-                    "unit": pt_def["unit"]
+                    "unit": pt_def["unit"],
+                    "quantity": quantity
                 }
             )
             self.nodes.append(point_node)
             self.edges.append(Edge(meter.id, point_id, "HAS_POINT"))
+            
+            # Add MEASURES edge
+            self.edges.append(Edge(point_id, quantity.capitalize(), "MEASURES"))
+
 
     def _distribute_equipment(self) -> None:
         """Distribute equipment to spaces according to distribution matrix."""
@@ -453,9 +459,12 @@ class DatasetGeneratorV2:
                         )
                         self.nodes.append(equipment)
                         self.edges.append(Edge(equip_id, space.id, "LOCATED_IN"))
+                        # Add CONTAINS edge (inverse) required by Q2, Q4
+                        self.edges.append(Edge(space.id, equip_id, "CONTAINS"))
 
                         # Index
                         self.equipments_by_type[equip_type].append(equipment)
+
                         self.equipments_by_building[space.properties["building_id"]].append(equipment)
 
                         # Create points for this equipment
@@ -528,17 +537,22 @@ class DatasetGeneratorV2:
             self.points.append(point)
 
             # Create point node
+            quantity = self._infer_quantity(pt_def["name"])
             point_node = Node(
                 point_id, "Point",
                 {
                     "name": pt_def["name"],
                     "equipment_id": equipment.id,
                     "unit": pt_def.get("unit", "-"),
-                    "quantity": self._infer_quantity(pt_def["name"])
+                    "quantity": quantity
                 }
             )
             self.nodes.append(point_node)
             self.edges.append(Edge(equipment.id, point_id, "HAS_POINT"))
+            
+            # Add MEASURES edge
+            self.edges.append(Edge(point_id, quantity.capitalize(), "MEASURES"))
+
 
     def _get_default_points(self, equip_type: str, domain: str) -> List[dict]:
         """Get default points for an equipment type."""
