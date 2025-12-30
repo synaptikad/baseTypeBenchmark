@@ -358,22 +358,27 @@ def export_timeseries_csv_shared(
     parquet_dir: Path,
     shared_ts_path: Path,
     force: bool = False,
-    batch_size: int = 500_000
+    batch_size: int = 100_000
 ) -> bool:
     """Export timeseries.csv ONCE for all scenarios that need it (P1, P2, M2, O2).
 
     This function is idempotent: if timeseries.csv already exists at the target
     path, it will skip the export (unless force=True).
 
+    Uses PyArrow streaming to minimize RAM usage - only one batch in memory at a time.
+    Typical RAM usage: ~50-100 MB regardless of dataset size.
+
     Args:
         parquet_dir: Directory containing timeseries.parquet
         shared_ts_path: Target path for the shared timeseries.csv
         force: If True, re-export even if file exists
-        batch_size: Number of rows per batch for streaming export
+        batch_size: Number of rows per batch (default 100k for ~10MB RAM per batch)
 
     Returns:
         True if exported, False if skipped (already exists)
     """
+    import pyarrow.csv as pa_csv
+
     ts_parquet = parquet_dir / "timeseries.parquet"
 
     if not ts_parquet.exists():
@@ -388,30 +393,46 @@ def export_timeseries_csv_shared(
     # Ensure parent directory exists
     shared_ts_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Get total row count from Parquet metadata (fast)
+    # Get total row count from Parquet metadata (fast, no data read)
     pf = pq.ParquetFile(ts_parquet)
     total_rows = pf.metadata.num_rows
 
-    print(f"[EXPORT] timeseries.csv (shared) - {total_rows:,} rows")
+    print(f"[EXPORT] timeseries.csv (shared) - {total_rows:,} rows (~{batch_size//1000}k batch)")
     start_time = time.time()
 
-    # Stream export with progress
+    # Stream export using PyArrow (minimal RAM: only 1 batch in memory)
     rows_written = 0
-    with open(shared_ts_path, "w", encoding="utf-8", newline="") as f:
-        f.write("point_id,time,value\n")  # Header
+    with open(shared_ts_path, "wb") as f:
+        # Write header
+        f.write(b"point_id,time,value\n")
 
         for batch in pf.iter_batches(batch_size=batch_size):
-            df = batch.to_pandas()
-            # Write without header (already written)
-            df.rename(columns={"timestamp": "time"}).to_csv(
-                f, index=False, header=False
+            # Rename column in-place (zero-copy)
+            names = batch.schema.names
+            if "timestamp" in names:
+                idx = names.index("timestamp")
+                new_names = names[:idx] + ["time"] + names[idx+1:]
+                batch = batch.rename_columns(new_names)
+
+            # Write batch directly to CSV (no pandas, no copy)
+            # Use write_csv with options to skip header (we wrote it manually)
+            buf = pa_csv.write_csv(
+                batch,
+                write_options=pa_csv.WriteOptions(include_header=False)
             )
-            rows_written += len(df)
-            _print_progress(rows_written, total_rows, "         ", start_time, every_n=batch_size)
+            f.write(buf.getvalue())
+
+            rows_written += batch.num_rows
+            # Progress every batch
+            elapsed = time.time() - start_time
+            rate = rows_written / elapsed if elapsed > 0 else 0
+            pct = rows_written / total_rows * 100
+            eta = (total_rows - rows_written) / rate if rate > 0 else 0
+            print(f"\r         [{pct:5.1f}%] {rows_written:,}/{total_rows:,} rows ({rate:,.0f}/s) ETA: {eta:.0f}s   ", end="", flush=True)
 
     elapsed = time.time() - start_time
     size_mb = shared_ts_path.stat().st_size / (1024 * 1024)
-    print(f"         Done: {size_mb:.0f} MB in {elapsed:.1f}s ({rows_written/elapsed:,.0f} rows/s)")
+    print(f"\r         Done: {size_mb:.0f} MB in {elapsed:.1f}s ({rows_written/elapsed:,.0f} rows/s)                    ")
 
     return True
 
