@@ -6,8 +6,30 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+
+def _find_docker_dir() -> Path:
+    """Find docker directory relative to repo root."""
+    # Try multiple approaches to find repo root
+    candidates = [
+        # From runner module: src/basetype_benchmark/runner/docker.py -> docker/
+        Path(__file__).parent.parent.parent.parent.parent / "docker",
+        # From current working directory
+        Path.cwd() / "docker",
+        # If we're in a subdirectory of the repo
+        Path.cwd().parent / "docker",
+        Path.cwd().parent.parent / "docker",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists() and (candidate / "docker-compose.yml").exists():
+            return candidate
+
+    # Fallback - assume cwd is repo root
+    return Path.cwd() / "docker"
+
+
 # Docker compose directory
-DOCKER_DIR = Path(__file__).parent.parent.parent.parent.parent / "docker"
+DOCKER_DIR = _find_docker_dir()
 
 # Container names
 CONTAINERS = {
