@@ -1,12 +1,59 @@
 """PostgreSQL engine for P1 (relational) and P2 (JSONB) scenarios."""
 
 import csv
+import os
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import psycopg2
 from psycopg2.extras import execute_batch
+
+
+def _read_env_file(path: Path) -> Dict[str, str]:
+    """Read a simple KEY=VALUE env file."""
+    data: Dict[str, str] = {}
+    try:
+        if not path.exists():
+            return data
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k:
+                data[k] = v
+    except Exception:
+        return {}
+    return data
+
+
+def _resolve_pg_config_defaults(
+    host: str, port: int, user: str, password: str, database: str
+) -> Dict[str, object]:
+    """Resolve connection defaults from env vars or docker/.env."""
+    # Find repo root (runner/engines/postgres.py -> 4 levels up)
+    repo_root = Path(__file__).resolve().parents[4]
+    env_file_vars: Dict[str, str] = {}
+
+    # Read env files (docker/.env takes precedence, so read it last)
+    for candidate in (repo_root / ".env", repo_root / "docker" / ".env"):
+        file_vars = _read_env_file(candidate)
+        if file_vars:
+            env_file_vars.update(file_vars)
+
+    def _get(key: str, default: str) -> str:
+        return os.getenv(key) or env_file_vars.get(key) or default
+
+    return {
+        "host": _get("POSTGRES_HOST", host),
+        "port": int(_get("POSTGRES_PORT", str(port))),
+        "user": _get("POSTGRES_USER", user),
+        "password": _get("POSTGRES_PASSWORD", password),
+        "database": _get("POSTGRES_DB", database),
+    }
 
 
 def get_connection(
@@ -18,7 +65,18 @@ def get_connection(
     max_retries: int = 30,
     retry_delay: float = 2.0,
 ):
-    """Create PostgreSQL connection with retry logic."""
+    """Create PostgreSQL connection with retry logic.
+
+    Reads credentials from environment variables or docker/.env file.
+    """
+    # Resolve from env files
+    cfg = _resolve_pg_config_defaults(host, port, user, password, database)
+    host = str(cfg["host"])
+    port = int(cfg["port"])  # type: ignore
+    user = str(cfg["user"])
+    password = str(cfg["password"])
+    database = str(cfg["database"])
+
     last_error = None
     for attempt in range(max_retries):
         try:
@@ -29,6 +87,11 @@ def get_connection(
             return conn
         except psycopg2.OperationalError as e:
             last_error = e
+            # Check for non-transient errors
+            msg = str(e).lower()
+            if any(s in msg for s in ("password authentication failed", "role", "does not exist")):
+                print(f"  [ERROR] PostgreSQL auth failed: {e}")
+                raise e
             if attempt < max_retries - 1:
                 print(f"  [WAIT] PostgreSQL not ready ({attempt + 1}/{max_retries})...")
                 time.sleep(retry_delay)
