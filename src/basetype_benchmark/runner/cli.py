@@ -46,13 +46,14 @@ def discover_datasets(base_dir: Path = None) -> list:
             if not item.is_dir():
                 continue
 
-            # Check if it has parquet files (nodes.parquet or timeseries.parquet)
-            has_parquet = (
-                (item / "nodes.parquet").exists() or
-                (item / "timeseries.parquet").exists()
-            )
+            # Check for parquet files in root or in parquet/ subdirectory
+            parquet_dir = None
+            if (item / "nodes.parquet").exists() or (item / "timeseries.parquet").exists():
+                parquet_dir = item
+            elif (item / "parquet" / "nodes.parquet").exists() or (item / "parquet" / "timeseries.parquet").exists():
+                parquet_dir = item / "parquet"
 
-            if has_parquet:
+            if parquet_dir:
                 # Extract profile name (remove _seed* suffix if present)
                 profile = item.name
                 if "_seed" in profile:
@@ -60,13 +61,13 @@ def discover_datasets(base_dir: Path = None) -> list:
 
                 # Get size info
                 try:
-                    size_mb = sum(f.stat().st_size for f in item.rglob("*.parquet")) / (1024 * 1024)
+                    size_mb = sum(f.stat().st_size for f in parquet_dir.rglob("*.parquet")) / (1024 * 1024)
                 except:
                     size_mb = 0
 
                 datasets.append({
                     "profile": profile,
-                    "path": item,
+                    "path": parquet_dir,  # Point to actual parquet directory
                     "size_mb": size_mb,
                     "full_name": item.name,
                 })
