@@ -13,6 +13,17 @@ from .engines.memgraph import MemgraphEngine
 from .engines.oxigraph import OxigraphEngine
 from .engines.timescale import TimescaleEngine
 
+# Import exporter for on-demand CSV generation
+from ..dataset.exporter_v2 import (
+    export_postgresql_csv,
+    export_postgresql_jsonb_csv,
+    export_memgraph_csv,
+    export_memgraph_chunks_csv,
+    export_ntriples,
+    export_oxigraph_chunks_ntriples,
+    export_timeseries_csv_shared,
+)
+
 
 # Query file paths by scenario
 QUERY_DIRS = {
@@ -33,6 +44,66 @@ QUERY_EXT = {
     "O1": ".sparql",
     "O2": ".sparql",
 }
+
+
+def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
+    """Export CSV/NT files for a scenario if they don't exist.
+
+    Args:
+        parquet_dir: Directory containing parquet files (nodes.parquet, etc.)
+        scenario: P1, P2, M1, M2, O1, O2
+    """
+    scenario = scenario.upper()
+    scenario_dir = parquet_dir / scenario.lower()
+
+    # Check if export needed based on key file
+    key_files = {
+        "P1": scenario_dir / "pg_nodes.csv",
+        "P2": scenario_dir / "pg_jsonb_nodes.csv",
+        "M1": scenario_dir / "mg_nodes.csv",
+        "M2": scenario_dir / "mg_nodes.csv",
+        "O1": scenario_dir / "graph.nt",
+        "O2": scenario_dir / "graph.nt",
+    }
+
+    if key_files[scenario].exists():
+        print(f"  [SKIP] {scenario} files already exported")
+        return
+
+    print(f"  [EXPORT] Generating {scenario} files from parquet...")
+
+    # Export based on scenario
+    if scenario == "P1":
+        export_postgresql_csv(parquet_dir, scenario_dir, skip_timeseries=True)
+        # Shared timeseries
+        shared_ts = parquet_dir / "timeseries.csv"
+        export_timeseries_csv_shared(parquet_dir, shared_ts)
+
+    elif scenario == "P2":
+        export_postgresql_jsonb_csv(parquet_dir, scenario_dir, skip_timeseries=True)
+        # Shared timeseries
+        shared_ts = parquet_dir / "timeseries.csv"
+        export_timeseries_csv_shared(parquet_dir, shared_ts)
+
+    elif scenario == "M1":
+        export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
+        export_memgraph_chunks_csv(parquet_dir, scenario_dir)
+
+    elif scenario == "M2":
+        export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
+        # Shared timeseries
+        shared_ts = parquet_dir / "timeseries.csv"
+        export_timeseries_csv_shared(parquet_dir, shared_ts)
+
+    elif scenario == "O1":
+        export_ntriples(parquet_dir, scenario_dir)
+        export_oxigraph_chunks_ntriples(parquet_dir, scenario_dir)
+
+    elif scenario == "O2":
+        export_ntriples(parquet_dir, scenario_dir)
+        # Shared timeseries
+        shared_ts = parquet_dir / "timeseries.csv"
+        export_timeseries_csv_shared(parquet_dir, shared_ts)
 
 
 def get_scenario_files(export_dir: Path, scenario: str) -> Dict[str, Path]:
@@ -155,6 +226,10 @@ def run_scenario(
     print(f"{'='*60}")
 
     try:
+        # Export CSV/NT if needed (on-demand from parquet)
+        print("\n[0] Checking/exporting data files...")
+        ensure_scenario_exported(export_dir, scenario)
+
         # Start containers
         print("\n[1] Starting containers...")
         if not docker.start(scenario, ram_gb):
