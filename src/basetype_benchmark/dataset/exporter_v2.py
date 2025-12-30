@@ -357,7 +357,8 @@ def export_parquet_streaming(
 def export_timeseries_csv_shared(
     parquet_dir: Path,
     shared_ts_path: Path,
-    force: bool = False
+    force: bool = False,
+    batch_size: int = 500_000
 ) -> bool:
     """Export timeseries.csv ONCE for all scenarios that need it (P1, P2, M2, O2).
 
@@ -368,6 +369,7 @@ def export_timeseries_csv_shared(
         parquet_dir: Directory containing timeseries.parquet
         shared_ts_path: Target path for the shared timeseries.csv
         force: If True, re-export even if file exists
+        batch_size: Number of rows per batch for streaming export
 
     Returns:
         True if exported, False if skipped (already exists)
@@ -386,15 +388,30 @@ def export_timeseries_csv_shared(
     # Ensure parent directory exists
     shared_ts_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"[EXPORT] timeseries.csv (shared)...", end=" ", flush=True)
+    # Get total row count from Parquet metadata (fast)
+    pf = pq.ParquetFile(ts_parquet)
+    total_rows = pf.metadata.num_rows
+
+    print(f"[EXPORT] timeseries.csv (shared) - {total_rows:,} rows")
     start_time = time.time()
 
-    ts_df = pd.read_parquet(ts_parquet)
-    ts_df.rename(columns={"timestamp": "time"}).to_csv(shared_ts_path, index=False)
+    # Stream export with progress
+    rows_written = 0
+    with open(shared_ts_path, "w", encoding="utf-8", newline="") as f:
+        f.write("point_id,time,value\n")  # Header
+
+        for batch in pf.iter_batches(batch_size=batch_size):
+            df = batch.to_pandas()
+            # Write without header (already written)
+            df.rename(columns={"timestamp": "time"}).to_csv(
+                f, index=False, header=False
+            )
+            rows_written += len(df)
+            _print_progress(rows_written, total_rows, "         ", start_time, every_n=batch_size)
 
     elapsed = time.time() - start_time
     size_mb = shared_ts_path.stat().st_size / (1024 * 1024)
-    print(f"done ({size_mb:.0f} MB in {elapsed:.1f}s)")
+    print(f"         Done: {size_mb:.0f} MB in {elapsed:.1f}s ({rows_written/elapsed:,.0f} rows/s)")
 
     return True
 
