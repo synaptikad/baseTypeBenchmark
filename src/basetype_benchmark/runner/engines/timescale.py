@@ -56,7 +56,7 @@ class TimescaleEngine:
         self.conn.commit()
 
     def load_timeseries(self, ts_file: Path) -> int:
-        """Load timeseries from CSV using COPY."""
+        """Load timeseries from CSV using COPY (client-side)."""
         t0 = time.time()
         total_bytes = ts_file.stat().st_size
 
@@ -76,6 +76,37 @@ class TimescaleEngine:
         elapsed = time.time() - t0
         mb = total_bytes / (1024 * 1024)
         print(f"  [LOAD] Timeseries (TS): {total:,} rows ({mb:.0f} MB) in {elapsed:.1f}s")
+        return total
+
+    def load_timeseries_server_copy(self, container_path: str) -> int:
+        """Load timeseries using server-side COPY FROM (10x faster).
+
+        Requires the CSV file to be mounted in the container at container_path.
+
+        Args:
+            container_path: Path to CSV file inside the container (e.g., /data/timeseries.csv)
+
+        Returns:
+            Total rows loaded
+        """
+        t0 = time.time()
+
+        with self.conn.cursor() as cur:
+            cur.execute(f"""
+                COPY timeseries (point_id, time, value)
+                FROM '{container_path}'
+                WITH CSV HEADER
+            """)
+        self.conn.commit()
+
+        # Count rows
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
+
+        elapsed = time.time() - t0
+        rate = total / elapsed if elapsed > 0 else 0
+        print(f"  [LOAD] Timeseries (TS): {total:,} rows in {elapsed:.1f}s ({rate:,.0f}/s) [server-side COPY]")
         return total
 
     def execute_timeseries_query(self, query: str, point_ids: List[str] = None) -> Tuple[int, float]:

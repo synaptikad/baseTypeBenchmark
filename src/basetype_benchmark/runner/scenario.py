@@ -56,7 +56,17 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
     scenario = scenario.upper()
     scenario_dir = parquet_dir / scenario.lower()
 
-    # Check if export needed based on key file
+    # Scenarios that need timeseries.csv (use TimescaleDB)
+    NEEDS_TIMESERIES_CSV = {"P1", "P2", "M2", "O2"}
+
+    # Export shared timeseries.csv ONCE for all scenarios that need it
+    if scenario in NEEDS_TIMESERIES_CSV:
+        shared_ts = parquet_dir / "timeseries.csv"
+        if not shared_ts.exists():
+            print(f"  [EXPORT] Generating shared timeseries.csv...")
+            export_timeseries_csv_shared(parquet_dir, shared_ts)
+
+    # Check if scenario-specific files already exported
     key_files = {
         "P1": scenario_dir / "pg_nodes.csv",
         "P2": scenario_dir / "pg_jsonb_nodes.csv",
@@ -72,8 +82,7 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
 
     print(f"  [EXPORT] Generating {scenario} files from parquet...")
 
-    # Export based on scenario
-    # NOTE: Timeseries CSV is NOT exported - we load directly from parquet (faster)
+    # Export scenario-specific files (nodes, edges, chunks)
     if scenario == "P1":
         export_postgresql_csv(parquet_dir, scenario_dir, skip_timeseries=True)
 
@@ -86,10 +95,6 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
 
     elif scenario == "M2":
         export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
-        # M2 needs CSV for TimescaleDB (hybrid scenario)
-        shared_ts = parquet_dir / "timeseries.csv"
-        if not shared_ts.exists():
-            export_timeseries_csv_shared(parquet_dir, shared_ts)
 
     elif scenario == "O1":
         export_ntriples(parquet_dir, scenario_dir)
@@ -97,10 +102,6 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
 
     elif scenario == "O2":
         export_ntriples(parquet_dir, scenario_dir)
-        # O2 needs CSV for TimescaleDB (hybrid scenario)
-        shared_ts = parquet_dir / "timeseries.csv"
-        if not shared_ts.exists():
-            export_timeseries_csv_shared(parquet_dir, shared_ts)
 
 
 def get_scenario_files(export_dir: Path, scenario: str) -> Dict[str, Path]:
@@ -228,9 +229,9 @@ def run_scenario(
         print("\n[0] Checking/exporting data files...")
         ensure_scenario_exported(export_dir, scenario)
 
-        # Start containers
+        # Start containers (mount data dir for server-side COPY)
         print("\n[1] Starting containers...")
-        if not docker.start(scenario, ram_gb):
+        if not docker.start(scenario, ram_gb, data_dir=export_dir):
             result.status = "failed"
             result.error = "Failed to start containers"
             return result
@@ -296,13 +297,16 @@ def _run_postgres(
 
         nodes = engine.load_nodes(files["nodes"])
         edges = engine.load_edges(files["edges"])
+
+        # Load timeseries via server-side COPY (CSV already generated in ensure_scenario_exported)
+        ts_csv = export_dir / "timeseries.csv"
         ts_rows = 0
-        # Prefer loading directly from parquet (faster, no CSV needed)
-        ts_parquet = export_dir / "timeseries.parquet"
-        if ts_parquet.exists():
-            ts_rows = engine.load_timeseries_from_parquet(ts_parquet)
-        elif files.get("timeseries") and files["timeseries"].exists():
-            ts_rows = engine.load_timeseries(files["timeseries"])
+        if ts_csv.exists():
+            try:
+                ts_rows = engine.load_timeseries_server_copy("/data/timeseries.csv")
+            except Exception as e:
+                print(f"  [WARN] Server-side COPY failed ({e}), falling back to client-side...")
+                ts_rows = engine.load_timeseries(ts_csv)
 
         load_stats = monitor.stop()
         result.load = LoadResult(
@@ -355,12 +359,18 @@ def _run_memgraph(
         ts_rows = 0
         if scenario == "M1" and files.get("chunks"):
             ts_rows = engine.load_chunks(files["chunks"])
-        elif scenario == "M2" and files.get("timeseries"):
-            ts_engine = TimescaleEngine()
-            ts_engine.connect()
-            ts_engine.create_timeseries_schema()
-            ts_rows = ts_engine.load_timeseries(files["timeseries"])
-            ts_engine.close()
+        elif scenario == "M2":
+            ts_csv = export_dir / "timeseries.csv"
+            if ts_csv.exists():
+                ts_engine = TimescaleEngine()
+                ts_engine.connect()
+                ts_engine.create_timeseries_schema()
+                try:
+                    ts_rows = ts_engine.load_timeseries_server_copy("/data/timeseries.csv")
+                except Exception as e:
+                    print(f"  [WARN] Server-side COPY failed ({e}), falling back to client-side...")
+                    ts_rows = ts_engine.load_timeseries(ts_csv)
+                ts_engine.close()
 
         load_stats = monitor.stop()
         result.load = LoadResult(
@@ -413,12 +423,18 @@ def _run_oxigraph(
 
         # O2: load timeseries to TimescaleDB
         ts_rows = 0
-        if scenario == "O2" and files.get("timeseries"):
-            ts_engine = TimescaleEngine()
-            ts_engine.connect()
-            ts_engine.create_timeseries_schema()
-            ts_rows = ts_engine.load_timeseries(files["timeseries"])
-            ts_engine.close()
+        if scenario == "O2":
+            ts_csv = export_dir / "timeseries.csv"
+            if ts_csv.exists():
+                ts_engine = TimescaleEngine()
+                ts_engine.connect()
+                ts_engine.create_timeseries_schema()
+                try:
+                    ts_rows = ts_engine.load_timeseries_server_copy("/data/timeseries.csv")
+                except Exception as e:
+                    print(f"  [WARN] Server-side COPY failed ({e}), falling back to client-side...")
+                    ts_rows = ts_engine.load_timeseries(ts_csv)
+                ts_engine.close()
 
         load_stats = monitor.stop()
         result.load = LoadResult(

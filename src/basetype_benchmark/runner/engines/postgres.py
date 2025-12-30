@@ -292,7 +292,7 @@ class PostgresEngine:
         return total
 
     def load_timeseries(self, ts_file: Path) -> int:
-        """Load timeseries from CSV using COPY."""
+        """Load timeseries from CSV using COPY (client-side streaming)."""
         t0 = time.time()
         total_bytes = ts_file.stat().st_size
 
@@ -313,6 +313,39 @@ class PostgresEngine:
         elapsed = time.time() - t0
         mb = total_bytes / (1024 * 1024)
         print(f"  [LOAD] Timeseries: {total:,} rows ({mb:.0f} MB) in {elapsed:.1f}s")
+        return total
+
+    def load_timeseries_server_copy(self, container_path: str) -> int:
+        """Load timeseries using server-side COPY FROM (10x faster).
+
+        Requires the CSV file to be mounted in the container at container_path.
+        This bypasses network transfer entirely - PostgreSQL reads directly from disk.
+
+        Args:
+            container_path: Path to CSV file inside the container (e.g., /data/timeseries.csv)
+
+        Returns:
+            Total rows loaded
+        """
+        t0 = time.time()
+
+        with self.conn.cursor() as cur:
+            # Server-side COPY - PostgreSQL reads file directly (no network!)
+            cur.execute(f"""
+                COPY timeseries (point_id, time, value)
+                FROM '{container_path}'
+                WITH CSV HEADER
+            """)
+        self.conn.commit()
+
+        # Count rows
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
+
+        elapsed = time.time() - t0
+        rate = total / elapsed if elapsed > 0 else 0
+        print(f"  [LOAD] Timeseries: {total:,} rows in {elapsed:.1f}s ({rate:,.0f}/s) [server-side COPY]")
         return total
 
     def load_timeseries_from_parquet(self, parquet_file: Path, batch_size: int = 500_000) -> int:

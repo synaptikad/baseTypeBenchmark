@@ -87,13 +87,14 @@ def stop_all() -> None:
     )
 
 
-def start(scenario: str, ram_gb: int, wait_s: int = 10) -> bool:
+def start(scenario: str, ram_gb: int, wait_s: int = 10, data_dir: Path = None) -> bool:
     """Start containers for a scenario with RAM limit.
 
     Args:
         scenario: P1, P2, M1, M2, O1, O2
         ram_gb: RAM limit in GB
         wait_s: Seconds to wait for containers to initialize
+        data_dir: Directory containing data files (mounted as /data in container)
 
     Returns:
         True if containers started successfully
@@ -108,6 +109,8 @@ def start(scenario: str, ram_gb: int, wait_s: int = 10) -> bool:
     # Set environment for docker-compose
     env = os.environ.copy()
     env["MEMORY_LIMIT"] = f"{ram_gb}g"
+    if data_dir:
+        env["BTB_DATA_DIR"] = str(data_dir.resolve())
 
     # Start containers
     container_names = " ".join(containers)
