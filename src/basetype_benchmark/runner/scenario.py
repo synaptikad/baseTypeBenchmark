@@ -123,13 +123,13 @@ def get_scenario_files(export_dir: Path, scenario: str) -> Dict[str, Path]:
         return {
             "nodes": scenario_dir / "pg_nodes.csv",
             "edges": scenario_dir / "pg_edges.csv",
-            "timeseries": scenario_dir / "pg_timeseries.csv",
+            "timeseries": export_dir / "timeseries.csv",  # Shared timeseries at root
         }
     elif scenario == "P2":
         return {
             "nodes": scenario_dir / "pg_jsonb_nodes.csv",
             "edges": scenario_dir / "pg_jsonb_edges.csv",
-            "timeseries": scenario_dir / "pg_timeseries.csv",
+            "timeseries": export_dir / "timeseries.csv",  # Shared timeseries at root
         }
     elif scenario == "M1":
         return {
