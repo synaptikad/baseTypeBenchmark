@@ -169,7 +169,8 @@ def load_query(scenario: str, query_id: str, base_dir: Path = None) -> Optional[
         Query text or None if not found
     """
     if base_dir is None:
-        base_dir = Path(__file__).parent.parent.parent.parent.parent
+        # runner/scenario.py -> parents: runner(0), basetype_benchmark(1), src(2), repo_root(3)
+        base_dir = Path(__file__).parent.parent.parent.parent
 
     query_dir = base_dir / QUERY_DIRS[scenario.upper()]
     ext = QUERY_EXT[scenario.upper()]

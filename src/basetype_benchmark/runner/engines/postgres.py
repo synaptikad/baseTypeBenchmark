@@ -34,8 +34,8 @@ def _resolve_pg_config_defaults(
     host: str, port: int, user: str, password: str, database: str
 ) -> Dict[str, object]:
     """Resolve connection defaults from env vars or docker/.env."""
-    # Find repo root (runner/engines/postgres.py -> 4 levels up)
-    repo_root = Path(__file__).resolve().parents[4]
+    # Find repo root: engines/postgres.py -> runner(0), basetype_benchmark(1), src(2), repo_root(3)
+    repo_root = Path(__file__).resolve().parents[3]
     env_file_vars: Dict[str, str] = {}
 
     # Read env files (docker/.env takes precedence, so read it last)

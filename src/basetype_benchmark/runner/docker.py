@@ -11,8 +11,8 @@ def _find_docker_dir() -> Path:
     """Find docker directory relative to repo root."""
     # Try multiple approaches to find repo root
     candidates = [
-        # From runner module: src/basetype_benchmark/runner/docker.py -> docker/
-        Path(__file__).parent.parent.parent.parent.parent / "docker",
+        # From runner module: runner/docker.py -> runner(0), basetype_benchmark(1), src(2), repo(3)
+        Path(__file__).parent.parent.parent.parent / "docker",
         # From current working directory
         Path.cwd() / "docker",
         # If we're in a subdirectory of the repo
