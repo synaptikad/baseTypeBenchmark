@@ -19,7 +19,12 @@ WHERE {
   ?tenant btb:occupies ?space .
   ?space rdf:type btb:Space .
 
-  ?space btb:serves|btb:contains ?eq .
+  # Bidirectional: Equipment->SERVES->Space OR Space->CONTAINS->Equipment
+  {
+    ?space btb:serves|btb:contains ?eq .
+  } UNION {
+    ?eq btb:serves|btb:contains ?space .
+  }
   ?eq rdf:type btb:Equipment .
 
   ?eq btb:hasPoint ?point .
