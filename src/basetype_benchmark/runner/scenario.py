@@ -73,17 +73,12 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
     print(f"  [EXPORT] Generating {scenario} files from parquet...")
 
     # Export based on scenario
+    # NOTE: Timeseries CSV is NOT exported - we load directly from parquet (faster)
     if scenario == "P1":
         export_postgresql_csv(parquet_dir, scenario_dir, skip_timeseries=True)
-        # Shared timeseries
-        shared_ts = parquet_dir / "timeseries.csv"
-        export_timeseries_csv_shared(parquet_dir, shared_ts)
 
     elif scenario == "P2":
         export_postgresql_jsonb_csv(parquet_dir, scenario_dir, skip_timeseries=True)
-        # Shared timeseries
-        shared_ts = parquet_dir / "timeseries.csv"
-        export_timeseries_csv_shared(parquet_dir, shared_ts)
 
     elif scenario == "M1":
         export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
@@ -91,9 +86,10 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
 
     elif scenario == "M2":
         export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
-        # Shared timeseries
+        # M2 needs CSV for TimescaleDB (hybrid scenario)
         shared_ts = parquet_dir / "timeseries.csv"
-        export_timeseries_csv_shared(parquet_dir, shared_ts)
+        if not shared_ts.exists():
+            export_timeseries_csv_shared(parquet_dir, shared_ts)
 
     elif scenario == "O1":
         export_ntriples(parquet_dir, scenario_dir)
@@ -101,9 +97,10 @@ def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
 
     elif scenario == "O2":
         export_ntriples(parquet_dir, scenario_dir)
-        # Shared timeseries
+        # O2 needs CSV for TimescaleDB (hybrid scenario)
         shared_ts = parquet_dir / "timeseries.csv"
-        export_timeseries_csv_shared(parquet_dir, shared_ts)
+        if not shared_ts.exists():
+            export_timeseries_csv_shared(parquet_dir, shared_ts)
 
 
 def get_scenario_files(export_dir: Path, scenario: str) -> Dict[str, Path]:
@@ -300,7 +297,11 @@ def _run_postgres(
         nodes = engine.load_nodes(files["nodes"])
         edges = engine.load_edges(files["edges"])
         ts_rows = 0
-        if files.get("timeseries") and files["timeseries"].exists():
+        # Prefer loading directly from parquet (faster, no CSV needed)
+        ts_parquet = export_dir / "timeseries.parquet"
+        if ts_parquet.exists():
+            ts_rows = engine.load_timeseries_from_parquet(ts_parquet)
+        elif files.get("timeseries") and files["timeseries"].exists():
             ts_rows = engine.load_timeseries(files["timeseries"])
 
         load_stats = monitor.stop()

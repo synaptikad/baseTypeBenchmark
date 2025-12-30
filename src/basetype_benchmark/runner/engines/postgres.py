@@ -315,6 +315,74 @@ class PostgresEngine:
         print(f"  [LOAD] Timeseries: {total:,} rows ({mb:.0f} MB) in {elapsed:.1f}s")
         return total
 
+    def load_timeseries_from_parquet(self, parquet_file: Path, batch_size: int = 500_000) -> int:
+        """Load timeseries directly from Parquet using streaming COPY.
+
+        This is much faster than CSV for large datasets:
+        - No intermediate CSV file (saves disk space)
+        - Streams data in batches (low RAM usage)
+        - Direct binary pipe to PostgreSQL COPY
+
+        Args:
+            parquet_file: Path to timeseries.parquet
+            batch_size: Rows per batch (500k = ~50MB RAM)
+
+        Returns:
+            Total rows loaded
+        """
+        import io
+        import pyarrow.parquet as pq
+
+        t0 = time.time()
+
+        # Get total rows from metadata (fast, no data read)
+        pf = pq.ParquetFile(parquet_file)
+        total_rows = pf.metadata.num_rows
+
+        print(f"  [LOAD] Timeseries: streaming {total_rows:,} rows from parquet...")
+
+        rows_loaded = 0
+        with self.conn.cursor() as cur:
+            for batch in pf.iter_batches(batch_size=batch_size):
+                # Convert batch to CSV in memory
+                # Get column data as Python lists (fast)
+                point_ids = batch.column("point_id").to_pylist()
+
+                # Handle column name: could be 'timestamp' or 'time'
+                if "timestamp" in batch.schema.names:
+                    timestamps = batch.column("timestamp").to_pylist()
+                else:
+                    timestamps = batch.column("time").to_pylist()
+
+                values = batch.column("value").to_pylist()
+
+                # Build CSV in memory
+                buf = io.StringIO()
+                for pid, ts, val in zip(point_ids, timestamps, values):
+                    buf.write(f"{pid},{ts},{val}\n")
+
+                # Stream to PostgreSQL COPY
+                buf.seek(0)
+                cur.copy_expert(
+                    "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV",
+                    buf
+                )
+
+                rows_loaded += len(point_ids)
+
+                # Progress
+                elapsed = time.time() - t0
+                rate = rows_loaded / elapsed if elapsed > 0 else 0
+                pct = rows_loaded / total_rows * 100
+                eta = (total_rows - rows_loaded) / rate if rate > 0 else 0
+                print(f"\r  [LOAD] Timeseries: {pct:5.1f}% ({rows_loaded:,}/{total_rows:,}) {rate:,.0f}/s ETA:{eta:.0f}s   ", end="", flush=True)
+
+        self.conn.commit()
+
+        elapsed = time.time() - t0
+        print(f"\r  [LOAD] Timeseries: {rows_loaded:,} rows in {elapsed:.1f}s ({rows_loaded/elapsed:,.0f}/s)                    ")
+        return rows_loaded
+
     def execute_query(self, query: str) -> Tuple[int, float]:
         """Execute a query and return (row_count, latency_ms).
 
