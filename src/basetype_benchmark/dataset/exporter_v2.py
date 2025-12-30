@@ -377,6 +377,7 @@ def export_timeseries_csv_shared(
     Returns:
         True if exported, False if skipped (already exists)
     """
+    import io
     import pyarrow.csv as pa_csv
 
     ts_parquet = parquet_dir / "timeseries.parquet"
@@ -415,9 +416,11 @@ def export_timeseries_csv_shared(
                 batch = batch.rename_columns(new_names)
 
             # Write batch directly to CSV (no pandas, no copy)
-            # Use write_csv with options to skip header (we wrote it manually)
-            buf = pa_csv.write_csv(
+            # Use BytesIO buffer for compatibility with older PyArrow versions
+            buf = io.BytesIO()
+            pa_csv.write_csv(
                 batch,
+                buf,
                 write_options=pa_csv.WriteOptions(include_header=False)
             )
             f.write(buf.getvalue())
