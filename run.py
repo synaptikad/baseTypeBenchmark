@@ -1741,12 +1741,12 @@ def is_performance_plateau(prev_p95: float, curr_p95: float, threshold_pct: floa
 # Q8-Q12: Hybrid graph+TS (all scenarios)
 # Q13: DOW filter + dechunking (stress-test M1/O1)
 QUERIES_BY_SCENARIO = {
-    "P1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
-    "P2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
-    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Q6/Q7 via dechunking
-    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Hybrid: graph + TimescaleDB
-    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Q6/Q7 via daily aggregates
-    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],  # Hybrid: graph + TimescaleDB
+    "P1": ["Q4"],
+    "P2": ["Q4"],
+    "M1": ["Q4"],
+    "M2": ["Q4"],
+    "O1": ["Q4"],
+    "O2": ["Q4"],
 }
 
 # Query classification for M2/O2 hybrid execution:

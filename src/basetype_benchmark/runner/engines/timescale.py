@@ -37,23 +37,31 @@ class TimescaleEngine:
         with self.conn.cursor() as cur:
             cur.execute("DROP TABLE IF EXISTS timeseries CASCADE")
             cur.execute("""
-                CREATE TABLE timeseries (
+                CREATE UNLOGGED TABLE timeseries (
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
                     value DOUBLE PRECISION
                 )
             """)
 
-            try:
-                cur.execute("""
-                    SELECT create_hypertable('timeseries', 'time', if_not_exists => TRUE)
-                """)
-            except Exception:
-                pass
-
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
-
         self.conn.commit()
+
+    def _create_ts_index(self) -> None:
+        """Create timeseries index after bulk load."""
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
+        self.conn.commit()
+
+    def _reset_stage_table(self) -> None:
+        """Deprecated: staging not used in simple UNLOGGED flow."""
+        return
+
+    def _move_stage_to_main(self) -> int:
+        """Deprecated: staging not used in simple UNLOGGED flow."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
+        return total
 
     def load_timeseries(self, ts_file: Path) -> int:
         """Load timeseries from CSV using COPY (client-side)."""
@@ -61,14 +69,15 @@ class TimescaleEngine:
         total_bytes = ts_file.stat().st_size
 
         with self.conn.cursor() as cur:
+            cur.execute("SET LOCAL synchronous_commit TO OFF")
             with open(ts_file, "rb") as f:
                 cur.copy_expert(
                     "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
                     f
                 )
         self.conn.commit()
+        self._create_ts_index()
 
-        # Count rows
         with self.conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM timeseries")
             total = cur.fetchone()[0]
@@ -92,14 +101,15 @@ class TimescaleEngine:
         t0 = time.time()
 
         with self.conn.cursor() as cur:
+            cur.execute("SET LOCAL synchronous_commit TO OFF")
             cur.execute(f"""
                 COPY timeseries (point_id, time, value)
                 FROM '{container_path}'
                 WITH CSV HEADER
             """)
         self.conn.commit()
+        self._create_ts_index()
 
-        # Count rows
         with self.conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM timeseries")
             total = cur.fetchone()[0]

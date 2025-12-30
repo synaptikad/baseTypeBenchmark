@@ -231,6 +231,9 @@ def main():
         if "_seed" in profile:
             profile = profile.split("_seed")[0]
 
+    # Normalize export path to avoid relative resolution issues
+    export_dir = Path(export_dir).expanduser().resolve()
+
     # Validate export directory
     if not export_dir.exists():
         print(f"ERROR: Export directory not found: {export_dir}")

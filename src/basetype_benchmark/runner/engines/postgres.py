@@ -171,7 +171,7 @@ class PostgresEngine:
                 )
             """)
 
-            # Timeseries table
+            # Timeseries table (logged hypertable for query perf; staging will handle WAL reduction)
             cur.execute("""
                 CREATE TABLE timeseries (
                     time TIMESTAMPTZ NOT NULL,
@@ -180,7 +180,7 @@ class PostgresEngine:
                 )
             """)
 
-            # Create hypertable
+            # Create hypertable for query performance
             try:
                 cur.execute("""
                     SELECT create_hypertable('timeseries', 'time', if_not_exists => TRUE)
@@ -188,14 +188,45 @@ class PostgresEngine:
             except Exception:
                 pass
 
-            # Indexes
+            # Indexes (timeseries index created after bulk load)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_src_rel ON edges(src_id, rel_type)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst_rel ON edges(dst_id, rel_type)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
 
         self.conn.commit()
+
+    def _create_ts_index(self) -> None:
+        """Create timeseries index after bulk load to avoid per-row overhead."""
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
+        self.conn.commit()
+
+    def _reset_stage_table(self) -> None:
+        """Recreate unlogged staging table to load without WAL."""
+        with self.conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS timeseries_stage")
+            cur.execute("""
+                CREATE UNLOGGED TABLE timeseries_stage (
+                    time TIMESTAMPTZ NOT NULL,
+                    point_id TEXT NOT NULL,
+                    value DOUBLE PRECISION
+                )
+            """)
+        self.conn.commit()
+
+    def _move_stage_to_main(self) -> int:
+        """Insert staged rows into logged hypertable then drop staging."""
+        with self.conn.cursor() as cur:
+            cur.execute("SET LOCAL synchronous_commit TO OFF")
+            cur.execute("INSERT INTO timeseries SELECT * FROM timeseries_stage")
+            cur.execute("DROP TABLE IF EXISTS timeseries_stage")
+        self.conn.commit()
+
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
+        return total
 
     def load_nodes(self, nodes_file: Path, batch_size: int = 1000) -> int:
         """Load nodes from CSV."""
@@ -297,21 +328,22 @@ class PostgresEngine:
         total_bytes = ts_file.stat().st_size
 
         with self.conn.cursor() as cur:
+            cur.execute("SET LOCAL synchronous_commit TO OFF")
             with open(ts_file, "rb") as f:
-                # Use COPY for fast bulk loading
                 cur.copy_expert(
-                    "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
+                    "COPY timeseries_stage (point_id, time, value) FROM STDIN WITH CSV HEADER",
                     f
                 )
         self.conn.commit()
 
-        # Count rows
-        with self.conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM timeseries")
-            total = cur.fetchone()[0]
+        total = self._move_stage_to_main()
+        self._create_ts_index()
 
         elapsed = time.time() - t0
         mb = total_bytes / (1024 * 1024)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
         print(f"  [LOAD] Timeseries: {total:,} rows ({mb:.0f} MB) in {elapsed:.1f}s")
         return total
 
@@ -330,18 +362,15 @@ class PostgresEngine:
         t0 = time.time()
 
         with self.conn.cursor() as cur:
-            # Server-side COPY - PostgreSQL reads file directly (no network!)
+            cur.execute("SET LOCAL synchronous_commit TO OFF")
             cur.execute(f"""
-                COPY timeseries (point_id, time, value)
+                COPY timeseries_stage (point_id, time, value)
                 FROM '{container_path}'
                 WITH CSV HEADER
             """)
         self.conn.commit()
-
-        # Count rows
-        with self.conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM timeseries")
-            total = cur.fetchone()[0]
+        total = self._move_stage_to_main()
+        self._create_ts_index()
 
         elapsed = time.time() - t0
         rate = total / elapsed if elapsed > 0 else 0
@@ -355,14 +384,8 @@ class PostgresEngine:
         - No intermediate CSV file (saves disk space)
         - Streams data in batches (low RAM usage)
         - Direct binary pipe to PostgreSQL COPY
-
-        Args:
-            parquet_file: Path to timeseries.parquet
-            batch_size: Rows per batch (500k = ~50MB RAM)
-
-        Returns:
-            Total rows loaded
         """
+
         import io
         import pyarrow.parquet as pq
 
@@ -376,25 +399,16 @@ class PostgresEngine:
 
         rows_loaded = 0
         with self.conn.cursor() as cur:
+            cur.execute("SET LOCAL synchronous_commit TO OFF")
             for batch in pf.iter_batches(batch_size=batch_size):
-                # Convert batch to CSV in memory
-                # Get column data as Python lists (fast)
                 point_ids = batch.column("point_id").to_pylist()
-
-                # Handle column name: could be 'timestamp' or 'time'
-                if "timestamp" in batch.schema.names:
-                    timestamps = batch.column("timestamp").to_pylist()
-                else:
-                    timestamps = batch.column("time").to_pylist()
-
+                timestamps = batch.column("timestamp").to_pylist() if "timestamp" in batch.schema.names else batch.column("time").to_pylist()
                 values = batch.column("value").to_pylist()
 
-                # Build CSV in memory
                 buf = io.StringIO()
                 for pid, ts, val in zip(point_ids, timestamps, values):
                     buf.write(f"{pid},{ts},{val}\n")
 
-                # Stream to PostgreSQL COPY
                 buf.seek(0)
                 cur.copy_expert(
                     "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV",
@@ -403,7 +417,6 @@ class PostgresEngine:
 
                 rows_loaded += len(point_ids)
 
-                # Progress
                 elapsed = time.time() - t0
                 rate = rows_loaded / elapsed if elapsed > 0 else 0
                 pct = rows_loaded / total_rows * 100
@@ -411,6 +424,8 @@ class PostgresEngine:
                 print(f"\r  [LOAD] Timeseries: {pct:5.1f}% ({rows_loaded:,}/{total_rows:,}) {rate:,.0f}/s ETA:{eta:.0f}s   ", end="", flush=True)
 
         self.conn.commit()
+
+        self._create_ts_index()
 
         elapsed = time.time() - t0
         print(f"\r  [LOAD] Timeseries: {rows_loaded:,} rows in {elapsed:.1f}s ({rows_loaded/elapsed:,.0f}/s)                    ")
@@ -428,7 +443,7 @@ class PostgresEngine:
         t0 = time.perf_counter()
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query)
+                    "COPY timeseries_stage (point_id, time, value) FROM STDIN WITH CSV",
                 rows = cur.fetchall()
                 self.conn.commit()
                 latency_ms = (time.perf_counter() - t0) * 1000
