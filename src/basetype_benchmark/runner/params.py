@@ -76,6 +76,7 @@ def extract_dataset_info(nodes_csv: Path, scenario: str = "P1") -> Dict[str, Lis
             for row in reader:
                 node_type = row.get("type", "")
                 node_id = row.get("id", "")
+                equipment_type = row.get("equipment_type", "")
 
                 if not node_id:
                     continue
@@ -84,6 +85,9 @@ def extract_dataset_info(nodes_csv: Path, scenario: str = "P1") -> Dict[str, Lis
                     info["meters"].append(node_id)
                 elif node_type == "Equipment":
                     info["equipment"].append(node_id)
+                    # Also detect meters from equipment_type (MainMeter, SubMeter)
+                    if equipment_type in ("MainMeter", "SubMeter"):
+                        info["meters"].append(node_id)
                 elif node_type == "Space":
                     info["spaces"].append(node_id)
                 elif node_type == "Floor":
@@ -263,9 +267,23 @@ def get_query_variants(
                 # Calculate available data range
                 data_duration_days = (ts_end - ts_start) / 86400 if ts_end > ts_start else 2
 
-                # Adapt window to available data (use full range if dataset is smaller)
-                ideal_window = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
-                window_days = min(ideal_window, max(1, data_duration_days - 0.5))
+                # Adapt window to available data
+                # For analytics queries (Q7, Q12, Q13), use smaller windows to avoid full scans
+                # Q7: drift detection needs enough samples but not full dataset
+                # Q12: dashboard analytics, 1 day is typical
+                # Q6: aggregation query, 1 day typical
+                if query_id == "Q7":
+                    # For drift detection: use 6-12 hours (enough samples, not full scan)
+                    ideal_window_hours = 12 if data_duration_days <= 2 else 24 * 7
+                    ideal_window = ideal_window_hours / 24
+                elif query_id in ["Q6", "Q12", "Q13"]:
+                    # For dashboard queries: use 6 hours for small datasets
+                    ideal_window_hours = 6 if data_duration_days <= 2 else 24
+                    ideal_window = ideal_window_hours / 24
+                else:
+                    ideal_window = 30  # Default for other queries
+                    
+                window_days = min(ideal_window, max(0.25, data_duration_days - 0.1))
 
                 # Sliding offset: divide available range by n_variants
                 max_offset = max(0, data_duration_days - window_days)

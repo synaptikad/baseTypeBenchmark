@@ -183,6 +183,7 @@ def export_parquet(
             "id": node.id,
             "type": node.type,
             "name": node.properties.get("name", ""),
+            "building_id": node.properties.get("building_id", ""),
             "properties": json.dumps(node.properties)
         })
 
@@ -261,6 +262,7 @@ def export_parquet_streaming(
     # Export nodes and edges (same as regular export)
     nodes_data = [
         {"id": n.id, "type": n.type, "name": n.properties.get("name", ""),
+         "building_id": n.properties.get("building_id", ""),
          "properties": json.dumps(n.properties)}
         for n in dataset.nodes
     ]
@@ -636,9 +638,13 @@ def export_memgraph_csv(
     edges_df = pd.read_parquet(parquet_dir / "edges.parquet")
 
     # Nodes for Memgraph
+    # Use parquet building_id column (extracted at generation time) as priority
+    # Fall back to JSON props for other fields
     nodes_mg = []
     for _, row in nodes_df.iterrows():
         props = json.loads(row["properties"]) if row["properties"] else {}
+        # building_id: prefer parquet column, then JSON props
+        building_id = row.get("building_id", "") or props.get("building_id", "")
         node_row = {
             "id": row["id"],
             "type": row["type"],
@@ -646,7 +652,7 @@ def export_memgraph_csv(
             "equipment_type": props.get("equipment_type", ""),
             "space_type": props.get("space_type", ""),
             "domain": props.get("domain", ""),
-            "building_id": props.get("building_id", ""),
+            "building_id": building_id,
             "floor_id": props.get("floor_id", ""),
             "space_id": props.get("space_id", ""),
         }
@@ -815,10 +821,16 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
             # Also keep rdfs:label for compatibility
             triples.append(f'{node_uri} <{prefixes["rdfs"]}label> {literal(name)} .')
 
+        # building_id - CRITICAL: use parquet column (not JSON) for query filtering
+        # Queries filter on btb:building_id "building_1" etc.
+        building_id = row.get("building_id", "")
+        if building_id:
+            triples.append(f'{node_uri} <{prefixes["btb"]}building_id> {literal(building_id)} .')
+
         # Properties from JSON column
         props = json.loads(row["properties"]) if row["properties"] else {}
         for key, value in props.items():
-            if key in ("name", "id"):  # Already handled above
+            if key in ("name", "id", "building_id"):  # Already handled above
                 continue
             if isinstance(value, str) and value:
                 triples.append(f'{node_uri} <{prefixes["btb"]}{key}> {literal(value)} .')

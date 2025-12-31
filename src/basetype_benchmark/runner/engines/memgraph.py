@@ -20,7 +20,7 @@ class MemgraphEngine:
         self.scenario = scenario.upper()
         self.driver = None
 
-    def connect(self, uri: str = "bolt://localhost:7687") -> None:
+    def connect(self, uri: str = "bolt://localhost:7688") -> None:
         """Establish database connection."""
         self.driver = GraphDatabase.driver(uri, auth=None)
 
@@ -34,11 +34,25 @@ class MemgraphEngine:
         """Clear all data."""
         with self.driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
+            # Drop indexes
+            try:
+                session.run("DROP INDEX ON :Node(id)")
+            except:
+                pass
+            try:
+                session.run("DROP INDEX ON :Node(building_id)")
+            except:
+                pass
 
     def load_nodes(self, nodes_file: Path, batch_size: int = 1000) -> int:
         """Load nodes from CSV."""
         total = 0
         t0 = time.time()
+
+        # Create indexes FIRST for fast lookups during edge loading and query filtering
+        with self.driver.session() as session:
+            session.run("CREATE INDEX ON :Node(id)")
+            session.run("CREATE INDEX ON :Node(building_id)")  # For query filtering
 
         with open(nodes_file, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -50,6 +64,7 @@ class MemgraphEngine:
                     "type": row["type"],
                     "name": row.get("name", ""),
                     "equipment_type": row.get("equipment_type", ""),
+                    "building_id": row.get("building_id", ""),
                 })
 
                 if len(batch) >= batch_size:
@@ -57,7 +72,8 @@ class MemgraphEngine:
                         session.run(
                             "UNWIND $batch AS row "
                             "CREATE (n:Node {id: row.id, type: row.type, "
-                            "name: row.name, equipment_type: row.equipment_type})",
+                            "name: row.name, equipment_type: row.equipment_type, "
+                            "building_id: row.building_id})",
                             batch=batch
                         )
                     total += len(batch)
@@ -70,7 +86,8 @@ class MemgraphEngine:
                     session.run(
                         "UNWIND $batch AS row "
                         "CREATE (n:Node {id: row.id, type: row.type, "
-                        "name: row.name, equipment_type: row.equipment_type})",
+                        "name: row.name, equipment_type: row.equipment_type, "
+                        "building_id: row.building_id})",
                         batch=batch
                     )
                 total += len(batch)
@@ -116,8 +133,8 @@ class MemgraphEngine:
         """Load timeseries chunks for M1 scenario.
 
         Expected CSV format:
-            point_id,day,values
-            point_123,2025-01-15,"[1.2,1.3,...]"
+            point_id,date_day,timestamps,values
+            point_123,2024-01-01,"[1704067200,...]","[1.2,1.3,...]"
 
         Creates ArchiveDay nodes linked to Point nodes via HAS_TIMESERIES.
         """
@@ -131,16 +148,20 @@ class MemgraphEngine:
             batch = []
 
             for row in reader:
-                # Parse values array from JSON string
+                # Parse timestamps and values arrays from JSON string
+                timestamps_str = row.get("timestamps", "[]")
                 values_str = row.get("values", "[]")
                 try:
+                    timestamps = json.loads(timestamps_str) if timestamps_str else []
                     values = json.loads(values_str) if values_str else []
                 except json.JSONDecodeError:
+                    timestamps = []
                     values = []
 
                 batch.append({
                     "point_id": row["point_id"],
-                    "day": row["day"],
+                    "day": row["date_day"],
+                    "timestamps": timestamps,
                     "values": values,
                 })
 
@@ -149,7 +170,7 @@ class MemgraphEngine:
                         session.run(
                             "UNWIND $batch AS row "
                             "MATCH (p:Node {id: row.point_id}) "
-                            "CREATE (a:ArchiveDay {point_id: row.point_id, day: row.day, values: row.values}) "
+                            "CREATE (a:ArchiveDay {point_id: row.point_id, day: row.day, timestamps: row.timestamps, values: row.values}) "
                             "CREATE (p)-[:HAS_TIMESERIES]->(a)",
                             batch=batch
                         )
@@ -163,7 +184,7 @@ class MemgraphEngine:
                     session.run(
                         "UNWIND $batch AS row "
                         "MATCH (p:Node {id: row.point_id}) "
-                        "CREATE (a:ArchiveDay {point_id: row.point_id, day: row.day, values: row.values}) "
+                        "CREATE (a:ArchiveDay {point_id: row.point_id, day: row.day, timestamps: row.timestamps, values: row.values}) "
                         "CREATE (p)-[:HAS_TIMESERIES]->(a)",
                         batch=batch
                     )

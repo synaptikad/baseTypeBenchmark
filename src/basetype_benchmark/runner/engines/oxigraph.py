@@ -52,13 +52,13 @@ class OxigraphEngine:
 
         with open(nt_file, "rb") as f:
             resp = requests.post(
-                f"{self.base_url}/store",
+                f"{self.base_url}/store?default",  # Use default graph
                 data=f,
                 headers={"Content-Type": "application/n-triples"}
             )
 
-        if resp.status_code not in (200, 204):
-            raise RuntimeError(f"Failed to load N-Triples: {resp.text}")
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(f"Failed to load N-Triples: HTTP {resp.status_code} - {resp.text}")
 
         elapsed = time.time() - t0
         mb = total_bytes / (1024 * 1024)
