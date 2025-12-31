@@ -443,7 +443,7 @@ class PostgresEngine:
         t0 = time.perf_counter()
         try:
             with self.conn.cursor() as cur:
-                    "COPY timeseries_stage (point_id, time, value) FROM STDIN WITH CSV",
+                cur.execute(query)
                 rows = cur.fetchall()
                 self.conn.commit()
                 latency_ms = (time.perf_counter() - t0) * 1000
