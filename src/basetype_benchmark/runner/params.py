@@ -260,24 +260,40 @@ def get_query_variants(
                 variant[param] = rng.choice(space_types)
 
             elif param == "date_start":
-                # Sliding window: offset by variant index
-                window_days = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
-                offset_days = i * 7  # Each variant shifts by 1 week
-                ts = ts_end - (window_days + offset_days) * 86400
+                # Calculate available data range
+                data_duration_days = (ts_end - ts_start) / 86400 if ts_end > ts_start else 2
+
+                # Adapt window to available data (use full range if dataset is smaller)
+                ideal_window = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
+                window_days = min(ideal_window, max(1, data_duration_days - 0.5))
+
+                # Sliding offset: divide available range by n_variants
+                max_offset = max(0, data_duration_days - window_days)
+                offset_days = (max_offset / max(1, n_variants - 1)) * i if n_variants > 1 else 0
+
+                ts = ts_start + offset_days * 86400
 
                 if date_format == "unix":
-                    variant[param] = ts
+                    variant[param] = int(ts)
                 elif date_format == "xsd_date":
                     variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
                 else:  # iso
                     variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
             elif param == "date_end":
-                offset_days = i * 7
-                ts = ts_end - offset_days * 86400
+                # Calculate available data range
+                data_duration_days = (ts_end - ts_start) / 86400 if ts_end > ts_start else 2
+
+                ideal_window = 7 if query_id in ["Q7"] else 1 if query_id in ["Q6", "Q12"] else 30
+                window_days = min(ideal_window, max(1, data_duration_days - 0.5))
+
+                max_offset = max(0, data_duration_days - window_days)
+                offset_days = (max_offset / max(1, n_variants - 1)) * i if n_variants > 1 else 0
+
+                ts = ts_start + (offset_days + window_days) * 86400
 
                 if date_format == "unix":
-                    variant[param] = ts
+                    variant[param] = int(ts)
                 elif date_format == "xsd_date":
                     variant[param] = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
                 else:  # iso
