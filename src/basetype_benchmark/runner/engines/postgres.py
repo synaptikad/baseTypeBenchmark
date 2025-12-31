@@ -327,6 +327,8 @@ class PostgresEngine:
         t0 = time.time()
         total_bytes = ts_file.stat().st_size
 
+        self._reset_stage_table()
+
         with self.conn.cursor() as cur:
             cur.execute("SET LOCAL synchronous_commit TO OFF")
             with open(ts_file, "rb") as f:
@@ -360,6 +362,8 @@ class PostgresEngine:
             Total rows loaded
         """
         t0 = time.time()
+
+        self._reset_stage_table()
 
         with self.conn.cursor() as cur:
             cur.execute("SET LOCAL synchronous_commit TO OFF")
