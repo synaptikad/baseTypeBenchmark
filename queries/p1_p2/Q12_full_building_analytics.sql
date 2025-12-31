@@ -1,7 +1,7 @@
 -- Q12: Full Building Analytics Dashboard
 -- Benchmark: Complex multi-dimensional aggregation (dashboard pattern)
 -- Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END - time range
--- Pattern: Building-level KPIs
+-- Digital Twin pattern: uses denormalized building_id in timeseries (no JOIN on 30M rows)
 
 WITH building_stats AS (
     SELECT
@@ -26,16 +26,15 @@ building_pivot AS (
 ),
 building_ts_stats AS (
     SELECT
-        n.building_id,
+        ts.building_id,
         COUNT(DISTINCT ts.point_id) as active_points,
         AVG(ts.value) as avg_value,
         COUNT(*) as sample_count
     FROM timeseries ts
-    JOIN nodes n ON n.id = ts.point_id
-    WHERE n.building_id = '$BUILDING_ID'
+    WHERE ts.building_id = '$BUILDING_ID'
       AND ts.time >= '$DATE_START'::timestamptz
       AND ts.time < '$DATE_END'::timestamptz
-    GROUP BY n.building_id
+    GROUP BY ts.building_id
 )
 SELECT
     bp.building_id,

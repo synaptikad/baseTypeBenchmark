@@ -1,6 +1,7 @@
 -- Q7: Sensor Drift Detection - Top 20 drifting sensors in building
 -- Benchmark: Statistical analysis over time (anomaly detection)
 -- Parameters: $BUILDING_ID - building to analyze, $DATE_START/$DATE_END - time range
+-- Digital Twin pattern: uses denormalized building_id in timeseries (no JOIN on 30M rows)
 
 WITH sensor_stats AS (
     SELECT
@@ -10,8 +11,7 @@ WITH sensor_stats AS (
         COUNT(*) as sample_count,
         MAX(t.value) - MIN(t.value) as range_value
     FROM timeseries t
-    JOIN nodes p ON p.id = t.point_id
-    WHERE p.building_id = '$BUILDING_ID'
+    WHERE t.building_id = '$BUILDING_ID'
       AND t.time >= '$DATE_START'::timestamptz
       AND t.time < '$DATE_END'::timestamptz
     GROUP BY t.point_id

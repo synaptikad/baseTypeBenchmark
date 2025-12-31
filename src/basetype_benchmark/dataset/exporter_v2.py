@@ -365,11 +365,15 @@ def export_timeseries_csv_shared(
     This function is idempotent: if timeseries.csv already exists at the target
     path, it will skip the export (unless force=True).
 
+    IMPORTANT: Includes denormalized building_id for Digital Twin query patterns.
+    This enables efficient building-level queries (Q7, Q12) without expensive JOINs
+    on 30M+ timeseries rows.
+
     Uses PyArrow streaming to minimize RAM usage - only one batch in memory at a time.
     Typical RAM usage: ~50-100 MB regardless of dataset size.
 
     Args:
-        parquet_dir: Directory containing timeseries.parquet
+        parquet_dir: Directory containing timeseries.parquet and nodes.parquet
         shared_ts_path: Target path for the shared timeseries.csv
         force: If True, re-export even if file exists
         batch_size: Number of rows per batch (default 100k for ~10MB RAM per batch)
@@ -381,6 +385,7 @@ def export_timeseries_csv_shared(
     import pyarrow.csv as pa_csv
 
     ts_parquet = parquet_dir / "timeseries.parquet"
+    nodes_parquet = parquet_dir / "nodes.parquet"
 
     if not ts_parquet.exists():
         print(f"[WARN] timeseries.parquet not found at {parquet_dir}")
@@ -394,38 +399,50 @@ def export_timeseries_csv_shared(
     # Ensure parent directory exists
     shared_ts_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Build point_id -> building_id mapping from nodes.parquet
+    # This is small (~50k points) and fits easily in RAM
+    point_to_building = {}
+    if nodes_parquet.exists():
+        nodes_df = pd.read_parquet(nodes_parquet, columns=["id", "type", "building_id"])
+        points_df = nodes_df[nodes_df["type"] == "Point"]
+        point_to_building = dict(zip(points_df["id"], points_df["building_id"].fillna("")))
+        print(f"[INFO] Loaded {len(point_to_building):,} point->building mappings")
+    else:
+        print(f"[WARN] nodes.parquet not found, building_id will be empty")
+
     # Get total row count from Parquet metadata (fast, no data read)
     pf = pq.ParquetFile(ts_parquet)
     total_rows = pf.metadata.num_rows
 
-    print(f"[EXPORT] timeseries.csv (shared) - {total_rows:,} rows (~{batch_size//1000}k batch)")
+    print(f"[EXPORT] timeseries.csv (shared with building_id) - {total_rows:,} rows (~{batch_size//1000}k batch)")
     start_time = time.time()
 
     # Stream export using PyArrow (minimal RAM: only 1 batch in memory)
     rows_written = 0
     with open(shared_ts_path, "wb") as f:
-        # Write header
-        f.write(b"point_id,time,value\n")
+        # Write header with building_id for Digital Twin patterns
+        f.write(b"point_id,time,building_id,value\n")
 
         for batch in pf.iter_batches(batch_size=batch_size):
-            # Rename column in-place (zero-copy)
-            names = batch.schema.names
-            if "timestamp" in names:
-                idx = names.index("timestamp")
-                new_names = names[:idx] + ["time"] + names[idx+1:]
-                batch = batch.rename_columns(new_names)
+            # Convert to pandas for easy manipulation
+            df = batch.to_pandas()
 
-            # Write batch directly to CSV (no pandas, no copy)
-            # Use BytesIO buffer for compatibility with older PyArrow versions
+            # Rename timestamp -> time if needed
+            if "timestamp" in df.columns:
+                df = df.rename(columns={"timestamp": "time"})
+
+            # Add building_id from mapping (vectorized lookup)
+            df["building_id"] = df["point_id"].map(point_to_building).fillna("")
+
+            # Reorder columns: point_id, time, building_id, value
+            df = df[["point_id", "time", "building_id", "value"]]
+
+            # Write to CSV without header
             buf = io.BytesIO()
-            pa_csv.write_csv(
-                batch,
-                buf,
-                write_options=pa_csv.WriteOptions(include_header=False)
-            )
+            df.to_csv(buf, index=False, header=False)
             f.write(buf.getvalue())
 
-            rows_written += batch.num_rows
+            rows_written += len(df)
             # Progress every batch
             elapsed = time.time() - start_time
             rate = rows_written / elapsed if elapsed > 0 else 0

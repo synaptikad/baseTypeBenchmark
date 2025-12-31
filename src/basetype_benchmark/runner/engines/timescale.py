@@ -33,13 +33,18 @@ class TimescaleEngine:
             self.conn = None
 
     def create_timeseries_schema(self) -> None:
-        """Create only the timeseries table (no nodes/edges)."""
+        """Create only the timeseries table (no nodes/edges).
+
+        Includes building_id for consistency with shared timeseries.csv format,
+        even though hybrid scenarios do building filtering via graph engine.
+        """
         with self.conn.cursor() as cur:
             cur.execute("DROP TABLE IF EXISTS timeseries CASCADE")
             cur.execute("""
                 CREATE UNLOGGED TABLE timeseries (
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
+                    building_id TEXT,
                     value DOUBLE PRECISION
                 )
             """)
@@ -64,7 +69,10 @@ class TimescaleEngine:
         return total
 
     def load_timeseries(self, ts_file: Path) -> int:
-        """Load timeseries from CSV using COPY (client-side)."""
+        """Load timeseries from CSV using COPY (client-side).
+
+        CSV format: point_id,time,building_id,value
+        """
         t0 = time.time()
         total_bytes = ts_file.stat().st_size
 
@@ -72,7 +80,7 @@ class TimescaleEngine:
             cur.execute("SET LOCAL synchronous_commit TO OFF")
             with open(ts_file, "rb") as f:
                 cur.copy_expert(
-                    "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV HEADER",
+                    "COPY timeseries (point_id, time, building_id, value) FROM STDIN WITH CSV HEADER",
                     f
                 )
         self.conn.commit()
@@ -91,6 +99,7 @@ class TimescaleEngine:
         """Load timeseries using server-side COPY FROM (10x faster).
 
         Requires the CSV file to be mounted in the container at container_path.
+        CSV format: point_id,time,building_id,value
 
         Args:
             container_path: Path to CSV file inside the container (e.g., /data/timeseries.csv)
@@ -103,7 +112,7 @@ class TimescaleEngine:
         with self.conn.cursor() as cur:
             cur.execute("SET LOCAL synchronous_commit TO OFF")
             cur.execute(f"""
-                COPY timeseries (point_id, time, value)
+                COPY timeseries (point_id, time, building_id, value)
                 FROM '{container_path}'
                 WITH CSV HEADER
             """)

@@ -171,11 +171,13 @@ class PostgresEngine:
                 )
             """)
 
-            # Timeseries table (logged hypertable for query perf; staging will handle WAL reduction)
+            # Timeseries table with denormalized building_id for Digital Twin patterns
+            # This avoids expensive JOIN on 30M+ rows for building-level queries (Q7, Q12)
             cur.execute("""
                 CREATE TABLE timeseries (
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
+                    building_id TEXT,
                     value DOUBLE PRECISION
                 )
             """)
@@ -188,7 +190,7 @@ class PostgresEngine:
             except Exception:
                 pass
 
-            # Indexes (timeseries index created after bulk load)
+            # Indexes for Digital Twin query patterns
             cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_src_rel ON edges(src_id, rel_type)")
@@ -197,9 +199,12 @@ class PostgresEngine:
         self.conn.commit()
 
     def _create_ts_index(self) -> None:
-        """Create timeseries index after bulk load to avoid per-row overhead."""
+        """Create timeseries indexes after bulk load for Digital Twin query patterns."""
         with self.conn.cursor() as cur:
+            # Index for point-level queries (Q1, Q2, Q6)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_point_time ON timeseries(point_id, time DESC)")
+            # Index for building-level queries (Q7, Q12) - critical for Digital Twin dashboards
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ts_building_time ON timeseries(building_id, time DESC)")
         self.conn.commit()
 
     def _reset_stage_table(self) -> None:
@@ -210,6 +215,7 @@ class PostgresEngine:
                 CREATE UNLOGGED TABLE timeseries_stage (
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
+                    building_id TEXT,
                     value DOUBLE PRECISION
                 )
             """)
@@ -323,7 +329,10 @@ class PostgresEngine:
         return total
 
     def load_timeseries(self, ts_file: Path) -> int:
-        """Load timeseries from CSV using COPY (client-side streaming)."""
+        """Load timeseries from CSV using COPY (client-side streaming).
+
+        CSV format: point_id,time,building_id,value (with building_id for Digital Twin patterns)
+        """
         t0 = time.time()
         total_bytes = ts_file.stat().st_size
 
@@ -333,7 +342,7 @@ class PostgresEngine:
             cur.execute("SET LOCAL synchronous_commit TO OFF")
             with open(ts_file, "rb") as f:
                 cur.copy_expert(
-                    "COPY timeseries_stage (point_id, time, value) FROM STDIN WITH CSV HEADER",
+                    "COPY timeseries_stage (point_id, time, building_id, value) FROM STDIN WITH CSV HEADER",
                     f
                 )
         self.conn.commit()
@@ -355,6 +364,8 @@ class PostgresEngine:
         Requires the CSV file to be mounted in the container at container_path.
         This bypasses network transfer entirely - PostgreSQL reads directly from disk.
 
+        CSV format: point_id,time,building_id,value (with building_id for Digital Twin patterns)
+
         Args:
             container_path: Path to CSV file inside the container (e.g., /data/timeseries.csv)
 
@@ -368,7 +379,7 @@ class PostgresEngine:
         with self.conn.cursor() as cur:
             cur.execute("SET LOCAL synchronous_commit TO OFF")
             cur.execute(f"""
-                COPY timeseries_stage (point_id, time, value)
+                COPY timeseries_stage (point_id, time, building_id, value)
                 FROM '{container_path}'
                 WITH CSV HEADER
             """)
