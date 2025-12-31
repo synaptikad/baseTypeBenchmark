@@ -8,6 +8,13 @@ from . import docker
 from .protocol import Protocol, get_protocol, QUERIES, QUERY_TYPE
 from .metrics import ResourceMonitor, get_peak_memory_mb
 from .results import BenchmarkResult, QueryResult, LoadResult, save_results
+from .params import (
+    extract_dataset_info,
+    extract_timeseries_range,
+    get_query_variants,
+    substitute_params,
+    get_nodes_csv_path,
+)
 from .engines.postgres import PostgresEngine
 from .engines.memgraph import MemgraphEngine
 from .engines.oxigraph import OxigraphEngine
@@ -336,7 +343,7 @@ def _run_postgres(
 
         # Run queries
         print(f"\n[4] Running queries ({len(QUERIES)} queries)...")
-        result = _run_queries(engine.get_executor(), scenario, protocol, result)
+        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir)
 
     finally:
         engine.close()
@@ -399,7 +406,7 @@ def _run_memgraph(
 
         # Run queries
         print(f"\n[4] Running queries ({len(QUERIES)} queries)...")
-        result = _run_queries(engine.get_executor(), scenario, protocol, result)
+        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir)
 
     finally:
         engine.close()
@@ -463,7 +470,7 @@ def _run_oxigraph(
 
         # Run queries
         print(f"\n[4] Running queries ({len(QUERIES)} queries)...")
-        result = _run_queries(engine.get_executor(), scenario, protocol, result)
+        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir)
 
     finally:
         engine.close()
@@ -476,18 +483,30 @@ def _run_queries(
     scenario: str,
     protocol: Protocol,
     result: BenchmarkResult,
+    export_dir: Path,
 ) -> BenchmarkResult:
-    """Run all queries with warmup and measurement.
+    """Run all queries with warmup and measurement using parameter variants.
 
     Args:
         executor: Function that executes queries (query -> (rows, latency_ms))
         scenario: Scenario code
         protocol: Benchmark protocol
         result: Result object to update
+        export_dir: Export directory for extracting dataset info
 
     Returns:
         Updated result
     """
+    # Extract dataset info for parameterization
+    nodes_csv = get_nodes_csv_path(export_dir, scenario)
+    dataset_info = extract_dataset_info(nodes_csv, scenario)
+
+    # Add timeseries range
+    ts_csv = export_dir / "timeseries.csv"
+    if ts_csv.exists():
+        ts_range = extract_timeseries_range(ts_csv)
+        dataset_info.update(ts_range)
+
     for query_id in QUERIES:
         query_text = load_query(scenario, query_id)
         if not query_text:
@@ -496,24 +515,39 @@ def _run_queries(
 
         qr = QueryResult(query_id=query_id)
 
-        # Warmup
-        for _ in range(protocol.n_warmup):
-            try:
-                executor(query_text)
-            except Exception:
-                pass
+        # Generate parameter variants
+        variants = get_query_variants(
+            query_id=query_id,
+            profile=result.profile,
+            dataset_info=dataset_info,
+            seed=42,
+            scenario=scenario,
+            n_variants=protocol.n_variants,
+        )
 
-        # Measurement runs
-        for run in range(protocol.n_runs):
-            try:
-                rows, latency_ms = executor(query_text)
-                qr.latencies_ms.append(latency_ms)
-                qr.rows = rows
-            except Exception as e:
-                qr.errors.append(str(e))
+        # Warmup with first variant
+        if variants:
+            warmup_query = substitute_params(query_text, variants[0])
+            for _ in range(protocol.n_warmup):
+                try:
+                    executor(warmup_query)
+                except Exception:
+                    pass
+
+        # Measurement runs across all variants
+        for variant in variants:
+            variant_query = substitute_params(query_text, variant)
+            for run in range(protocol.n_runs):
+                try:
+                    rows, latency_ms = executor(variant_query)
+                    qr.latencies_ms.append(latency_ms)
+                    qr.rows = rows
+                except Exception as e:
+                    qr.errors.append(str(e))
 
         result.queries[query_id] = qr
-        status = f"p95={qr.p95_ms:.1f}ms, rows={qr.rows}"
+        n_total = len(variants) * protocol.n_runs
+        status = f"p95={qr.p95_ms:.1f}ms, rows={qr.rows}, variants={len(variants)}, runs={n_total}"
         if qr.errors:
             status += f", errors={len(qr.errors)}"
         print(f"  [{query_id}] {status}")
