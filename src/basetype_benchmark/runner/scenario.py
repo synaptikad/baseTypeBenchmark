@@ -46,22 +46,38 @@ QUERY_EXT = {
 }
 
 
-def ensure_scenario_exported(parquet_dir: Path, scenario: str) -> None:
+def ensure_scenario_exported(export_dir: Path, scenario: str) -> None:
     """Export CSV/NT files for a scenario if they don't exist.
 
     Args:
-        parquet_dir: Directory containing parquet files (nodes.parquet, etc.)
+        export_dir: Export directory (may contain parquet/ subdirectory)
         scenario: P1, P2, M1, M2, O1, O2
     """
     scenario = scenario.upper()
-    scenario_dir = parquet_dir / scenario.lower()
+    
+    # Resolve parquet directory: check for parquet/ subdirectory structure
+    # Structure can be either:
+    #   export_dir/nodes.parquet (flat)
+    #   export_dir/parquet/nodes.parquet (nested)
+    if (export_dir / "parquet" / "nodes.parquet").exists():
+        parquet_dir = export_dir / "parquet"
+    elif (export_dir / "nodes.parquet").exists():
+        parquet_dir = export_dir
+    else:
+        raise FileNotFoundError(
+            f"No parquet files found in {export_dir} or {export_dir / 'parquet'}. "
+            f"Generate dataset first with: python -m basetype_benchmark.dataset generate small-2d"
+        )
+    
+    scenario_dir = export_dir / scenario.lower()
 
     # Scenarios that need timeseries.csv (use TimescaleDB)
     NEEDS_TIMESERIES_CSV = {"P1", "P2", "M2", "O2"}
 
     # Export shared timeseries.csv ONCE for all scenarios that need it
+    # timeseries.csv goes at export_dir root (not in parquet/ subdirectory)
     if scenario in NEEDS_TIMESERIES_CSV:
-        shared_ts = parquet_dir / "timeseries.csv"
+        shared_ts = export_dir / "timeseries.csv"
         if not shared_ts.exists():
             print(f"  [EXPORT] Generating shared timeseries.csv...")
             export_timeseries_csv_shared(parquet_dir, shared_ts)
