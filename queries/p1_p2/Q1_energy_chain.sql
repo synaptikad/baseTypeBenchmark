@@ -32,11 +32,11 @@ WITH RECURSIVE energy_chain AS (
       AND e.rel_type = 'FEEDS'
       AND NOT child.id = ANY(ec.path)
 )
-SELECT
+SELECT DISTINCT ON (id)
     id,
     type,
     name,
-    depth,
-    path
+    depth - 1 AS depth  -- Adjust depth to start from 1 for first targets
 FROM energy_chain
-ORDER BY depth, type;
+WHERE depth > 1  -- Exclude starting meter
+ORDER BY id, depth, type;

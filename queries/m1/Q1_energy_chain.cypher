@@ -3,9 +3,7 @@
 // Parameter: $METER_ID - starting meter for energy chain traversal
 
 MATCH path = (meter:Node {id: '$METER_ID'})-[:FEEDS*1..10]->(target)
-WITH meter,
-     target,
-     length(path) AS depth
+WITH DISTINCT target, min(length(path)) AS depth
 RETURN target.id AS id,
        target.type AS type,
        target.name AS name,

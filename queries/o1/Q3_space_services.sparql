@@ -3,8 +3,9 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 # Q3: Space Services - What equipment serves this space?
 # Parameter: $SPACE_ID - space to query for serving equipment
+# Returns each (equipment, relationship) pair like SQL version
 
-SELECT ?space_id ?space_name ?building_id ?equipment_id ?equipment_name ?equipment_type
+SELECT ?space_id ?space_name ?building_id ?equipment_id ?equipment_name ?equipment_type ?relationship
 WHERE {
   # Start from specified space
   BIND(<http://basetype.benchmark/$SPACE_ID> AS ?space)
@@ -13,11 +14,15 @@ WHERE {
          btb:name ?space_name ;
          btb:building_id ?building_id .
 
-  # Bidirectional relationship
+  # Bidirectional relationships - explicit to capture relationship type
   {
-    ?space btb:contains|btb:serves|btb:locatedIn ?eq .
+    ?space ?rel ?eq .
+    FILTER(?rel IN (btb:contains, btb:serves, btb:locatedIn))
+    BIND(?rel AS ?relationship)
   } UNION {
-    ?eq btb:contains|btb:serves|btb:locatedIn ?space .
+    ?eq ?rel ?space .
+    FILTER(?rel IN (btb:contains, btb:serves, btb:locatedIn))
+    BIND(?rel AS ?relationship)
   }
 
   ?eq rdf:type btb:Equipment ;

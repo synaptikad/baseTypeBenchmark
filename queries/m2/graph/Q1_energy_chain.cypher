@@ -1,11 +1,10 @@
 // Q1: Energy Chain - Traverse from meter through FEEDS chain
 // Benchmark: Native graph traversal (where graph DBs shine)
 // Parameter: $METER_ID - starting meter for energy chain traversal
+// Returns: DISTINCT nodes reachable via FEEDS with minimum depth
 
 MATCH path = (meter:Node {id: '$METER_ID'})-[:FEEDS*1..10]->(target)
-WITH meter,
-     target,
-     length(path) AS depth
+WITH DISTINCT target, min(length(path)) AS depth
 RETURN target.id AS id,
        target.type AS type,
        target.name AS name,
