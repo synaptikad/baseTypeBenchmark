@@ -195,6 +195,105 @@ def check_postgres_tables_exist() -> bool:
         return False
 
 
+def docker_update_memory(containers: List[str], ram_gb: int, clear_cache: bool = True) -> bool:
+    """Update memory limit on containers and optionally restart to clear caches.
+    
+    This preserves PostgreSQL/TimescaleDB data between RAM level iterations
+    while ensuring cache isolation for accurate benchmarking.
+    
+    Uses 'docker update --memory' + 'docker restart' to:
+    - Change RAM limit dynamically
+    - Clear PostgreSQL shared_buffers and OS page cache (restart)
+    - Preserve data on named volumes
+    
+    Args:
+        containers: List of container names to update
+        ram_gb: New RAM limit in GB
+        clear_cache: If True, restart containers to clear caches (default True for benchmark accuracy)
+        
+    Returns:
+        True if all containers updated successfully
+    """
+    memory_limit = f"{ram_gb}g"
+    success = True
+    
+    for container in containers:
+        container_name = f"btb_{container}"
+        
+        # Check if container exists (running or stopped)
+        check = subprocess.run(
+            f"docker ps -aq --filter 'name={container_name}'",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        
+        if not check.stdout.strip():
+            log(f"Container {container_name} n'existe pas, skip update", "warn")
+            continue
+            
+        # Update memory limit
+        result = subprocess.run(
+            f"docker update --memory {memory_limit} --memory-swap {memory_limit} {container_name}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            log(f"Échec update RAM {container_name}: {result.stderr}", "error")
+            success = False
+            continue
+        
+        if clear_cache:
+            # Restart to clear caches (PostgreSQL shared_buffers, OS page cache)
+            # This ensures fair comparison between RAM levels
+            log(f"Restart {container_name} pour vider les caches...", "step")
+            restart = subprocess.run(
+                f"docker restart {container_name}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if restart.returncode != 0:
+                log(f"Échec restart {container_name}: {restart.stderr}", "error")
+                success = False
+                continue
+                
+        log(f"RAM {container_name} → {ram_gb}GB ✓" + (" (cache vidé)" if clear_cache else ""), "ok")
+    
+    # Wait for containers to be healthy after restart
+    if clear_cache and success:
+        log("Attente santé des containers après restart...", "step")
+        time.sleep(3)  # Initial delay
+        max_wait = 60
+        start = time.time()
+        
+        while time.time() - start < max_wait:
+            all_healthy = True
+            for container in containers:
+                container_name = f"btb_{container}"
+                # Check health status
+                hc_check = subprocess.run(
+                    f"docker inspect --format='{{{{.State.Health.Status}}}}' {container_name}",
+                    shell=True,
+                    capture_output=True,
+                    text=True
+                )
+                status = hc_check.stdout.strip().replace("'", "")
+                if status not in ("healthy", ""):  # "" means no healthcheck
+                    all_healthy = False
+                    break
+            
+            if all_healthy:
+                break
+            time.sleep(2)
+        else:
+            log("Timeout attente santé après restart", "warn")
+    
+    return success
+
+
 def docker_stop_all(preserve_volumes: bool = False):
     """Stop all benchmark containers.
     
@@ -282,6 +381,7 @@ def docker_start(containers: List[str], ram_gb: int, data_dir: Optional[Path] = 
         ram_gb: RAM limit in GB
         data_dir: Dataset directory path
         preserve_volumes: If True, don't delete volumes (for RAM variance on persistent storage)
+                         If containers are already running, just update RAM limit
     """
     log(f"Démarrage containers: {', '.join(containers)} (limite {ram_gb}GB RAM)...", "step")
     
@@ -291,22 +391,34 @@ def docker_start(containers: List[str], ram_gb: int, data_dir: Optional[Path] = 
         env["BTB_DATA_DIR"] = str(data_dir.resolve())
     
     if preserve_volumes:
-        # Just stop and restart with new RAM limit, keep data
-        log("Redémarrage avec nouvelle limite RAM (données préservées)...", "step")
-        subprocess.run(
-            f"{DOCKER_COMPOSE} stop",
-            shell=True,
-            cwd=str(DOCKER_DIR),
-            env=env,
-            capture_output=True
-        )
-        subprocess.run(
-            f"{DOCKER_COMPOSE} rm -f",
-            shell=True,
-            cwd=str(DOCKER_DIR),
-            env=env,
-            capture_output=True
-        )
+        # Check if all required containers exist (running or stopped)
+        all_exist = True
+        for container in containers:
+            check = subprocess.run(
+                f"docker ps -aq --filter 'name=btb_{container}'",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if not check.stdout.strip():
+                all_exist = False
+                break
+        
+        if all_exist:
+            # Containers exist - update RAM limit and restart (clears cache, preserves data)
+            log("Containers existants → update RAM + restart (cache vidé, données préservées)", "step")
+            if docker_update_memory(containers, ram_gb, clear_cache=True):
+                # docker_update_memory already waits for health after restart
+                if docker_verify_isolation(containers):
+                    log(f"RAM mise à jour avec succès → {ram_gb}GB (cache vidé)", "ok")
+                    return True
+                else:
+                    log("Containers non sains après update, recréation...", "warn")
+            else:
+                log("Échec update RAM, recréation containers...", "warn")
+        
+        # Containers don't exist or update failed - just start (volumes persist)
+        log("Démarrage containers avec volumes existants...", "step")
     else:
         # CRITICAL: Full cleanup for isolation
         log("Nettoyage environnement (isolation académique)...", "step")
