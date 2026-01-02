@@ -139,7 +139,7 @@ SCENARIOS = {
     },
     "M1": {
         "name": "Memgraph Standalone",
-        "description": "Property Graph in-memory (Cypher)",
+        "description": "Property Graph in-memory avec chunks timeseries (Cypher)",
         "containers": ["memgraph"],
         "color": MAGENTA,
     },
@@ -149,12 +149,8 @@ SCENARIOS = {
         "containers": ["memgraph", "timescaledb"],
         "color": MAGENTA,
     },
-    "O1": {
-        "name": "Oxigraph Standalone",
-        "description": "Triple Store RDF in-memory (SPARQL)",
-        "containers": ["oxigraph"],
-        "color": CYAN,
-    },
+    # O1 retiré : Oxigraph ne peut pas embarquer les chunks timeseries en RDF (explosion mémoire)
+    # Le benchmark cible M1 vs M2 pour montrer que l'approche hybride est supérieure
     "O2": {
         "name": "Oxigraph + TimescaleDB",
         "description": "RDF hybride + TimescaleDB pour séries",
@@ -183,17 +179,52 @@ def get_docker_compose_cmd() -> str:
 DOCKER_COMPOSE = get_docker_compose_cmd()
 
 
-def docker_stop_all():
-    """Stop all benchmark containers and ensure clean environment."""
+def check_postgres_tables_exist() -> bool:
+    """Check if PostgreSQL tables exist (nodes, edges, timeseries)."""
+    try:
+        from src.basetype_benchmark.engines.postgres import PostgresEngine
+        engine = PostgresEngine()
+        result = engine.execute_query("""
+            SELECT COUNT(*) FROM information_schema.tables 
+            WHERE table_name IN ('nodes', 'edges', 'timeseries')
+        """)
+        count = result[0][0] if result else 0
+        engine.close()
+        return count >= 3  # All 3 tables exist
+    except Exception:
+        return False
+
+
+def docker_stop_all(preserve_volumes: bool = False):
+    """Stop all benchmark containers.
+    
+    Args:
+        preserve_volumes: If True, keep volumes (for reuse across RAM levels)
+    """
     log("Arrêt de tous les containers benchmark...", "step")
     
-    # Stop via compose
-    subprocess.run(
-        f"{DOCKER_COMPOSE} down -v --remove-orphans",
-        shell=True,
-        cwd=str(DOCKER_DIR),
-        capture_output=True
-    )
+    if preserve_volumes:
+        # Just stop and remove containers, keep volumes
+        subprocess.run(
+            f"{DOCKER_COMPOSE} stop",
+            shell=True,
+            cwd=str(DOCKER_DIR),
+            capture_output=True
+        )
+        subprocess.run(
+            f"{DOCKER_COMPOSE} rm -f",
+            shell=True,
+            cwd=str(DOCKER_DIR),
+            capture_output=True
+        )
+    else:
+        # Full cleanup with volumes
+        subprocess.run(
+            f"{DOCKER_COMPOSE} down -v --remove-orphans",
+            shell=True,
+            cwd=str(DOCKER_DIR),
+            capture_output=True
+        )
     
     # Force stop any remaining btb_ containers
     result = subprocess.run(
@@ -209,8 +240,9 @@ def docker_stop_all():
             shell=True,
             capture_output=True
         )
+        rm_flag = "" if preserve_volumes else "-v"
         subprocess.run(
-            "docker ps -aq --filter 'name=btb_' | xargs -r docker rm -v",
+            f"docker ps -aq --filter 'name=btb_' | xargs -r docker rm -f {rm_flag}",
             shell=True,
             capture_output=True
         )
@@ -646,7 +678,7 @@ def workflow_benchmark():
     print(f"\n  • {BOLD}ALL{RESET}: Exécuter les 6 scénarios")
     
     print()
-    sc_choice = prompt("Scénario(s)", "ALL", ["P1", "P2", "M1", "M2", "O1", "O2", "ALL"])
+    sc_choice = prompt("Scénario(s)", "ALL", ["P1", "P2", "M1", "M2", "O2", "ALL"])
     
     if sc_choice.upper() == "ALL":
         scenarios = scenario_list
@@ -769,8 +801,8 @@ def workflow_benchmark():
     log(f"Résultats → {run_dir}", "info")
     
     # Optimize scenario order: group TimescaleDB users together
-    # P1 → P2 → M2 → O2 (share TimescaleDB) then M1 → O1 (standalone)
-    OPTIMAL_ORDER = ["P1", "P2", "M2", "O2", "M1", "O1"]
+    # P1 → P2 → M2 → O2 (share TimescaleDB) then M1 (standalone with chunks)
+    OPTIMAL_ORDER = ["P1", "P2", "M2", "O2", "M1"]
     scenarios_ordered = sorted(scenarios, key=lambda s: OPTIMAL_ORDER.index(s) if s in OPTIMAL_ORDER else 99)
     
     if scenarios_ordered != scenarios:
@@ -806,7 +838,7 @@ def workflow_benchmark():
             # Determine container and loading strategy
             # - P1/P2: preserve TimescaleDB volumes across RAM levels
             # - M2/O2: can reuse TimescaleDB if already loaded at this RAM level
-            # - M1/O1: always full reload (standalone in-memory)
+            # - M1: always full reload (standalone in-memory with chunks)
             
             uses_timescale = scenario in ("P1", "P2", "M2", "O2")
             timescale_ready = timescale_loaded_for_ram.get(ram_gb, False)
@@ -822,12 +854,16 @@ def workflow_benchmark():
             load_time = 0
             
             if scenario in ("P1", "P2"):
-                # PostgreSQL: skip if same scenario already loaded, or if TimescaleDB ready
-                if not first_ram_run:
+                # PostgreSQL: check if tables actually exist before skipping
+                tables_exist = check_postgres_tables_exist() if not first_ram_run else False
+                
+                if not first_ram_run and tables_exist:
                     log(f"PostgreSQL persistant → skip rechargement", "ok")
-                elif timescale_ready:
+                elif timescale_ready and tables_exist:
                     log(f"TimescaleDB déjà chargé (RAM {ram_gb}GB) → skip", "ok")
                 else:
+                    if not first_ram_run and not tables_exist:
+                        log(f"Tables manquantes → rechargement nécessaire", "warn")
                     load_time = _do_load(scenario, selected_ds["path"], ram_gb)
                     if load_time is None:
                         all_results[scenario][ram_gb] = {"status": "load_error", "queries": {}}
@@ -846,7 +882,7 @@ def workflow_benchmark():
                     all_results[scenario][ram_gb] = {"status": "load_error", "queries": {}}
                     continue
                     
-            else:  # M1, O1 - standalone
+            else:  # M1 - standalone with chunks
                 load_time = _do_load(scenario, selected_ds["path"], ram_gb)
                 if load_time is None:
                     all_results[scenario][ram_gb] = {"status": "load_error", "queries": {}}
@@ -967,8 +1003,15 @@ def workflow_benchmark():
                 
                 prev_ram_avg_latency = curr_avg_latency
             
-            docker_stop_all()
+            # Preserve volumes for PostgreSQL scenarios (P1/P2) across RAM levels
+            # This allows reuse of loaded data when only RAM limit changes
+            preserve = scenario in ("P1", "P2")
+            docker_stop_all(preserve_volumes=preserve)
             print()
+        
+        # Full cleanup after each scenario completes (or when switching scenarios)
+        if scenario in ("P1", "P2"):
+            docker_stop_all(preserve_volumes=False)  # Now cleanup volumes
     
     # Final summary
     elapsed_total = time.time() - t0_total
@@ -1112,7 +1155,9 @@ def load_data_for_scenario(scenario: str, dataset_path: Path, ram_gb: int, graph
         engine.close()
         return {"status": "ok"}
     
-    elif scenario in ("O1", "O2"):
+    elif scenario == "O2":
+        # O2 hybride: graphe RDF + TimescaleDB pour séries
+        # (O1 standalone retiré: ne peut pas embarquer les chunks RDF)
         engine = OxigraphEngine(scenario)
         engine.connect()
         engine.clear()
@@ -1122,31 +1167,23 @@ def load_data_for_scenario(scenario: str, dataset_path: Path, ram_gb: int, graph
         
         # Generate O1 export if not exists
         if not nt_file.exists():
-            log("  Génération export O1 (N-Triples)...", "step")
+            log("  Génération export N-Triples...", "step")
             o1_dir.mkdir(parents=True, exist_ok=True)
             try:
                 from basetype_benchmark.dataset.exporter_v2 import export_ntriples
                 export_ntriples(parquet_dir, o1_dir)
             except Exception as e:
-                log(f"  Échec génération export O1: {e}", "error")
+                log(f"  Échec génération export: {e}", "error")
                 engine.close()
                 return {"status": "error", "error": str(e)}
         
         if nt_file.exists():
             engine.load_ntriples(nt_file)
         else:
-            log("  Export O1 non trouvé après génération", "warn")
+            log("  Export N-Triples non trouvé après génération", "warn")
         
-        # O1 standalone: load timeseries chunks if available
-        if scenario == "O1" and not graph_only:
-            chunks_file = o1_dir / "chunks.nt"
-            if chunks_file.exists():
-                log("  Chargement chunks timeseries O1...", "step")
-                engine.load_ntriples(chunks_file)
-            # If no chunks file, O1 still works for graph-only queries
-        
-        # O2 needs TimescaleDB
-        if scenario == "O2" and not graph_only:
+        # O2 needs TimescaleDB for timeseries
+        if not graph_only:
             log("  Chargement TimescaleDB pour O2...", "step")
             pg_engine = PostgresEngine("P1")
             pg_engine.connect()
@@ -1243,8 +1280,9 @@ def execute_query_for_scenario(scenario: str, query: str, dataset_path: Path, re
             engine.close()
             return row_count, latency_ms, None
     
-    elif scenario in ("O1", "O2"):
-        query_dir = "o1" if scenario == "O1" else "o2/graph"
+    elif scenario == "O2":
+        # O2 only (O1 removed from benchmark)
+        query_dir = "o2/graph"
         matches = list(queries_dir.glob(f"{query_dir}/{query}_*.sparql"))
         if not matches:
             raise FileNotFoundError(f"Query {query} not found for {scenario}")
