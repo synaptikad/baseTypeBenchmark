@@ -444,9 +444,17 @@ class DatasetManager:
 
         target = target_mapping[scenario_upper]
 
-        # Check if shared timeseries exists
+        # P1/P2: ALWAYS skip timeseries CSV export - engine loads directly from Parquet
+        # M2/O2: Need shared timeseries.csv for TimescaleDB
+        # M1/O1: Have their own chunked format, no timeseries CSV needed
         shared_ts_path = export_path / "timeseries.csv"
-        use_skip_ts = skip_timeseries or shared_ts_path.exists()
+        
+        if scenario_upper in ('P1', 'P2', 'M1', 'O1'):
+            # These scenarios can load directly from Parquet or use their own format
+            use_skip_ts = True
+        else:
+            # M2/O2 need shared timeseries.csv for external TimescaleDB
+            use_skip_ts = skip_timeseries or shared_ts_path.exists()
 
         print(f"[EXPORT] {scenario_upper} ({target})...")
         exporter_v2.export_for_target(parquet_dir, target, output_dir, skip_timeseries=use_skip_ts)

@@ -4,7 +4,7 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 # Q4: Inventory - Temperature points for a specific floor
 # Parameter: $FLOOR_ID - floor to inventory temperature points
 
-SELECT ?floor_id ?floor_name ?building_id ?point_id ?point_name ?equipment_id ?equipment_name
+SELECT DISTINCT ?floor_id ?floor_name ?building_id ?point_id ?point_name ?equipment_id ?equipment_name
 WHERE {
   # Start from specified floor
   BIND(<http://basetype.benchmark/$FLOOR_ID> AS ?floor)
@@ -27,6 +27,6 @@ WHERE {
   ?point rdf:type btb:Point ;
          btb:id ?point_id ;
          btb:name ?point_name ;
-         btb:measures btb:Temperature .
+         btb:quantity "temperature" .
 }
 ORDER BY ?point_name

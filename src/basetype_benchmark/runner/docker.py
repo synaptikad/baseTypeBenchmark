@@ -162,3 +162,30 @@ def is_container_running(container_name: str) -> bool:
         text=True
     )
     return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def run_in_container(
+    container_name: str,
+    argv: List[str],
+    check: bool = False,
+    timeout_s: Optional[int] = None,
+) -> subprocess.CompletedProcess:
+    """Run a command inside a running container via `docker exec`.
+
+    Args:
+        container_name: Docker container name (e.g., btb_timescaledb)
+        argv: Command argv list, e.g. ["bash", "-lc", "echo hi"]
+        check: If True, raise CalledProcessError on non-zero exit
+        timeout_s: Optional timeout
+
+    Returns:
+        CompletedProcess with stdout/stderr captured.
+    """
+    cmd = ["docker", "exec", "-i", container_name, *argv]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=check,
+        timeout=timeout_s,
+    )

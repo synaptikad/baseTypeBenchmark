@@ -5,7 +5,7 @@
 MATCH (t:Node {id: '$TENANT_ID'})-[:OCCUPIES]->(sp:Node {type: 'Space'})
       -[:SERVES|CONTAINS]-(eq:Node {type: 'Equipment'})
       -[:HAS_POINT]->(p:Node {type: 'Point'})
-WHERE p.quantity = 'Power'
+WHERE p.quantity = 'power'
 RETURN t.id AS tenant_id,
        t.name AS tenant_name,
        t.building_id AS building_id,

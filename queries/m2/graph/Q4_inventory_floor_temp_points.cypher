@@ -6,7 +6,8 @@
 MATCH (f:Node {id: '$FLOOR_ID'})-[:CONTAINS]->(sp:Node {type: 'Space'})
 MATCH (eq:Node {type: 'Equipment'})-[:HAS_POINT]->(p:Node {type: 'Point'})
 WHERE ((sp)-[:CONTAINS]->(eq) OR (eq)-[:SERVES]->(sp))
-  AND p.quantity = 'Temperature'
+  AND p.quantity = 'temperature'
+WITH DISTINCT f, p, eq
 RETURN f.id AS floor_id,
        f.name AS floor_name,
        f.building_id AS building_id,

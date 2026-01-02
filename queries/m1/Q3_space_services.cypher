@@ -3,11 +3,12 @@
 // Parameter: $SPACE_ID - space to query for serving equipment
 
 MATCH (s:Node {id: '$SPACE_ID'})-[r:CONTAINS|SERVES|LOCATED_IN]-(eq:Node {type: 'Equipment'})
+WITH DISTINCT s, eq, collect(type(r)) AS relationships
 RETURN s.id AS space_id,
        s.name AS space_name,
        s.building_id AS building_id,
        eq.id AS equipment_id,
        eq.name AS equipment_name,
        eq.type AS equipment_type,
-       type(r) AS relationship
+       relationships
 ORDER BY eq.name;

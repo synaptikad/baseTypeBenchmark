@@ -3,8 +3,9 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 # Q4: Inventory - Temperature points for a specific floor
 # Parameter: $FLOOR_ID - floor to inventory temperature points
+# Canonical: uses btb:quantity "temperature" (lowercase string literal)
 
-SELECT ?floor_id ?floor_name ?building_id ?point_id ?point_name ?equipment_id ?equipment_name
+SELECT DISTINCT ?floor_id ?floor_name ?building_id ?point_id ?point_name ?equipment_id ?equipment_name
 WHERE {
   # Start from specified floor
   BIND(<http://basetype.benchmark/$FLOOR_ID> AS ?floor)
@@ -17,7 +18,6 @@ WHERE {
   ?space rdf:type btb:Space .
 
   # Equipment either CONTAINED by Space or SERVES the Space
-  # Generator creates Equipment -> SERVES -> Space, so we use ^btb:serves (inverse)
   { ?space btb:contains ?eq } UNION { ?eq btb:serves ?space }
   ?eq rdf:type btb:Equipment ;
       btb:id ?equipment_id ;
@@ -27,6 +27,6 @@ WHERE {
   ?point rdf:type btb:Point ;
          btb:id ?point_id ;
          btb:name ?point_name ;
-         btb:measures btb:Temperature .
+         btb:quantity "temperature" .
 }
 ORDER BY ?point_name

@@ -1,19 +1,37 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 # Q1: Energy Chain - Traverse from meter through FEEDS chain
 # Benchmark: RDF property path traversal
 # Parameter: $METER_ID - starting meter for energy chain traversal
 
-SELECT ?target ?type ?name ?depth
+SELECT ?id ?type ?name ?depth
 WHERE {
-  # Start from specified meter
-  BIND(<http://basetype.benchmark/$METER_ID> AS ?meter)
+  {
+    SELECT ?target (MIN(?d) AS ?depth)
+    WHERE {
+      # Start from specified meter
+      BIND(<http://basetype.benchmark/$METER_ID> AS ?meter)
 
-  # Traverse FEEDS chain (1-10 hops)
-  ?meter btb:feeds+ ?target .
-  ?target rdf:type ?type .
+      # Traverse FEEDS chain (1-10 hops) and compute minimal hop depth
+      { ?meter btb:feeds ?target . BIND(1 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds ?target . BIND(2 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds ?target . BIND(3 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(4 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(5 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(6 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(7 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(8 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(9 AS ?d) }
+      UNION { ?meter btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds/btb:feeds ?target . BIND(10 AS ?d) }
+    }
+    GROUP BY ?target
+  }
 
+  ?target btb:id ?id .
+  ?target rdf:type ?typeUri .
   OPTIONAL { ?target btb:name ?name }
+  BIND(STRAFTER(STR(?typeUri), "http://basetype.benchmark/ontology#") AS ?type)
 }
-ORDER BY ?type
+ORDER BY ?depth ?type ?id

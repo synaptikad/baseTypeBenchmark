@@ -153,7 +153,7 @@ class VectorizedSimulator:
         randoms = rng.standard_normal((self.n_points, self.n_timesteps))
 
         # Allocate trajectories array
-        trajectories = np.zeros((self.n_points, self.n_timesteps), dtype=np.float64)
+        trajectories = np.zeros((self.n_points, self.n_timesteps), dtype=np.float32)
 
         # Initialize with setpoints (means)
         trajectories[:, 0] = self.means
@@ -210,7 +210,7 @@ class VectorizedSimulator:
         status_mask = self.point_types == self.TYPE_STATUS
         if np.any(status_mask):
             # Apply hysteresis-like behavior
-            trajectories[status_mask, :] = (trajectories[status_mask, :] > 0.5).astype(np.float64)
+            trajectories[status_mask, :] = (trajectories[status_mask, :] > 0.5).astype(np.float32)
 
         # Alarm: rare events (mostly 0, occasional 1)
         alarm_mask = self.point_types == self.TYPE_ALARM
@@ -219,7 +219,7 @@ class VectorizedSimulator:
             # Poisson process: ~0.5 events per day per point
             event_prob = 0.5 / (24 * 60)  # per minute
             events = rng.random((n_alarms, self.n_timesteps)) < event_prob
-            trajectories[alarm_mask, :] = events.astype(np.float64)
+            trajectories[alarm_mask, :] = events.astype(np.float32)
 
     def apply_deadband_vectorized(
         self,
@@ -592,7 +592,7 @@ def export_timeseries_parquet_direct(
     schema = pa.schema([
         ("point_id", pa.string()),
         ("timestamp", pa.timestamp("us")),
-        ("value", pa.float64())
+        ("value", pa.float32())
     ])
 
     output_path = Path(output_path)
@@ -621,7 +621,7 @@ def export_timeseries_parquet_direct(
         table = pa.table({
             "point_id": pa.array(batch_point_ids, type=pa.string()),
             "timestamp": pa.array(batch_timestamps, type=pa.timestamp("us")),
-            "value": pa.array(batch_values, type=pa.float64()),
+            "value": pa.array(batch_values, type=pa.float32()),
         })
 
         writer.write_table(table)
@@ -638,5 +638,478 @@ def export_timeseries_parquet_direct(
         "n_timesteps": n_timesteps,
         "n_samples": n_samples,
         "compression_pct": 100 * (1 - n_samples / (n_points * n_timesteps)),
+        "file_size_bytes": output_path.stat().st_size,
+    }
+
+
+def export_timeseries_parquet_chunked(
+    points: List[Any],
+    duration_days: float,
+    output_path: str,
+    start_time: datetime,
+    seed: int = 42,
+    dt: float = 60.0,
+    show_progress: bool = True,
+    classify_func: Optional[Callable[[str], str]] = None,
+    max_ram_gb: float = 10.0,
+) -> Dict[str, Any]:
+    """
+    Export timeseries to Parquet using CHUNKED processing to limit RAM usage.
+    
+    Processes points in chunks to avoid OOM on large datasets.
+    Limits memory to approximately max_ram_gb.
+    
+    Args:
+        points: List of PointInfo objects
+        duration_days: Duration in days
+        output_path: Output parquet file path
+        start_time: Start datetime
+        seed: Random seed
+        dt: Time step in seconds
+        show_progress: Show progress
+        classify_func: Point classification function
+        max_ram_gb: Maximum RAM to use (default 10 GB)
+    
+    Returns:
+        Dict with statistics
+    """
+    from tqdm import tqdm
+    from pathlib import Path
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    
+    n_timesteps = int(duration_days * 24 * 60 * 60 / dt)
+    n_points = len(points)
+    
+    # Calculate chunk size based on max RAM
+    # Each trajectory: n_timesteps * 8 bytes (float64)
+    bytes_per_point = n_timesteps * 8
+    max_points_per_chunk = int((max_ram_gb * 1024**3) / bytes_per_point)
+    max_points_per_chunk = max(100, min(max_points_per_chunk, n_points))
+    
+    n_chunks = (n_points + max_points_per_chunk - 1) // max_points_per_chunk
+    
+    if show_progress:
+        mem_per_chunk_gb = (max_points_per_chunk * n_timesteps * 8) / (1024**3)
+        print(f"  Chunked simulation: {n_points:,} points × {n_timesteps:,} timesteps")
+        print(f"  Processing in {n_chunks} chunks of {max_points_per_chunk:,} points (~{mem_per_chunk_gb:.1f} GB/chunk)")
+    
+    # Prepare Parquet writer
+    schema = pa.schema([
+        ("point_id", pa.string()),
+        ("timestamp", pa.timestamp("us")),
+        ("value", pa.float32())
+    ])
+    
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    writer = pq.ParquetWriter(str(output_path), schema)
+    
+    total_samples = 0
+    rng = np.random.default_rng(seed)
+    
+    # Process chunks
+    chunk_iter = range(n_chunks)
+    if show_progress:
+        chunk_iter = tqdm(chunk_iter, desc="  Processing chunks", unit="chunk")
+    
+    for chunk_idx in chunk_iter:
+        start_pt = chunk_idx * max_points_per_chunk
+        end_pt = min(start_pt + max_points_per_chunk, n_points)
+        chunk_points = points[start_pt:end_pt]
+        chunk_seed = seed + chunk_idx  # Different seed per chunk for variety
+        
+        # Create simulator for this chunk
+        simulator = create_simulator_from_points(
+            points=chunk_points,
+            n_timesteps=n_timesteps,
+            dt=dt,
+            classify_func=classify_func,
+        )
+        
+        # Generate trajectories for this chunk
+        trajectories = simulator.generate_all(chunk_seed, show_progress=False)
+        
+        # Apply deadband filtering
+        point_indices, time_indices, values = simulator.apply_deadband_vectorized(trajectories)
+        
+        # Free trajectory memory
+        del trajectories
+        
+        n_samples = len(values)
+        if n_samples == 0:
+            continue
+        
+        # Build point IDs for this chunk
+        point_ids_list = [p.id for p in chunk_points]
+        point_ids_array = np.array(point_ids_list, dtype=object)
+        
+        # Compute timestamps
+        start_ts = np.datetime64(start_time, 'us')
+        dt_us = np.int64(dt * 1_000_000)
+        timestamps = start_ts + (time_indices.astype(np.int64) * dt_us)
+        
+        # Map point indices to IDs
+        point_id_column = point_ids_array[point_indices]
+        
+        # Write to Parquet
+        table = pa.table({
+            "point_id": pa.array(point_id_column, type=pa.string()),
+            "timestamp": pa.array(timestamps, type=pa.timestamp("us")),
+            "value": pa.array(values, type=pa.float32()),
+        })
+        
+        writer.write_table(table)
+        total_samples += n_samples
+        
+        # Free memory
+        del point_indices, time_indices, values, timestamps, point_id_column, table
+    
+    writer.close()
+    
+    if show_progress:
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        print(f"  Written {total_samples:,} rows to {output_path.name} ({file_size_mb:.1f} MB)")
+    
+    return {
+        "n_points": n_points,
+        "n_timesteps": n_timesteps,
+        "n_samples": total_samples,
+        "compression_pct": 100 * (1 - total_samples / (n_points * n_timesteps)) if n_points * n_timesteps > 0 else 0,
+        "file_size_bytes": output_path.stat().st_size,
+        "n_chunks": n_chunks,
+    }
+
+
+def export_timeseries_parquet_by_frequency(
+    points: List[Any],
+    duration_days: float,
+    output_path: str,
+    start_time: datetime,
+    seed: int = 42,
+    show_progress: bool = True,
+    classify_func: Optional[Callable[[str], str]] = None,
+    max_ram_gb: float = 10.0,
+) -> Dict[str, Any]:
+    """
+    Export timeseries to Parquet using REALISTIC Digital Twin semantics.
+    
+    In a real Digital Twin for smart buildings:
+    1. Energy/meter points: NO deadband, regular 15-minute intervals (regulatory requirement)
+    2. Other points: deadband filtering (only record when value changes beyond threshold)
+    
+    This produces realistic data volumes matching actual BMS/SCADA systems.
+    
+    Args:
+        points: List of point objects with id, name, frequency, point_type attributes
+        duration_days: Duration in days
+        output_path: Output parquet file path
+        start_time: Start datetime
+        seed: Random seed
+        show_progress: Show progress
+        classify_func: Point classification function
+        max_ram_gb: Maximum RAM per frequency group
+    
+    Returns:
+        Dict with statistics
+    """
+    from tqdm import tqdm
+    from pathlib import Path
+    from collections import defaultdict
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    
+    # ==========================================================================
+    # DIGITAL TWIN STORAGE MODEL
+    # ==========================================================================
+    # In real BMS/SCADA systems:
+    # - Sensors sample at high frequency (1s, 5s) but we don't store every sample
+    # - Storage is based on Change-of-Value (COV) / deadband filtering
+    # - Minimum storage interval depends on point type:
+    #   * Energy/meters: fixed 15min intervals (no deadband) - regulatory requirement
+    #   * Fast sensors (temp, pressure): evaluated every 1min, stored on COV
+    #   * Slow sensors (filters, efficiency): evaluated every 5-15min
+    #   * Status/alarms: event-driven only
+    # ==========================================================================
+    
+    # Minimum storage interval by category (in seconds)
+    # This normalizes unrealistic frequencies from docs (1s, 5s) to real storage rates
+    MIN_STORAGE_INTERVAL = {
+        'fast': 60,      # Fast sensors: 1 min minimum
+        'normal': 300,   # Normal sensors: 5 min minimum
+        'slow': 900,     # Slow/efficiency: 15 min minimum
+        'energy': 900,   # Energy meters: fixed 15 min
+    }
+    
+    # Keywords to classify points
+    ENERGY_KEYWORDS = {'energy', 'meter', 'power', 'kwh', 'kw', 'consumption', 'production', 
+                       'compteur', 'énergie', 'puissance', 'consommation', 'wh', 'watt'}
+    FAST_KEYWORDS = {'temp', 'temperature', 'pressure', 'humidity', 'co2', 'flow', 'speed',
+                     'current', 'voltage', 'setpoint', 'cmd', 'valve', 'damper'}
+    SLOW_KEYWORDS = {'filter', 'efficiency', 'recovery', 'cop', 'eer', 'occupancy'}
+    
+    def classify_point_storage(p) -> tuple:
+        """
+        Classify point for storage: (category, min_interval, use_deadband)
+        
+        Returns:
+            (category, minimum_storage_interval, apply_deadband)
+        """
+        name_lower = getattr(p, 'name', '').lower()
+        point_type = getattr(p, 'point_type', '').lower()
+        orig_freq = getattr(p, 'frequency', 300) or 300
+        
+        # Energy/meters: no deadband, fixed 15min
+        for kw in ENERGY_KEYWORDS:
+            if kw in name_lower:
+                return ('energy', MIN_STORAGE_INTERVAL['energy'], False)
+        if point_type in ('energy', 'meter', 'compteur'):
+            return ('energy', MIN_STORAGE_INTERVAL['energy'], False)
+        
+        # Status/alarms: event-driven with deadband
+        if point_type in ('etat', 'status', 'alarme', 'alarm'):
+            # For status, use original frequency but minimum 1min
+            return ('status', max(60, orig_freq), True)
+        
+        # Slow sensors
+        for kw in SLOW_KEYWORDS:
+            if kw in name_lower:
+                return ('slow', max(MIN_STORAGE_INTERVAL['slow'], orig_freq), True)
+        
+        # Fast sensors
+        for kw in FAST_KEYWORDS:
+            if kw in name_lower:
+                return ('fast', max(MIN_STORAGE_INTERVAL['fast'], orig_freq), True)
+        
+        # Default: normal sensor
+        return ('normal', max(MIN_STORAGE_INTERVAL['normal'], orig_freq), True)
+    
+    # Classify all points
+    energy_points = []
+    regular_points_by_freq = defaultdict(list)
+    
+    storage_stats = defaultdict(int)
+    
+    for p in points:
+        category, storage_freq, use_deadband = classify_point_storage(p)
+        storage_stats[category] += 1
+        
+        if not use_deadband:
+            energy_points.append((p, storage_freq))
+        else:
+            regular_points_by_freq[storage_freq].append(p)
+    
+    if show_progress:
+        print(f"  Point classification for storage:")
+        for cat, n in sorted(storage_stats.items(), key=lambda x: -x[1]):
+            print(f"    {cat}: {n:,} points")
+        print(f"  Energy/meter (no deadband): {len(energy_points):,} points")
+        print(f"  Regular (with deadband): {sum(len(v) for v in regular_points_by_freq.values()):,} points")
+    
+    # Prepare Parquet writer
+    schema = pa.schema([
+        ("point_id", pa.string()),
+        ("timestamp", pa.timestamp("us")),
+        ("value", pa.float32())
+    ])
+    
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    writer = pq.ParquetWriter(str(output_path), schema)
+    
+    total_samples = 0
+    total_raw_samples = 0
+    energy_samples = 0
+    regular_samples = 0
+    
+    # =========================================================================
+    # 1. Process ENERGY points: NO deadband, fixed 15-minute intervals
+    # =========================================================================
+    if energy_points:
+        energy_dt = 900.0  # 15 minutes
+        n_timesteps_energy = int(duration_days * 24 * 3600 / energy_dt)
+        
+        # Extract just the points (discard storage_freq since all energy = 15min)
+        energy_pts_only = [p for p, _ in energy_points]
+        
+        if show_progress:
+            print(f"  Processing energy points: {len(energy_pts_only):,} × {n_timesteps_energy:,} timesteps (no deadband)")
+        
+        # Process energy points in chunks if needed
+        mem_gb = (len(energy_pts_only) * n_timesteps_energy * 8) / (1024**3)
+        
+        if mem_gb > max_ram_gb:
+            max_pts = int((max_ram_gb * 1024**3) / (n_timesteps_energy * 8))
+            max_pts = max(100, max_pts)
+        else:
+            max_pts = len(energy_pts_only)
+        
+        for chunk_start in range(0, len(energy_pts_only), max_pts):
+            chunk_end = min(chunk_start + max_pts, len(energy_pts_only))
+            chunk_points = energy_pts_only[chunk_start:chunk_end]
+            chunk_seed = seed + chunk_start
+            
+            # Create simulator
+            simulator = create_simulator_from_points(
+                points=chunk_points,
+                n_timesteps=n_timesteps_energy,
+                dt=energy_dt,
+                classify_func=classify_func,
+            )
+            
+            # Generate trajectories
+            trajectories = simulator.generate_all(chunk_seed, show_progress=False)
+            
+            # NO deadband for energy - keep ALL values
+            n_pts_chunk = len(chunk_points)
+            n_samples_chunk = n_pts_chunk * n_timesteps_energy
+            
+            # Build arrays for all samples (no filtering)
+            point_ids_list = [p.id for p in chunk_points]
+            point_ids_array = np.array(point_ids_list, dtype=object)
+            
+            # Create full index arrays
+            point_indices = np.repeat(np.arange(n_pts_chunk), n_timesteps_energy)
+            time_indices = np.tile(np.arange(n_timesteps_energy), n_pts_chunk)
+            values = trajectories.flatten()
+            
+            # Compute timestamps
+            start_ts = np.datetime64(start_time, 'us')
+            dt_us = np.int64(energy_dt * 1_000_000)
+            timestamps = start_ts + (time_indices.astype(np.int64) * dt_us)
+            
+            # Map point indices to IDs
+            point_id_column = point_ids_array[point_indices]
+            
+            # Write to Parquet
+            table = pa.table({
+                "point_id": pa.array(point_id_column, type=pa.string()),
+                "timestamp": pa.array(timestamps, type=pa.timestamp("us")),
+                "value": pa.array(values, type=pa.float32()),
+            })
+            
+            writer.write_table(table)
+            
+            energy_samples += n_samples_chunk
+            total_samples += n_samples_chunk
+            total_raw_samples += n_samples_chunk
+            
+            # Free memory
+            del trajectories, point_indices, time_indices, values, timestamps, point_id_column, table
+    
+    # =========================================================================
+    # 2. Process REGULAR points: WITH deadband, grouped by storage frequency
+    # =========================================================================
+    if regular_points_by_freq:
+        if show_progress:
+            print(f"  Regular points by storage frequency (with deadband):")
+            for freq in sorted(regular_points_by_freq.keys()):
+                n = len(regular_points_by_freq[freq])
+                n_ts = int(duration_days * 24 * 3600 / freq)
+                print(f"    {freq}s ({freq//60}min): {n:,} points × {n_ts:,} timesteps")
+        
+        # Process each frequency group
+        freq_iter = sorted(regular_points_by_freq.keys())
+        if show_progress:
+            freq_iter = tqdm(list(freq_iter), desc="  Processing frequency groups", unit="freq")
+        
+        for freq in freq_iter:
+            group_points = regular_points_by_freq[freq]
+            n_points_group = len(group_points)
+            n_timesteps = int(duration_days * 24 * 3600 / freq)
+            dt = float(freq)
+            
+            if n_timesteps == 0:
+                continue
+            
+            # Check memory for this group
+            mem_gb = (n_points_group * n_timesteps * 8) / (1024**3)
+            
+            if mem_gb > max_ram_gb:
+                max_points_per_chunk = int((max_ram_gb * 1024**3) / (n_timesteps * 8))
+                max_points_per_chunk = max(100, max_points_per_chunk)
+                n_chunks = (n_points_group + max_points_per_chunk - 1) // max_points_per_chunk
+            else:
+                max_points_per_chunk = n_points_group
+                n_chunks = 1
+            
+            for chunk_idx in range(n_chunks):
+                start_pt = chunk_idx * max_points_per_chunk
+                end_pt = min(start_pt + max_points_per_chunk, n_points_group)
+                chunk_points = group_points[start_pt:end_pt]
+                chunk_seed = seed + freq + chunk_idx
+                
+                # Create simulator
+                simulator = create_simulator_from_points(
+                    points=chunk_points,
+                    n_timesteps=n_timesteps,
+                    dt=dt,
+                    classify_func=classify_func,
+                )
+                
+                # Generate trajectories
+                trajectories = simulator.generate_all(chunk_seed, show_progress=False)
+                
+                # Apply DEADBAND filtering (this is the key difference)
+                point_indices, time_indices, values = simulator.apply_deadband_vectorized(trajectories)
+                
+                # Free memory
+                del trajectories
+                
+                n_samples = len(values)
+                if n_samples == 0:
+                    continue
+                
+                total_raw_samples += len(chunk_points) * n_timesteps
+                
+                # Build point IDs
+                point_ids_list = [p.id for p in chunk_points]
+                point_ids_array = np.array(point_ids_list, dtype=object)
+                
+                # Compute timestamps
+                start_ts = np.datetime64(start_time, 'us')
+                dt_us = np.int64(dt * 1_000_000)
+                timestamps = start_ts + (time_indices.astype(np.int64) * dt_us)
+                
+                # Map point indices to IDs
+                point_id_column = point_ids_array[point_indices]
+                
+                # Write to Parquet
+                table = pa.table({
+                    "point_id": pa.array(point_id_column, type=pa.string()),
+                    "timestamp": pa.array(timestamps, type=pa.timestamp("us")),
+                    "value": pa.array(values, type=pa.float32()),
+                })
+                
+                writer.write_table(table)
+                total_samples += n_samples
+                regular_samples += n_samples
+                
+                # Free memory
+                del point_indices, time_indices, values, timestamps, point_id_column, table
+    
+    writer.close()
+    
+    if show_progress:
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        compression_pct = 100 * (1 - total_samples / total_raw_samples) if total_raw_samples > 0 else 0
+        print(f"  Written {total_samples:,} rows to {output_path.name} ({file_size_mb:.1f} MB)")
+        print(f"    Energy samples (no deadband): {energy_samples:,}")
+        print(f"    Regular samples (with deadband): {regular_samples:,}")
+        print(f"  Overall compression: {compression_pct:.1f}%")
+    
+    n_regular_points = sum(len(v) for v in regular_points_by_freq.values())
+    
+    return {
+        "n_points": len(points),
+        "n_energy_points": len(energy_points),
+        "n_regular_points": n_regular_points,
+        "n_samples": total_samples,
+        "n_energy_samples": energy_samples,
+        "n_regular_samples": regular_samples,
+        "n_raw_samples": total_raw_samples,
+        "compression_pct": 100 * (1 - total_samples / total_raw_samples) if total_raw_samples > 0 else 0,
         "file_size_bytes": output_path.stat().st_size,
     }

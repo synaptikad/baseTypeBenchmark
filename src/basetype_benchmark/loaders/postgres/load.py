@@ -237,7 +237,7 @@ def create_schema_relational(conn) -> None:
             CREATE TABLE IF NOT EXISTS timeseries (
                 time TIMESTAMPTZ NOT NULL,
                 point_id TEXT NOT NULL,
-                value DOUBLE PRECISION
+                value REAL
             );
         """)
 
@@ -475,7 +475,7 @@ def create_schema_jsonb(conn) -> None:
             CREATE TABLE IF NOT EXISTS timeseries (
                 time TIMESTAMPTZ NOT NULL,
                 point_id TEXT NOT NULL,
-                value DOUBLE PRECISION,
+                value REAL,
                 metadata JSONB DEFAULT NULL
             );
         """)

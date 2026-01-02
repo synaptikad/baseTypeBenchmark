@@ -112,6 +112,165 @@ def extract_dataset_info(nodes_csv: Path, scenario: str = "P1") -> Dict[str, Lis
     return info
 
 
+def extract_dataset_info_from_parquet(nodes_parquet: Path) -> Dict[str, List[str]]:
+    """Extract available IDs from Parquet nodes file.
+
+    This is used for scenarios that don't have a convenient nodes CSV (e.g., O1/O2),
+    while still keeping parameter generation deterministic and reproducible.
+    """
+    info: Dict[str, List[str]] = {
+        "meters": [],
+        "equipment": [],
+        "spaces": [],
+        "floors": [],
+        "buildings": [],
+        "tenants": [],
+        "points": [],
+        "zones": [],
+    }
+
+    if not nodes_parquet.exists():
+        print(f"  [WARN] Nodes parquet not found: {nodes_parquet}")
+        return info
+
+    try:
+        import pandas as pd
+
+        # nodes.parquet schema can vary by exporter version; only request columns that exist.
+        probe = pd.read_parquet(nodes_parquet, columns=["id", "type"])  # minimal
+        available_cols = set(probe.columns)
+        # Try to include building_id / equipment_type / properties if present
+        cols = ["id", "type"]
+        for c in ("building_id", "equipment_type", "properties"):
+            try:
+                df_col = pd.read_parquet(nodes_parquet, columns=[c])
+                available_cols.update(df_col.columns)
+                cols.append(c)
+            except Exception:
+                pass
+
+        # De-duplicate while preserving order
+        cols = list(dict.fromkeys(cols))
+        df = pd.read_parquet(nodes_parquet, columns=cols)
+
+        for node_type, group in df.groupby("type"):
+            ids = group["id"].dropna().astype(str).tolist()
+            if node_type == "Meter":
+                info["meters"].extend(ids)
+            elif node_type == "Equipment":
+                info["equipment"].extend(ids)
+                if "equipment_type" in group.columns:
+                    meters_from_eq = group[group["equipment_type"].isin(["MainMeter", "SubMeter"])]["id"].dropna().astype(str).tolist()
+                    info["meters"].extend(meters_from_eq)
+                elif "properties" in group.columns:
+                    # Parse equipment_type from JSON properties for a small equipment set
+                    try:
+                        try:
+                            import orjson as _json  # type: ignore
+                            _loads = _json.loads
+                        except Exception:
+                            import json as _json
+                            _loads = _json.loads
+
+                        meters_from_props: List[str] = []
+                        for _, row in group[["id", "properties"]].iterrows():
+                            raw = row.get("properties")
+                            if not raw:
+                                continue
+                            try:
+                                props = _loads(raw) if isinstance(raw, str) else raw
+                                et = props.get("equipment_type") if isinstance(props, dict) else None
+                                if et in ("MainMeter", "SubMeter"):
+                                    meters_from_props.append(str(row["id"]))
+                            except Exception:
+                                continue
+                        info["meters"].extend(meters_from_props)
+                    except Exception:
+                        pass
+            elif node_type == "Space":
+                info["spaces"].extend(ids)
+            elif node_type == "Floor":
+                info["floors"].extend(ids)
+            elif node_type == "Building":
+                info["buildings"].extend(ids)
+            elif node_type == "Tenant":
+                info["tenants"].extend(ids)
+            elif node_type == "Point":
+                info["points"].extend(ids)
+            elif node_type == "Zone":
+                info["zones"].extend(ids)
+    except Exception as e:
+        print(f"  [WARN] Failed to read nodes.parquet: {e}")
+        return info
+
+    counts = {k: len(v) for k, v in info.items() if isinstance(v, list) and v}
+    if counts:
+        print(f"  [INFO] Dataset IDs (parquet): {counts}")
+
+    return info
+
+
+def extract_timeseries_range_from_parquet(ts_parquet: Path) -> Dict[str, int]:
+    """Extract timestamp range from timeseries.parquet metadata when possible."""
+    result = {"ts_start": 0, "ts_end": 0}
+    if not ts_parquet.exists():
+        return result
+
+    try:
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(ts_parquet)
+        # Try to find stats for timestamp column
+        min_ts = None
+        max_ts = None
+
+        schema = pf.schema_arrow
+        # column can be timestamp or time depending on exporter version
+        ts_col = None
+        for name in ("timestamp", "time"):
+            if name in schema.names:
+                ts_col = name
+                break
+        if ts_col is None:
+            return result
+
+        col_idx = schema.get_field_index(ts_col)
+        if col_idx < 0:
+            return result
+
+        for rg in range(pf.metadata.num_row_groups):
+            col = pf.metadata.row_group(rg).column(col_idx)
+            stats = col.statistics
+            if stats is None:
+                continue
+            if stats.min is not None:
+                min_ts = stats.min if min_ts is None else min(min_ts, stats.min)
+            if stats.max is not None:
+                max_ts = stats.max if max_ts is None else max(max_ts, stats.max)
+
+        # stats.min/max can be datetime-like or int; normalize via datetime
+        def _to_unix(x) -> Optional[int]:
+            try:
+                if hasattr(x, "timestamp"):
+                    return int(x.timestamp())
+                return int(x)
+            except Exception:
+                return None
+
+        if min_ts is not None:
+            v = _to_unix(min_ts)
+            if v is not None:
+                result["ts_start"] = v
+        if max_ts is not None:
+            v = _to_unix(max_ts)
+            if v is not None:
+                result["ts_end"] = v
+    except Exception as e:
+        print(f"  [WARN] Failed to read timeseries.parquet range: {e}")
+
+    return result
+
+
 def extract_timeseries_range(ts_csv: Path) -> Dict[str, int]:
     """Extract timestamp range from timeseries CSV.
 
@@ -365,11 +524,11 @@ def get_nodes_csv_path(export_dir: Path, scenario: str) -> Path:
     elif scenario in ("M1", "M2"):
         return scenario_dir / "mg_nodes.csv"
     elif scenario in ("O1", "O2"):
-        # O1/O2 use N-Triples, need different extraction
-        # For now, return P1 path as fallback
+        # O1/O2 use N-Triples; prefer P1 nodes CSV if present (for easy ID extraction)
         p1_dir = export_dir / "p1"
         if (p1_dir / "pg_nodes.csv").exists():
             return p1_dir / "pg_nodes.csv"
+        # Otherwise return a non-existent path; caller should fall back to parquet extraction.
         return scenario_dir / "pg_nodes.csv"
     else:
         return scenario_dir / "pg_nodes.csv"

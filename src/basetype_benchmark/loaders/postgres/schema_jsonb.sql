@@ -59,7 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_props_gin ON edges USING GIN (props jsonb_p
 CREATE TABLE IF NOT EXISTS timeseries (
     time TIMESTAMPTZ NOT NULL,
     point_id TEXT NOT NULL,
-    value DOUBLE PRECISION,
+    value REAL,
     -- Métadonnées optionnelles pour P2 (qualité, source, etc.)
     metadata JSONB DEFAULT NULL
 );

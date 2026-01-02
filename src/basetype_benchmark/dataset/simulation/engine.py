@@ -42,6 +42,8 @@ class PointInfo:
     equipment_type: str | None = None
     unit: str | None = None
     setpoint: float | None = None
+    frequency: int = 300  # seconds between samples (default 5 min)
+    point_type: str = "mesure"  # mesure, commande, etat, alarme
 
 
 @dataclass

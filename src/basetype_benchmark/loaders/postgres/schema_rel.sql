@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_rel ON edges(rel_type);
 CREATE TABLE IF NOT EXISTS timeseries (
     time TIMESTAMPTZ NOT NULL,
     point_id TEXT NOT NULL,
-    value DOUBLE PRECISION
+    value REAL
 );
 
 -- Convertir en hypertable avec chunks de 1 jour

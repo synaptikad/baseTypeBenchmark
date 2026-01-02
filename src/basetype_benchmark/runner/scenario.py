@@ -1,5 +1,6 @@
 """Scenario orchestration for benchmark execution."""
 
+import os
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -11,6 +12,8 @@ from .results import BenchmarkResult, QueryResult, LoadResult, save_results
 from .params import (
     extract_dataset_info,
     extract_timeseries_range,
+    extract_dataset_info_from_parquet,
+    extract_timeseries_range_from_parquet,
     get_query_variants,
     substitute_params,
     get_nodes_csv_path,
@@ -53,7 +56,16 @@ QUERY_EXT = {
 }
 
 
-def ensure_scenario_exported(export_dir: Path, scenario: str) -> None:
+def _queries_need_timeseries(query_ids: list[str]) -> bool:
+    """Return True if selected queries require timeseries/chunk data."""
+    return any(QUERY_TYPE.get(q) != "graph_only" for q in query_ids)
+
+
+def ensure_scenario_exported(
+    export_dir: Path,
+    scenario: str,
+    query_ids: Optional[list[str]] = None,
+) -> None:
     """Export CSV/NT files for a scenario if they don't exist.
 
     Args:
@@ -78,12 +90,15 @@ def ensure_scenario_exported(export_dir: Path, scenario: str) -> None:
     
     scenario_dir = export_dir / scenario.lower()
 
+    selected = query_ids or QUERIES
+
     # Scenarios that need timeseries.csv (use TimescaleDB)
     NEEDS_TIMESERIES_CSV = {"P1", "P2", "M2", "O2"}
 
-    # Export shared timeseries.csv ONCE for all scenarios that need it
+    # Export shared timeseries.csv ONCE for all scenarios that need it.
+    # If we only run graph-only queries, skip generating timeseries.csv.
     # timeseries.csv goes at export_dir root (not in parquet/ subdirectory)
-    if scenario in NEEDS_TIMESERIES_CSV:
+    if scenario in NEEDS_TIMESERIES_CSV and _queries_need_timeseries(selected):
         shared_ts = export_dir / "timeseries.csv"
         if not shared_ts.exists():
             print(f"  [EXPORT] Generating shared timeseries.csv...")
@@ -114,14 +129,16 @@ def ensure_scenario_exported(export_dir: Path, scenario: str) -> None:
 
     elif scenario == "M1":
         export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
-        export_memgraph_chunks_csv(parquet_dir, scenario_dir)
+        if _queries_need_timeseries(selected):
+            export_memgraph_chunks_csv(parquet_dir, scenario_dir)
 
     elif scenario == "M2":
         export_memgraph_csv(parquet_dir, scenario_dir, skip_timeseries=True)
 
     elif scenario == "O1":
         export_ntriples(parquet_dir, scenario_dir)
-        export_oxigraph_chunks_ntriples(parquet_dir, scenario_dir)
+        if _queries_need_timeseries(selected):
+            export_oxigraph_chunks_ntriples(parquet_dir, scenario_dir)
 
     elif scenario == "O2":
         export_ntriples(parquet_dir, scenario_dir)
@@ -215,6 +232,8 @@ def run_scenario(
     export_dir: Path,
     profile: str,
     ram_gb: int,
+    query_ids: Optional[list[str]] = None,
+    protocol_override: Optional[Protocol] = None,
     output_dir: Path = None,
 ) -> BenchmarkResult:
     """Run benchmark for a single scenario.
@@ -233,7 +252,7 @@ def run_scenario(
         output_dir = Path("benchmark_results")
 
     scenario = scenario.upper()
-    protocol = get_protocol(profile)
+    protocol = protocol_override or get_protocol(profile)
 
     result = BenchmarkResult(
         scenario=scenario,
@@ -248,9 +267,11 @@ def run_scenario(
     print(f"{'='*60}")
 
     try:
+        selected = query_ids or QUERIES
+
         # Export CSV/NT if needed (on-demand from parquet)
         print("\n[0] Checking/exporting data files...")
-        ensure_scenario_exported(export_dir, scenario)
+        ensure_scenario_exported(export_dir, scenario, query_ids=selected)
 
         # Start containers (mount data dir for server-side COPY)
         print("\n[1] Starting containers...")
@@ -261,11 +282,11 @@ def run_scenario(
 
         # Run scenario-specific benchmark
         if scenario in ("P1", "P2"):
-            result = _run_postgres(scenario, export_dir, protocol, result)
+            result = _run_postgres(scenario, export_dir, protocol, result, query_ids=query_ids)
         elif scenario in ("M1", "M2"):
-            result = _run_memgraph(scenario, export_dir, protocol, result)
+            result = _run_memgraph(scenario, export_dir, protocol, result, query_ids=query_ids)
         elif scenario in ("O1", "O2"):
-            result = _run_oxigraph(scenario, export_dir, protocol, result)
+            result = _run_oxigraph(scenario, export_dir, protocol, result, query_ids=query_ids)
         else:
             result.status = "failed"
             result.error = f"Unknown scenario: {scenario}"
@@ -298,6 +319,7 @@ def _run_postgres(
     export_dir: Path,
     protocol: Protocol,
     result: BenchmarkResult,
+    query_ids: Optional[list[str]] = None,
 ) -> BenchmarkResult:
     """Run PostgreSQL benchmark (P1 or P2)."""
     container = docker.get_container_name("timescaledb")
@@ -321,15 +343,28 @@ def _run_postgres(
         nodes = engine.load_nodes(files["nodes"])
         edges = engine.load_edges(files["edges"])
 
-        # Load timeseries via server-side COPY (CSV already generated in ensure_scenario_exported)
+        selected = query_ids or QUERIES
+
+        # Load timeseries (ingestion is not a benchmark target, but must be fast and fair)
         ts_csv = export_dir / "timeseries.csv"
+        parquet_dir = export_dir / "parquet"
+        ts_parquet = parquet_dir / "timeseries.parquet"
         ts_rows = 0
-        if ts_csv.exists():
+
+        if _queries_need_timeseries(selected) and ts_csv.exists():
+            # Prefer fastest in-container bulk path
             try:
-                ts_rows = engine.load_timeseries_server_copy("/data/timeseries.csv")
+                ts_rows = engine.load_timeseries_parallel_copy("/data/timeseries.csv")
             except Exception as e:
-                print(f"  [WARN] Server-side COPY failed ({e}), falling back to client-side...")
-                ts_rows = engine.load_timeseries(ts_csv)
+                print(f"  [WARN] parallel-copy failed ({e}); trying server-side COPY...")
+                try:
+                    ts_rows = engine.load_timeseries_server_copy("/data/timeseries.csv")
+                except Exception as e2:
+                    print(f"  [WARN] Server-side COPY failed ({e2}), falling back to client-side...")
+                    ts_rows = engine.load_timeseries(ts_csv)
+        elif _queries_need_timeseries(selected) and ts_parquet.exists() and hasattr(engine, "load_timeseries_from_parquet"):
+            print("  [LOAD] timeseries.csv missing; falling back to Parquet enrichment path...")
+            ts_rows = engine.load_timeseries_from_parquet(ts_parquet)
 
         load_stats = monitor.stop()
         result.load = LoadResult(
@@ -341,9 +376,32 @@ def _run_postgres(
         )
         print(f"  Load complete: {result.load.duration_s:.1f}s, peak RAM: {result.load.peak_ram_mb:.0f}MB")
 
-        # Run queries
-        print(f"\n[4] Running queries ({len(QUERIES)} queries)...")
-        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir)
+        # Run queries (this is what we benchmark)
+        print(f"\n[4] Running queries ({len(selected)} queries)...")
+
+        # Monitor query-phase resource usage (queries-only window)
+        monitors: Dict[str, ResourceMonitor] = {}
+        for svc in docker.SCENARIO_CONTAINERS.get(scenario, []):
+            cname = docker.get_container_name(svc)
+            m = ResourceMonitor(cname)
+            if m.start():
+                monitors[cname] = m
+
+        t_q0 = time.time()
+        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir, query_ids=selected)
+        query_elapsed = time.time() - t_q0
+
+        query_stats: Dict[str, Dict] = {"duration_s": round(query_elapsed, 3), "containers": {}}
+        for cname, m in monitors.items():
+            stats = m.stop()
+            query_stats["containers"][cname] = {
+                "mem_mb_avg": round(stats.mem_mb_avg, 1),
+                "mem_mb_min": round(stats.mem_mb_min, 1),
+                "mem_mb_max": round(stats.mem_mb_max, 1),
+                "cpu_pct_avg": round(stats.cpu_pct_avg, 1),
+                "samples": stats.samples,
+            }
+        result.system_info["query_phase"] = query_stats
 
     finally:
         engine.close()
@@ -356,6 +414,7 @@ def _run_memgraph(
     export_dir: Path,
     protocol: Protocol,
     result: BenchmarkResult,
+    query_ids: Optional[list[str]] = None,
 ) -> BenchmarkResult:
     """Run Memgraph benchmark (M1 or M2)."""
     container = docker.get_container_name("memgraph")
@@ -378,21 +437,32 @@ def _run_memgraph(
         nodes = engine.load_nodes(files["nodes"])
         edges = engine.load_edges(files["edges"])
 
+        selected = query_ids or QUERIES
+
         # M1: load chunks, M2: load timeseries to TimescaleDB
         ts_rows = 0
-        if scenario == "M1" and files.get("chunks"):
+        if scenario == "M1" and _queries_need_timeseries(selected) and files.get("chunks"):
             ts_rows = engine.load_chunks(files["chunks"])
-        elif scenario == "M2":
+        elif scenario == "M2" and _queries_need_timeseries(selected):
             ts_csv = export_dir / "timeseries.csv"
             if ts_csv.exists():
                 ts_engine = TimescaleEngine()
                 ts_engine.connect()
                 ts_engine.create_timeseries_schema()
                 try:
-                    ts_rows = ts_engine.load_timeseries_server_copy("/data/timeseries.csv")
+                    ts_rows = ts_engine.load_timeseries_parallel_copy(
+                        "/data/timeseries.csv",
+                        container_name=docker.get_container_name("timescaledb"),
+                        workers=int(os.getenv("BTB_TS_PARALLEL_COPY_WORKERS", "8")),
+                        batch_size=int(os.getenv("BTB_TS_PARALLEL_COPY_BATCH_SIZE", "50000")),
+                    )
                 except Exception as e:
-                    print(f"  [WARN] Server-side COPY failed ({e}), falling back to client-side...")
-                    ts_rows = ts_engine.load_timeseries(ts_csv)
+                    print(f"  [WARN] parallel-copy failed ({e}); trying server-side COPY...")
+                    try:
+                        ts_rows = ts_engine.load_timeseries_server_copy("/data/timeseries.csv")
+                    except Exception as e2:
+                        print(f"  [WARN] Server-side COPY failed ({e2}), falling back to client-side...")
+                        ts_rows = ts_engine.load_timeseries(ts_csv)
                 ts_engine.close()
 
         load_stats = monitor.stop()
@@ -404,9 +474,30 @@ def _run_memgraph(
             peak_ram_mb=get_peak_memory_mb(container),
         )
 
-        # Run queries
-        print(f"\n[4] Running queries ({len(QUERIES)} queries)...")
-        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir)
+        print(f"\n[4] Running queries ({len(selected)} queries)...")
+
+        monitors: Dict[str, ResourceMonitor] = {}
+        for svc in docker.SCENARIO_CONTAINERS.get(scenario, []):
+            cname = docker.get_container_name(svc)
+            m = ResourceMonitor(cname)
+            if m.start():
+                monitors[cname] = m
+
+        t_q0 = time.time()
+        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir, query_ids=selected)
+        query_elapsed = time.time() - t_q0
+
+        query_stats: Dict[str, Dict] = {"duration_s": round(query_elapsed, 3), "containers": {}}
+        for cname, m in monitors.items():
+            stats = m.stop()
+            query_stats["containers"][cname] = {
+                "mem_mb_avg": round(stats.mem_mb_avg, 1),
+                "mem_mb_min": round(stats.mem_mb_min, 1),
+                "mem_mb_max": round(stats.mem_mb_max, 1),
+                "cpu_pct_avg": round(stats.cpu_pct_avg, 1),
+                "samples": stats.samples,
+            }
+        result.system_info["query_phase"] = query_stats
 
     finally:
         engine.close()
@@ -419,6 +510,7 @@ def _run_oxigraph(
     export_dir: Path,
     protocol: Protocol,
     result: BenchmarkResult,
+    query_ids: Optional[list[str]] = None,
 ) -> BenchmarkResult:
     """Run Oxigraph benchmark (O1 or O2)."""
     container = docker.get_container_name("oxigraph")
@@ -441,22 +533,34 @@ def _run_oxigraph(
         triples = 0
         if files.get("graph"):
             triples = engine.load_ntriples(files["graph"])
-        if scenario == "O1" and files.get("chunks"):
+
+        selected = query_ids or QUERIES
+
+        if scenario == "O1" and _queries_need_timeseries(selected) and files.get("chunks"):
             triples += engine.load_ntriples(files["chunks"])
 
         # O2: load timeseries to TimescaleDB
         ts_rows = 0
-        if scenario == "O2":
+        if scenario == "O2" and _queries_need_timeseries(selected):
             ts_csv = export_dir / "timeseries.csv"
             if ts_csv.exists():
                 ts_engine = TimescaleEngine()
                 ts_engine.connect()
                 ts_engine.create_timeseries_schema()
                 try:
-                    ts_rows = ts_engine.load_timeseries_server_copy("/data/timeseries.csv")
+                    ts_rows = ts_engine.load_timeseries_parallel_copy(
+                        "/data/timeseries.csv",
+                        container_name=docker.get_container_name("timescaledb"),
+                        workers=int(os.getenv("BTB_TS_PARALLEL_COPY_WORKERS", "8")),
+                        batch_size=int(os.getenv("BTB_TS_PARALLEL_COPY_BATCH_SIZE", "50000")),
+                    )
                 except Exception as e:
-                    print(f"  [WARN] Server-side COPY failed ({e}), falling back to client-side...")
-                    ts_rows = ts_engine.load_timeseries(ts_csv)
+                    print(f"  [WARN] parallel-copy failed ({e}); trying server-side COPY...")
+                    try:
+                        ts_rows = ts_engine.load_timeseries_server_copy("/data/timeseries.csv")
+                    except Exception as e2:
+                        print(f"  [WARN] Server-side COPY failed ({e2}), falling back to client-side...")
+                        ts_rows = ts_engine.load_timeseries(ts_csv)
                 ts_engine.close()
 
         load_stats = monitor.stop()
@@ -468,9 +572,30 @@ def _run_oxigraph(
             peak_ram_mb=get_peak_memory_mb(container),
         )
 
-        # Run queries
-        print(f"\n[4] Running queries ({len(QUERIES)} queries)...")
-        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir)
+        print(f"\n[4] Running queries ({len(selected)} queries)...")
+
+        monitors: Dict[str, ResourceMonitor] = {}
+        for svc in docker.SCENARIO_CONTAINERS.get(scenario, []):
+            cname = docker.get_container_name(svc)
+            m = ResourceMonitor(cname)
+            if m.start():
+                monitors[cname] = m
+
+        t_q0 = time.time()
+        result = _run_queries(engine.get_executor(), scenario, protocol, result, export_dir, query_ids=selected)
+        query_elapsed = time.time() - t_q0
+
+        query_stats: Dict[str, Dict] = {"duration_s": round(query_elapsed, 3), "containers": {}}
+        for cname, m in monitors.items():
+            stats = m.stop()
+            query_stats["containers"][cname] = {
+                "mem_mb_avg": round(stats.mem_mb_avg, 1),
+                "mem_mb_min": round(stats.mem_mb_min, 1),
+                "mem_mb_max": round(stats.mem_mb_max, 1),
+                "cpu_pct_avg": round(stats.cpu_pct_avg, 1),
+                "samples": stats.samples,
+            }
+        result.system_info["query_phase"] = query_stats
 
     finally:
         engine.close()
@@ -484,6 +609,7 @@ def _run_queries(
     protocol: Protocol,
     result: BenchmarkResult,
     export_dir: Path,
+    query_ids: Optional[list[str]] = None,
 ) -> BenchmarkResult:
     """Run all queries with warmup and measurement using parameter variants.
 
@@ -499,15 +625,21 @@ def _run_queries(
     """
     # Extract dataset info for parameterization
     nodes_csv = get_nodes_csv_path(export_dir, scenario)
-    dataset_info = extract_dataset_info(nodes_csv, scenario)
+    if nodes_csv.exists():
+        dataset_info = extract_dataset_info(nodes_csv, scenario)
+    else:
+        nodes_parquet = export_dir / "parquet" / "nodes.parquet"
+        dataset_info = extract_dataset_info_from_parquet(nodes_parquet)
 
-    # Add timeseries range
+    # Add timeseries range (prefer CSV if present; else use parquet stats)
     ts_csv = export_dir / "timeseries.csv"
     if ts_csv.exists():
-        ts_range = extract_timeseries_range(ts_csv)
-        dataset_info.update(ts_range)
+        dataset_info.update(extract_timeseries_range(ts_csv))
+    else:
+        ts_parquet = export_dir / "parquet" / "timeseries.parquet"
+        dataset_info.update(extract_timeseries_range_from_parquet(ts_parquet))
 
-    for query_id in QUERIES:
+    for query_id in (query_ids or QUERIES):
         query_text = load_query(scenario, query_id)
         if not query_text:
             print(f"  [{query_id}] SKIP - query file not found")

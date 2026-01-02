@@ -245,7 +245,7 @@ Pour chaque combinaison (profil, scenario, RAM) :
 | Q10 | Analyse securite | Traversee | Points d'acces par zone |
 | Q11 | Impact IT | Traversee | Equipements dependant d'un rack |
 | Q12 | Analytics complet | Multi-domaine | Vue consolidee |
-| Q13 | Confort vendredis | Stress-test | DOW filter + dechunking |
+| Q13 | Confort heures bureau | Stress-test | Hour filter + dechunking |
 
 ---
 

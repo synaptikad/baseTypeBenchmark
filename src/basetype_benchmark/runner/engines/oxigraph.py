@@ -24,8 +24,15 @@ class OxigraphEngine:
         max_retries = 30
         for attempt in range(max_retries):
             try:
-                resp = requests.get(f"{self.base_url}/query", timeout=5)
-                if resp.status_code in (200, 400):  # 400 = no query provided, but server is up
+                # NOTE: Recent oxigraph/oxigraph images reset the connection if /query
+                # is called without a query parameter. Use a minimal ASK query instead.
+                resp = requests.get(
+                    f"{self.base_url}/query",
+                    params={"query": "ASK { ?s ?p ?o }"},
+                    headers={"Accept": "application/sparql-results+json"},
+                    timeout=5,
+                )
+                if resp.status_code == 200:
                     return
             except requests.RequestException:
                 pass
@@ -42,7 +49,8 @@ class OxigraphEngine:
         requests.post(
             f"{self.base_url}/update",
             data="DROP ALL",
-            headers={"Content-Type": "application/sparql-update"}
+            headers={"Content-Type": "application/sparql-update"},
+            timeout=30,
         )
 
     def load_ntriples(self, nt_file: Path) -> int:
@@ -54,7 +62,8 @@ class OxigraphEngine:
             resp = requests.post(
                 f"{self.base_url}/store?default",  # Use default graph
                 data=f,
-                headers={"Content-Type": "application/n-triples"}
+                headers={"Content-Type": "application/n-triples"},
+                timeout=600,
             )
 
         if resp.status_code not in (200, 201, 204):
@@ -69,7 +78,8 @@ class OxigraphEngine:
         resp = requests.get(
             f"{self.base_url}/query",
             params={"query": count_query},
-            headers={"Accept": "application/sparql-results+json"}
+            headers={"Accept": "application/sparql-results+json"},
+            timeout=30,
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -84,7 +94,8 @@ class OxigraphEngine:
         resp = requests.get(
             f"{self.base_url}/query",
             params={"query": query},
-            headers={"Accept": "application/sparql-results+json"}
+            headers={"Accept": "application/sparql-results+json"},
+            timeout=120,
         )
         latency_ms = (time.perf_counter() - t0) * 1000
 

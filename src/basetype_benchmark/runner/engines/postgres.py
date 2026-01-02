@@ -59,7 +59,7 @@ def _resolve_pg_config_defaults(
 def get_connection(
     host: str = "localhost",
     port: int = 5432,
-    user: str = "postgres",
+    user: str = "benchmark",
     password: str = "benchmark",
     database: str = "benchmark",
     max_retries: int = 30,
@@ -178,7 +178,7 @@ class PostgresEngine:
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
                     building_id TEXT NOT NULL,
-                    value DOUBLE PRECISION
+                    value REAL
                 )
             """)
 
@@ -249,7 +249,7 @@ class PostgresEngine:
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
                     building_id TEXT NOT NULL,
-                    value DOUBLE PRECISION
+                    value REAL
                 )
             """)
         self.conn.commit()
@@ -340,7 +340,7 @@ class PostgresEngine:
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
                     building_id TEXT NOT NULL,
-                    value DOUBLE PRECISION
+                    value REAL
                 )
             """)
         self.conn.commit()
@@ -395,6 +395,124 @@ class PostgresEngine:
         print(f"  [LOAD] Timeseries: {total:,} rows in {elapsed:.1f}s ({rate:,.0f}/s) [server bulk]")
         return total
 
+    def load_timeseries_parallel_copy(
+        self,
+        container_path: str,
+        container_name: Optional[str] = None,
+        workers: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        csv_columns: Optional[str] = None,
+    ) -> int:
+        """Load timeseries using `timescaledb-parallel-copy` inside the container.
+
+        This avoids Python streaming and uses the fastest available bulk path.
+
+        Args:
+            container_path: Path to CSV file inside container (e.g., /data/timeseries.csv)
+            container_name: Docker container name (default: env BTB_TIMESCALE_CONTAINER or btb_timescaledb)
+            workers: Parallel workers (default: env BTB_TS_PARALLEL_COPY_WORKERS or 8)
+            batch_size: Rows per batch (default: env BTB_TS_PARALLEL_COPY_BATCH_SIZE or 50000)
+
+        Returns:
+            Total rows loaded
+        """
+        from basetype_benchmark.runner import docker as docker_mod
+
+        t0 = time.time()
+
+        if container_name is None:
+            container_name = os.getenv("BTB_TIMESCALE_CONTAINER") or docker_mod.get_container_name("timescaledb")
+
+        if workers is None:
+            workers = int(os.getenv("BTB_TS_PARALLEL_COPY_WORKERS", "8"))
+        if batch_size is None:
+            batch_size = int(os.getenv("BTB_TS_PARALLEL_COPY_BATCH_SIZE", "50000"))
+        if csv_columns is None:
+            csv_columns = os.getenv("BTB_TS_PARALLEL_COPY_COLUMNS") or "point_id,time,building_id,value"
+
+        # Create UNLOGGED table first (no WAL = fastest possible writes)
+        with self.conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS timeseries CASCADE")
+            cur.execute(
+                """
+                CREATE UNLOGGED TABLE timeseries (
+                    time TIMESTAMPTZ NOT NULL,
+                    point_id TEXT NOT NULL,
+                    building_id TEXT NOT NULL,
+                    value REAL
+                )
+                """
+            )
+        self.conn.commit()
+
+        # Build a connection string for in-container access.
+        cfg = _resolve_pg_config_defaults("localhost", 5432, "benchmark", "benchmark", "benchmark")
+        user = str(cfg["user"])
+        password = str(cfg["password"])
+        database = str(cfg["database"])
+        conn_str = f"postgresql://{user}:{password}@localhost:5432/{database}"
+
+        print(f"  [LOAD] Timeseries: timescaledb-parallel-copy (workers={workers}, batch={batch_size})...")
+
+        # Use explicit CSV column list (matches the order in the CSV file).
+        argv = [
+            "timescaledb-parallel-copy",
+            "--connection",
+            conn_str,
+            "--table",
+            "timeseries",
+            "--file",
+            container_path,
+            "--columns",
+            csv_columns,
+            "--skip-header",
+            "--workers",
+            str(workers),
+            "--batch-size",
+            str(batch_size),
+            "--copy-options",
+            "CSV",
+        ]
+
+        cp = docker_mod.run_in_container(container_name, argv, check=False)
+        if cp.returncode != 0:
+            msg = (cp.stderr or cp.stdout or "").strip()
+            raise RuntimeError(f"timescaledb-parallel-copy failed (exit={cp.returncode}): {msg}")
+
+        # Get row count
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
+        self.conn.commit()
+
+        print("  [LOAD] Converting to logged table...")
+        with self.conn.cursor() as cur:
+            cur.execute("ALTER TABLE timeseries SET LOGGED")
+        self.conn.commit()
+
+        print("  [LOAD] Converting to hypertable...")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT create_hypertable(
+                    'timeseries',
+                    'time',
+                    chunk_time_interval => INTERVAL '1 day',
+                    migrate_data => TRUE,
+                    if_not_exists => TRUE
+                )
+                """
+            )
+        self.conn.commit()
+
+        print("  [LOAD] Creating indexes...")
+        self._create_ts_index()
+
+        elapsed = time.time() - t0
+        rate = total / elapsed if elapsed > 0 else 0
+        print(f"  [LOAD] Timeseries: {total:,} rows in {elapsed:.1f}s ({rate:,.0f}/s) [parallel-copy]")
+        return total
+
     # Legacy methods kept for compatibility
     def _reset_stage_table(self) -> None:
         """Recreate unlogged staging table (DEPRECATED - use direct COPY instead)."""
@@ -405,7 +523,7 @@ class PostgresEngine:
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
                     building_id TEXT,
-                    value DOUBLE PRECISION
+                    value REAL
                 )
             """)
         self.conn.commit()
@@ -543,59 +661,129 @@ class PostgresEngine:
         """
         return self.load_timeseries_server_direct(container_path)
 
-    def load_timeseries_from_parquet(self, parquet_file: Path, batch_size: int = 500_000) -> int:
-        """Load timeseries directly from Parquet using streaming COPY.
-
-        This is much faster than CSV for large datasets:
-        - No intermediate CSV file (saves disk space)
-        - Streams data in batches (low RAM usage)
-        - Direct binary pipe to PostgreSQL COPY
+    def load_timeseries_from_parquet(self, parquet_file: Path, batch_size: int = 5_000_000) -> int:
+        """Load timeseries from pre-enriched CSV (with building_id).
+        
+        Expects timeseries_enriched.csv in same directory as parquet file.
+        This CSV is generated once during dataset export using DuckDB.
         """
-
-        import io
-        import pyarrow.parquet as pq
-
+        try:
+            import duckdb  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                "DuckDB is required for Parquet->CSV enrichment. "
+                "Either install duckdb or load from timeseries.csv instead. "
+                f"Original error: {e}"
+            )
+        
         t0 = time.time()
+        
+        # Check for pre-enriched CSV (generated during export)
+        enriched_csv = parquet_file.parent / "timeseries_enriched.csv"
+        
+        if not enriched_csv.exists():
+            print(f"  [LOAD] Generating enriched CSV with DuckDB (one-time)...")
+            self._generate_enriched_csv(parquet_file, enriched_csv)
+        
+        # Get row count
+        con = duckdb.connect()
+        total_rows = con.execute(f"SELECT COUNT(*) FROM read_csv('{enriched_csv}', header=true, sample_size=-1)").fetchone()[0]
+        con.close()
+        
+        print(f"  [LOAD] Timeseries: {total_rows:,} rows via COPY FROM CSV...")
 
-        # Get total rows from metadata (fast, no data read)
-        pf = pq.ParquetFile(parquet_file)
-        total_rows = pf.metadata.num_rows
-
-        print(f"  [LOAD] Timeseries: streaming {total_rows:,} rows from parquet...")
-
-        rows_loaded = 0
+        # Drop and recreate table
         with self.conn.cursor() as cur:
-            cur.execute("SET LOCAL synchronous_commit TO OFF")
-            for batch in pf.iter_batches(batch_size=batch_size):
-                point_ids = batch.column("point_id").to_pylist()
-                timestamps = batch.column("timestamp").to_pylist() if "timestamp" in batch.schema.names else batch.column("time").to_pylist()
-                values = batch.column("value").to_pylist()
-
-                buf = io.StringIO()
-                for pid, ts, val in zip(point_ids, timestamps, values):
-                    buf.write(f"{pid},{ts},{val}\n")
-
-                buf.seek(0)
-                cur.copy_expert(
-                    "COPY timeseries (point_id, time, value) FROM STDIN WITH CSV",
-                    buf
+            cur.execute("DROP TABLE IF EXISTS timeseries CASCADE")
+            cur.execute("""
+                CREATE UNLOGGED TABLE timeseries (
+                    time TIMESTAMPTZ NOT NULL,
+                    point_id TEXT NOT NULL,
+                    building_id TEXT NOT NULL,
+                    value REAL
                 )
-
-                rows_loaded += len(point_ids)
-
-                elapsed = time.time() - t0
-                rate = rows_loaded / elapsed if elapsed > 0 else 0
-                pct = rows_loaded / total_rows * 100
-                eta = (total_rows - rows_loaded) / rate if rate > 0 else 0
-                print(f"\r  [LOAD] Timeseries: {pct:5.1f}% ({rows_loaded:,}/{total_rows:,}) {rate:,.0f}/s ETA:{eta:.0f}s   ", end="", flush=True)
-
+            """)
         self.conn.commit()
 
-        self._create_ts_index()
+        # Prefer in-container parallel-copy if the file is mounted at /data/parquet/
+        try:
+            ts_rows = self.load_timeseries_parallel_copy(
+                "/data/parquet/timeseries_enriched.csv",
+                csv_columns="time,point_id,building_id,value",
+            )
+        except Exception as e:
+            print(f"  [WARN] parallel-copy failed ({e}); falling back to client-side COPY...")
+            print(f"  [LOAD] COPY FROM file...")
+            t_load = time.time()
+            with self.conn.cursor() as cur:
+                with open(enriched_csv, "rb") as f:
+                    cur.copy_expert(
+                        "COPY timeseries (time, point_id, building_id, value) FROM STDIN WITH CSV HEADER",
+                        f,
+                    )
+            self.conn.commit()
+            load_time = time.time() - t_load
+            print(f"  [LOAD] COPY done: {total_rows:,} rows in {load_time:.1f}s ({total_rows/load_time:,.0f}/s)")
 
-        elapsed = time.time() - t0
-        print(f"\r  [LOAD] Timeseries: {rows_loaded:,} rows in {elapsed:.1f}s ({rows_loaded/elapsed:,.0f}/s)                    ")
-        return rows_loaded
+        # Convert to LOGGED table
+        print(f"  [LOAD] Converting to logged table...")
+        t_log = time.time()
+        with self.conn.cursor() as cur:
+            cur.execute("ALTER TABLE timeseries SET LOGGED")
+        self.conn.commit()
+        print(f"  [LOAD] Logged in {time.time() - t_log:.1f}s")
+
+        # Convert to hypertable
+        print(f"  [LOAD] Creating hypertable...")
+        t_hyper = time.time()
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT create_hypertable(
+                    'timeseries', 'time',
+                    chunk_time_interval => interval '1 day',
+                    migrate_data => TRUE,
+                    if_not_exists => TRUE
+                )
+            """)
+        self.conn.commit()
+        print(f"  [LOAD] Hypertable created in {time.time() - t_hyper:.1f}s")
+
+        # Create indexes
+        print(f"  [LOAD] Creating indexes...")
+        t_idx = time.time()
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries (point_id, time DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_timeseries_building ON timeseries (building_id, time DESC)")
+        self.conn.commit()
+        print(f"  [LOAD] Indexes created in {time.time() - t_idx:.1f}s")
+
+        total_time = time.time() - t0
+        print(f"  [LOAD] Total timeseries load: {total_time:.1f}s ({total_rows/total_time:,.0f}/s overall)")
+
+        return total_rows
+
+    def _generate_enriched_csv(self, parquet_file: Path, output_csv: Path) -> None:
+        """Generate timeseries CSV with building_id using DuckDB."""
+        import duckdb  # type: ignore
+        
+        parquet_dir = parquet_file.parent
+        con = duckdb.connect()
+        
+        con.execute(f"""
+            COPY (
+                SELECT 
+                    ts.timestamp as time,
+                    ts.point_id,
+                    COALESCE(json_extract_string(n.properties, '$.building_id'), '') as building_id,
+                    ts.value
+                FROM read_parquet('{parquet_file}') ts
+                LEFT JOIN read_parquet('{parquet_dir}/nodes.parquet') n ON ts.point_id = n.id
+            ) TO '{output_csv}' (HEADER, DELIMITER ',')
+        """)
+        con.close()
+
+        # Do not create indexes here: this function only generates the CSV.
+        # Index creation belongs to the actual load step.
 
     def execute_query(self, query: str) -> Tuple[int, float]:
         """Execute a query and return (row_count, latency_ms).

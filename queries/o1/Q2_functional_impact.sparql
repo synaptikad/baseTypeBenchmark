@@ -4,17 +4,28 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 # Q2: Functional Impact Analysis
 # What spaces are affected if equipment X fails?
 # Parameter: $EQUIPMENT_ID - equipment to analyze for impact
+# Canonical output: (type, affected_count, avg_distance) - 5 hop limit
 
-SELECT ?type (COUNT(DISTINCT ?affected) AS ?affected_count)
+SELECT ?type (COUNT(DISTINCT ?affected) AS ?affected_count) (AVG(?dist) AS ?avg_distance)
 WHERE {
-  # Start from specified equipment
-  BIND(<http://basetype.benchmark/$EQUIPMENT_ID> AS ?eq)
+  {
+    SELECT ?affected (MIN(?d) AS ?dist)
+    WHERE {
+      BIND(<http://basetype.benchmark/$EQUIPMENT_ID> AS ?eq)
 
-  # Find affected spaces/floors/zones via reverse traversal
-  # Note: btb:serves direction is Equipment->Space, so we use ^btb:serves
-  ?affected (btb:contains|^btb:serves|btb:feeds)+ ?eq .
+      # Traverse up to 5 hops via CONTAINS/FEEDS backwards or SERVES forwards
+      # SPARQL property paths don't support bounded repeats, so we enumerate
+      { ?affected btb:contains|btb:feeds ?eq . BIND(1 AS ?d) }
+      UNION { ?affected btb:contains|btb:feeds ?n1 . ?n1 btb:contains|btb:feeds ?eq . BIND(2 AS ?d) }
+      UNION { ?affected btb:contains|btb:feeds ?n1 . ?n1 btb:contains|btb:feeds ?n2 . ?n2 btb:contains|btb:feeds ?eq . BIND(3 AS ?d) }
+      UNION { ?affected btb:contains|btb:feeds ?n1 . ?n1 btb:contains|btb:feeds ?n2 . ?n2 btb:contains|btb:feeds ?n3 . ?n3 btb:contains|btb:feeds ?eq . BIND(4 AS ?d) }
+      UNION { ?affected btb:contains|btb:feeds ?n1 . ?n1 btb:contains|btb:feeds ?n2 . ?n2 btb:contains|btb:feeds ?n3 . ?n3 btb:contains|btb:feeds ?n4 . ?n4 btb:contains|btb:feeds ?eq . BIND(5 AS ?d) }
+      UNION { ?eq btb:serves ?affected . BIND(1 AS ?d) }  # Equipment -> serves -> Space (forward)
+    }
+    GROUP BY ?affected
+  }
+
   ?affected rdf:type ?type .
-
   FILTER(?type IN (btb:Space, btb:Floor, btb:Zone))
 }
 GROUP BY ?type

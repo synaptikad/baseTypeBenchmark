@@ -88,6 +88,33 @@ def _export_scenario(profile: str, scenario: str, seed: int) -> Path:
     return mgr.export_scenario_only(profile, scenario, seed)
 
 
+def _queries_need_timeseries(query_ids: List[str]) -> bool:
+    """Return True if selected queries require timeseries/chunk data."""
+    from basetype_benchmark.runner.protocol import QUERY_TYPE
+
+    # If a query is unknown, assume it might need timeseries.
+    return any(QUERY_TYPE.get(q) != "graph_only" for q in query_ids)
+
+
+def _export_scenario_respecting_queries(export_dir: Path, profile: str, scenario: str, seed: int, query_ids: List[str]) -> Path:
+    """Export only what is necessary for the selected query subset.
+
+    This avoids generating huge chunk exports (M1/O1) when running only graph queries.
+    """
+    scenario = scenario.upper()
+    query_ids = [q.upper() for q in (query_ids or [])]
+
+    # For graph-only smokes on M1/O1, delegate to runner.ensure_scenario_exported which can skip chunks.
+    if scenario in ("M1", "O1") and query_ids and not _queries_need_timeseries(query_ids):
+        from basetype_benchmark.runner.scenario import ensure_scenario_exported
+
+        ensure_scenario_exported(export_dir, scenario, query_ids=query_ids)
+        return export_dir / scenario.lower()
+
+    # Default behavior for full exports
+    return _export_scenario(profile, scenario, seed)
+
+
 def _prune_scenario(profile: str, scenario: str, seed: int, keep_timeseries: bool = True) -> None:
     """Prune scenario files after run to free disk space."""
     from basetype_benchmark.dataset.dataset_manager import DatasetManager
@@ -105,40 +132,45 @@ def _select_queries(run_mod, scenarios: List[str], query_ids: List[str]) -> Dict
     return selected
 
 
-def _run_one(run_mod, scenario: str, export_dir: Path, profile: str, n_warmup: int, n_runs: int) -> Dict:
-    result = {"scenario": scenario, "profile": profile, "queries": {}}
+def _run_one(
+    run_mod,
+    scenario: str,
+    export_dir: Path,
+    profile: str,
+    n_warmup: int,
+    n_runs: int,
+    ram_gb: int,
+    query_ids: Optional[List[str]] = None,
+) -> Dict:
+    """Run a single benchmark scenario using the scenario module directly."""
+    from basetype_benchmark.runner.scenario import run_scenario
+    from basetype_benchmark.runner.protocol import Protocol
+    import dataclasses
 
-    if scenario.startswith("P"):
-        return run_mod._run_postgres_benchmark(
+    try:
+        result = run_scenario(
             scenario=scenario,
             export_dir=export_dir,
-            result=result,
-            n_warmup=n_warmup,
-            n_runs=n_runs,
             profile=profile,
+            ram_gb=ram_gb,
+            query_ids=query_ids,
+            protocol_override=Protocol(n_warmup=n_warmup, n_runs=n_runs, n_variants=1),
         )
-
-    if scenario.startswith("M"):
-        return run_mod._run_memgraph_benchmark(
-            scenario=scenario,
-            export_dir=export_dir,
-            result=result,
-            n_warmup=n_warmup,
-            n_runs=n_runs,
-            profile=profile,
-        )
-
-    if scenario.startswith("O"):
-        return run_mod._run_oxigraph_benchmark(
-            scenario=scenario,
-            export_dir=export_dir,
-            result=result,
-            n_warmup=n_warmup,
-            n_runs=n_runs,
-            profile=profile,
-        )
-
-    raise ValueError(f"Unknown scenario: {scenario}")
+        
+        # Convert dataclass result to dict
+        if hasattr(result, '__dataclass_fields__'):
+            return dataclasses.asdict(result)
+        return result if isinstance(result, dict) else {"status": "ok", "result": str(result)}
+        
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error", 
+            "error": repr(e),
+            "traceback": traceback.format_exc()
+        }
+    finally:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -189,9 +221,8 @@ def main() -> int:
         if s not in run_mod.SCENARIOS:
             raise SystemExit(f"Unknown scenario {s}. Valid: {list(run_mod.SCENARIOS.keys())}")
 
-    # Patch query lists to reduce runtime
+    # Build per-scenario query subsets for quick validation
     selected_map = _select_queries(run_mod, scenarios, [q.upper() for q in args.queries])
-    original_queries = dict(run_mod.QUERIES_BY_SCENARIO)
 
     # Scenarios that share TimescaleDB timeseries (must run before M1/O1)
     TIMESERIES_SCENARIOS = {"P1", "P2", "M2", "O2"}
@@ -203,8 +234,6 @@ def main() -> int:
     print(f"[i] Scenario order (optimized): {' → '.join(scenarios)}")
 
     try:
-        for s in scenarios:
-            run_mod.QUERIES_BY_SCENARIO[s] = selected_map[s]
 
         # Phase 1: Ensure Parquet pivot exists (no scenario exports yet)
         export_dir = _ensure_parquet_pivot(run_mod, args.profile, args.seed, args.dataset_source)
@@ -233,12 +262,17 @@ def main() -> int:
 
         for scenario in scenarios:
             all_results[scenario] = {}
-            containers = run_mod.SCENARIOS[scenario]["containers"]
 
             # === LAZY EXPORT: export this scenario only ===
             print(f"\n[LAZY] Exporting {scenario}...")
             try:
-                _export_scenario(args.profile, scenario, args.seed)
+                _export_scenario_respecting_queries(
+                    export_dir,
+                    args.profile,
+                    scenario,
+                    args.seed,
+                    selected_map.get(scenario, []),
+                )
             except Exception as e:
                 print(f"[ERROR] Export failed for {scenario}: {e}")
                 all_results[scenario] = {ram: {"status": "error", "error": f"export_failed: {e}"} for ram in args.ram_levels}
@@ -246,13 +280,6 @@ def main() -> int:
 
             for ram_gb in args.ram_levels:
                 print(f"\n=== SMOKE {scenario} @ {ram_gb}GB ===")
-
-                # Start only required containers for this scenario with RAM limit
-                ok = run_mod.start_containers_with_ram(containers, ram_gb)
-                if not ok:
-                    all_results[scenario][ram_gb] = {"status": "error", "error": "failed_to_start_containers"}
-                    continue
-
                 t0 = time.time()
                 try:
                     res = _run_one(
@@ -262,6 +289,8 @@ def main() -> int:
                         profile=args.profile,
                         n_warmup=args.n_warmup,
                         n_runs=args.n_runs,
+                        ram_gb=ram_gb,
+                        query_ids=selected_map.get(scenario),
                     )
                     elapsed = time.time() - t0
                     res = res or {"status": "error", "error": "runner_returned_none"}
@@ -278,6 +307,7 @@ def main() -> int:
                     }
 
                 finally:
+                    # run_scenario already stops containers, but this keeps backward safety
                     run_mod.stop_all_containers()
 
                 (out_dir / f"{scenario}_ram{ram_gb}.json").write_text(
@@ -310,8 +340,7 @@ def main() -> int:
         return 0
 
     finally:
-        run_mod.QUERIES_BY_SCENARIO.clear()
-        run_mod.QUERIES_BY_SCENARIO.update(original_queries)
+        pass
 
 
 if __name__ == "__main__":

@@ -16,8 +16,8 @@ WITH tenant_energy AS (
     JOIN nodes eq ON (eq.id = e2.dst_id OR eq.id = e2.src_id) AND eq.type = 'Equipment' AND eq.id != sp.id
     JOIN edges e3 ON e3.src_id = eq.id AND e3.rel_type = 'HAS_POINT'
     JOIN nodes p ON p.id = e3.dst_id AND p.type = 'Point'
-    JOIN edges e4 ON e4.src_id = p.id AND e4.rel_type = 'MEASURES' AND e4.dst_id = 'Power'
     WHERE t.id = '$TENANT_ID'
+      AND p.properties->>'quantity' = 'power'
 ),
 energy_consumption AS (
     SELECT

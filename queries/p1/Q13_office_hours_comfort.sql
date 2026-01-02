@@ -1,5 +1,5 @@
--- Q13 (P1): Friday Office Comfort - Stress-test for dechunking
--- Benchmark: DOW filtering + occupancy correlation (optimal on TimescaleDB)
+-- Q13 (P1): Office Hours Comfort - Stress-test for dechunking
+-- Benchmark: Hour filtering + occupancy correlation (optimal on TimescaleDB)
 -- Parameters: $SPACE_TYPE - space type pattern (e.g. 'office_%'), $DATE_START/$DATE_END
 
 WITH office_setpoints AS (
@@ -32,7 +32,7 @@ office_occupancy AS (
       AND sp.space_type LIKE '$SPACE_TYPE'
 ),
 friday_setpoints AS (
-    -- Get setpoint values on Fridays only in date range
+    -- Get setpoint values on office hours (9h-17h) only in date range
     SELECT
         os.space_id,
         ts.time,
@@ -41,7 +41,7 @@ friday_setpoints AS (
     JOIN office_setpoints os ON ts.point_id = os.point_id
     WHERE ts.time >= '$DATE_START'::timestamptz
       AND ts.time < '$DATE_END'::timestamptz
-      AND EXTRACT(DOW FROM ts.time) = 5  -- Friday (0=Sunday, 5=Friday)
+      AND EXTRACT(HOUR FROM ts.time) BETWEEN 9 AND 17  -- Office hours (9h-17h)
 ),
 friday_with_occupancy AS (
     -- Join with occupancy data at same timestamp

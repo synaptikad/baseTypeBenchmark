@@ -30,6 +30,6 @@ WHERE {
   ?eq btb:hasPoint ?point .
   ?point rdf:type btb:Point ;
          btb:id ?point_id ;
-         btb:measures btb:Power .
+         btb:quantity "power" .
 }
 GROUP BY ?tenant_id ?tenant_name ?building_id

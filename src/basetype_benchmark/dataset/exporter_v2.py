@@ -277,30 +277,33 @@ def export_parquet_streaming(
 
     effective_mode = mode
 
-    # Use direct Parquet export for vectorized mode (10-50x faster)
+    # Use frequency-aware Parquet export (respects per-point frequencies)
     if effective_mode == "vectorized":
-        from .simulation.vectorized import export_timeseries_parquet_direct
+        from .simulation.vectorized import export_timeseries_parquet_by_frequency
         from datetime import datetime
 
         rng = random.Random(dataset.seed)
         ts_path = output_dir / "timeseries.parquet"
-
-        stats = export_timeseries_parquet_direct(
+        
+        print(f"  Using frequency-aware export (respects per-point frequencies)")
+        
+        stats = export_timeseries_parquet_by_frequency(
             points=dataset.points,
             duration_days=duration_days,
             output_path=str(ts_path),
             start_time=datetime(2024, 1, 1, 0, 0, 0),
             seed=rng.randint(0, 2**31),
-            dt=60.0,
             show_progress=True,
             classify_func=None,
-            batch_size=10_000_000,  # 10M rows per batch for efficiency
+            max_ram_gb=10.0,
         )
 
-        print(f"\nExported to Parquet (direct vectorized): {output_dir}")
+        print(f"\nExported to Parquet (frequency-aware vectorized): {output_dir}")
         print(f"  Nodes: {len(nodes_data)}")
         print(f"  Edges: {len(edges_data)}")
         print(f"  Timeseries: {stats['n_samples']:,}")
+        print(f"  Energy points: {stats.get('n_energy_points', 0):,} (no deadband)")
+        print(f"  Regular points: {stats.get('n_regular_points', 0):,} (with deadband)")
         return
 
     # Fallback: streaming mode for sequential/parallel
@@ -310,7 +313,7 @@ def export_parquet_streaming(
     schema = pa.schema([
         ("point_id", pa.string()),
         ("timestamp", pa.timestamp("us")),
-        ("value", pa.float64())
+        ("value", pa.float32())
     ])
 
     writer = pq.ParquetWriter(ts_path, schema)
@@ -655,6 +658,7 @@ def export_memgraph_csv(
             "building_id": building_id,
             "floor_id": props.get("floor_id", ""),
             "space_id": props.get("space_id", ""),
+            "quantity": props.get("quantity", ""),  # For Q4/Q8/Q9 filtering
         }
         nodes_mg.append(node_row)
 

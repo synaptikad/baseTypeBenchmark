@@ -926,6 +926,8 @@ def _generate_timeseries_simulation(
             equipment_id=p.equipment_id,
             unit=p.unit,
             setpoint=(p.range_min + p.range_max) / 2,
+            frequency=p.frequency if p.frequency > 0 else 300,  # Use point's frequency
+            point_type=p.point_type,
         )
         for p in points
     ]

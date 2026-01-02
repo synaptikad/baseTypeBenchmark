@@ -65,6 +65,7 @@ class MemgraphEngine:
                     "name": row.get("name", ""),
                     "equipment_type": row.get("equipment_type", ""),
                     "building_id": row.get("building_id", ""),
+                    "quantity": row.get("quantity", ""),  # For Q4/Q8/Q9 filtering
                 })
 
                 if len(batch) >= batch_size:
@@ -73,7 +74,7 @@ class MemgraphEngine:
                             "UNWIND $batch AS row "
                             "CREATE (n:Node {id: row.id, type: row.type, "
                             "name: row.name, equipment_type: row.equipment_type, "
-                            "building_id: row.building_id})",
+                            "building_id: row.building_id, quantity: row.quantity})",
                             batch=batch
                         )
                     total += len(batch)
@@ -87,7 +88,7 @@ class MemgraphEngine:
                         "UNWIND $batch AS row "
                         "CREATE (n:Node {id: row.id, type: row.type, "
                         "name: row.name, equipment_type: row.equipment_type, "
-                        "building_id: row.building_id})",
+                        "building_id: row.building_id, quantity: row.quantity})",
                         batch=batch
                     )
                 total += len(batch)
@@ -138,7 +139,16 @@ class MemgraphEngine:
 
         Creates ArchiveDay nodes linked to Point nodes via HAS_TIMESERIES.
         """
-        import json
+        try:
+            import orjson as json  # type: ignore
+            _loads = json.loads
+        except Exception:
+            import json
+            _loads = json.loads
+
+        import os
+
+        batch_size = int(os.getenv("BTB_MEMGRAPH_CHUNKS_BATCH_SIZE", str(batch_size)))
 
         total = 0
         t0 = time.time()
@@ -152,8 +162,8 @@ class MemgraphEngine:
                 timestamps_str = row.get("timestamps", "[]")
                 values_str = row.get("values", "[]")
                 try:
-                    timestamps = json.loads(timestamps_str) if timestamps_str else []
-                    values = json.loads(values_str) if values_str else []
+                    timestamps = _loads(timestamps_str) if timestamps_str else []
+                    values = _loads(values_str) if values_str else []
                 except json.JSONDecodeError:
                     timestamps = []
                     values = []

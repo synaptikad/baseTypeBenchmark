@@ -45,7 +45,7 @@ class TimescaleEngine:
                     time TIMESTAMPTZ NOT NULL,
                     point_id TEXT NOT NULL,
                     building_id TEXT,
-                    value DOUBLE PRECISION
+                    value REAL
                 )
             """)
 
@@ -126,6 +126,78 @@ class TimescaleEngine:
         elapsed = time.time() - t0
         rate = total / elapsed if elapsed > 0 else 0
         print(f"  [LOAD] Timeseries (TS): {total:,} rows in {elapsed:.1f}s ({rate:,.0f}/s) [server-side COPY]")
+        return total
+
+    def load_timeseries_parallel_copy(
+        self,
+        container_path: str,
+        container_name: str = "btb_timescaledb",
+        workers: int = 8,
+        batch_size: int = 50000,
+        csv_columns: str = "point_id,time,building_id,value",
+    ) -> int:
+        """Load timeseries using `timescaledb-parallel-copy` inside the container.
+
+        This avoids client-side COPY streaming and typically provides the fastest ingest.
+        The CSV is expected to have a header; we rely on auto-column mapping.
+
+        Args:
+            container_path: CSV path inside container (e.g., /data/timeseries.csv)
+            container_name: Docker container name
+            workers: Parallel workers
+            batch_size: Rows per batch
+
+        Returns:
+            Total rows loaded
+        """
+        from basetype_benchmark.runner import docker as docker_mod
+
+        # Reuse the same env/.env resolution logic as PostgresEngine
+        from .postgres import _resolve_pg_config_defaults  # type: ignore
+
+        t0 = time.time()
+
+        # Connection string inside container (localhost)
+        resolved = _resolve_pg_config_defaults("localhost", 5432, "benchmark", "benchmark", "benchmark")
+        user = str(resolved["user"])
+        password = str(resolved["password"])
+        database = str(resolved["database"])
+        conn_str = f"postgresql://{user}:{password}@localhost:5432/{database}"
+
+        argv = [
+            "timescaledb-parallel-copy",
+            "--connection",
+            conn_str,
+            "--table",
+            "timeseries",
+            "--file",
+            container_path,
+            "--columns",
+            csv_columns,
+            "--skip-header",
+            "--workers",
+            str(workers),
+            "--batch-size",
+            str(batch_size),
+            "--copy-options",
+            "CSV",
+        ]
+
+        cp = docker_mod.run_in_container(container_name, argv, check=False)
+        if cp.returncode != 0:
+            msg = (cp.stderr or cp.stdout or "").strip()
+            raise RuntimeError(f"timescaledb-parallel-copy failed (exit={cp.returncode}): {msg}")
+
+        self._create_ts_index()
+
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM timeseries")
+            total = cur.fetchone()[0]
+        self.conn.commit()
+
+        elapsed = time.time() - t0
+        rate = total / elapsed if elapsed > 0 else 0
+        print(f"  [LOAD] Timeseries (TS): {total:,} rows in {elapsed:.1f}s ({rate:,.0f}/s) [parallel-copy]")
         return total
 
     def execute_timeseries_query(self, query: str, point_ids: List[str] = None) -> Tuple[int, float]:

@@ -50,6 +50,83 @@ def print_info(msg: str):
     print(f"{BLUE}[i]{RESET} {msg}")
 
 
+# Scenario definitions (used by smoke_benchmark.py)
+# containers: list of Docker containers to start for each scenario
+SCENARIOS = {
+    "P1": {"name": "PostgreSQL Relational", "containers": ["timescaledb"]},
+    "P2": {"name": "PostgreSQL JSONB", "containers": ["timescaledb"]},
+    "M1": {"name": "Memgraph Standalone", "containers": ["memgraph"]},
+    "M2": {"name": "Memgraph + TimescaleDB", "containers": ["memgraph", "timescaledb"]},
+    "O1": {"name": "Oxigraph Standalone", "containers": ["oxigraph"]},
+    "O2": {"name": "Oxigraph + TimescaleDB", "containers": ["oxigraph", "timescaledb"]},
+}
+
+# Queries by scenario (used by smoke_benchmark.py)
+QUERIES_BY_SCENARIO = {
+    "P1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "P2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "M1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "M2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "O1": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+    "O2": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12", "Q13"],
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker container helpers (delegated to runner.docker module)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def start_containers_with_ram(containers: list, ram_gb: int, wait_s: int = 15, data_dir=None) -> bool:
+    """Start specified Docker containers with RAM limit.
+    
+    Args:
+        containers: list of service names (e.g., ['timescaledb', 'memgraph'])
+        ram_gb: RAM limit in GB
+        wait_s: seconds to wait for containers to initialize
+    
+    Returns:
+        True if containers started successfully
+    """
+    from basetype_benchmark.runner import docker
+    
+    # Stop all first
+    docker.stop_all()
+    
+    import os
+    import subprocess
+    import time
+    
+    env = os.environ.copy()
+    env["MEMORY_LIMIT"] = f"{ram_gb}g"
+    if data_dir is not None:
+        env["BTB_DATA_DIR"] = str(Path(data_dir).resolve())
+    
+    # Start containers
+    container_names = " ".join(containers)
+    result = subprocess.run(
+        f"{docker.DOCKER_COMPOSE} up -d {container_names}",
+        shell=True,
+        cwd=str(docker.DOCKER_DIR),
+        env=env,
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        print(f"{RED}[ERROR]{RESET} Failed to start containers: {result.stderr}")
+        return False
+    
+    print(f"{BLUE}[i]{RESET} Waiting {wait_s}s for containers to initialize...")
+    time.sleep(wait_s)
+    return True
+
+
+def stop_all_containers() -> None:
+    """Stop all benchmark containers."""
+    from basetype_benchmark.runner import docker
+    docker.stop_all()
+
+
 def prompt(question: str, default: str = "") -> str:
     if default:
         answer = input(f"{question} [{default}]: ").strip()
