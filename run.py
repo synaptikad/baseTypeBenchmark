@@ -408,13 +408,19 @@ def get_available_datasets() -> List[Dict[str, Any]]:
             
             size_mb = sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) / (1024 * 1024)
             
+            # Extract counts (handle both old and new fingerprint formats)
+            counts = fingerprint.get("counts", {})
+            nodes = counts.get("nodes") or fingerprint.get("nodes_count", "?")
+            edges = counts.get("edges") or fingerprint.get("edges_count", "?")
+            timeseries = counts.get("timeseries") or fingerprint.get("timeseries_count", "?")
+            
             datasets.append({
                 "name": d.name,
                 "path": d,
                 "size_mb": size_mb,
-                "nodes": fingerprint.get("nodes_count", "?"),
-                "edges": fingerprint.get("edges_count", "?"),
-                "timeseries": fingerprint.get("timeseries_count", "?"),
+                "nodes": nodes,
+                "edges": edges,
+                "timeseries": timeseries,
             })
     
     return datasets
