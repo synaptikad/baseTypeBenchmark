@@ -211,6 +211,16 @@ class MemgraphEngine:
             latency_ms = (time.perf_counter() - t0) * 1000
             return len(result), latency_ms
 
+    def execute_query_with_results(self, query: str) -> Tuple[list, float]:
+        """Execute a Cypher query and return (rows, latency_ms) for validation."""
+        t0 = time.perf_counter()
+        with self.driver.session() as session:
+            result = list(session.run(query))
+            latency_ms = (time.perf_counter() - t0) * 1000
+            # Convert neo4j Records to dicts
+            rows_data = [dict(r) for r in result]
+            return rows_data, latency_ms
+
     def get_executor(self) -> Callable[[str], Tuple[int, float]]:
         """Return query executor function."""
         return self.execute_query

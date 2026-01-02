@@ -786,14 +786,17 @@ class PostgresEngine:
         # Index creation belongs to the actual load step.
 
     def execute_query(self, query: str) -> Tuple[int, float]:
-        """Execute a query and return (row_count, latency_ms).
+        """Execute a query and return (row_count, latency_ms)."""
+        row_count, latency_ms, _ = self._execute(query)
+        return row_count, latency_ms
 
-        Args:
-            query: SQL query string
+    def execute_query_with_results(self, query: str) -> Tuple[list, float]:
+        """Execute a query and return (rows, latency_ms) for validation."""
+        _, latency_ms, rows = self._execute(query)
+        return rows, latency_ms
 
-        Returns:
-            Tuple of (row_count, latency_ms)
-        """
+    def _execute(self, query: str) -> Tuple[int, float, list]:
+        """Execute query, return (row_count, latency_ms, rows)."""
         t0 = time.perf_counter()
         try:
             with self.conn.cursor() as cur:
@@ -801,7 +804,13 @@ class PostgresEngine:
                 rows = cur.fetchall()
                 self.conn.commit()
                 latency_ms = (time.perf_counter() - t0) * 1000
-                return len(rows), latency_ms
+                # Convert to list of dicts for portability
+                if cur.description:
+                    cols = [d[0] for d in cur.description]
+                    rows_data = [dict(zip(cols, row)) for row in rows]
+                else:
+                    rows_data = []
+                return len(rows), latency_ms, rows_data
         except Exception as e:
             self.conn.rollback()
             raise e

@@ -3,7 +3,7 @@
 // Server room and IT equipment dependencies
 
 MATCH (sp:Node {type: 'Space', building_id: '$BUILDING_ID'})-[:CONTAINS]->(eq:Node {type: 'Equipment'})
-WHERE eq.name =~ '(?i).*(server|network|switch|router|ups).*'
+WHERE toLower(eq.name) =~ '.*(server|network|switch|router|ups).*'
 RETURN sp.id AS space_id,
        sp.name AS space_name,
        sp.building_id AS building_id,

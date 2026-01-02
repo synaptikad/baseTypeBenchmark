@@ -240,12 +240,46 @@ Le benchmark teste chaque scenario avec differentes allocations memoire :
 RAM_LEVELS = [4, 8, 16, 32, 64, 128, 256]  # GB
 ```
 
-Pour chaque combinaison (profil, scenario, RAM) :
+### Protocole RAM-Gradient
 
-1. Demarre le container avec `--memory={RAM}g`
-2. Charge les donnees
-3. Execute les 13 requetes (Q1-Q13)
-4. Enregistre latences, RAM utilisee, OOM eventuel
+Le runner propose trois modes de selection :
+
+| Mode | Description | Cas d'usage |
+|------|-------------|-------------|
+| **SINGLE** | Un seul niveau RAM | Test rapide |
+| **GRADIENT** | Selection manuelle de plusieurs niveaux | Protocole personnalise |
+| **AUTO** | Niveaux adaptes a la taille du dataset | Recommande |
+
+Le mode **AUTO** ajuste automatiquement :
+- Dataset < 1 GB : 4, 8, 16 GB
+- Dataset 1-5 GB : 8, 16, 32 GB
+- Dataset > 5 GB : 16, 32, 64, 128 GB
+
+### Detection de plateau
+
+Le benchmark detecte automatiquement les **plateaux de performance** :
+
+- Compare la latence moyenne entre deux niveaux RAM consecutifs
+- Si l'amelioration est < 10%, les niveaux suivants sont ignores
+- Evite l'escalade inutile et accelere le benchmark
+
+```
+[17:45:30] ℹ  Plateau detecte: 150ms → 145ms (+3.3%)
+[17:45:30] ℹ  Plateau detecte → skip P1@64GB
+```
+
+### Metriques cgroups Linux
+
+Les mesures RAM utilisent les **cgroups v2** Linux pour une precision maximale :
+
+```
+/sys/fs/cgroup/system.slice/docker-{id}.scope/
+├── memory.current    # RAM actuelle
+├── memory.peak       # Pic RAM depuis reset
+└── cpu.stat          # Temps CPU (user/system)
+```
+
+Le **peak RAM est reset apres le chargement** pour mesurer uniquement l'impact des queries.
 
 ---
 
@@ -274,6 +308,7 @@ Pour chaque combinaison (profil, scenario, RAM) :
 ```
 BaseTypeBenchmark/
 ├── run.py                      # Menu interactif principal
+├── metrics.py                  # Metriques cgroups Linux (RAM peak, CPU)
 ├── scripts/
 │   └── smoke_benchmark.py      # Execution non-interactive (CI/cloud)
 ├── config/
@@ -293,11 +328,11 @@ BaseTypeBenchmark/
 │   │   ├── generator_v2.py     # Generateur synthetique (seed=42)
 │   │   ├── exporter_v2.py      # Export Parquet → CSV/N-Triples
 │   │   └── dataset_manager.py  # Workflow lazy export/prune
+│   ├── runner/engines/         # Moteurs de requetes
+│   │   ├── postgres.py         # PostgreSQL/TimescaleDB
+│   │   ├── memgraph.py         # Memgraph (Cypher)
+│   │   └── oxigraph.py         # Oxigraph (SPARQL)
 │   ├── benchmark/
-│   │   └── resource_monitor.py # cgroup v2, RAM peak, CPU
-│   └── loaders/                # Chargement par moteur
-│       ├── postgres/load.py
-│       ├── memgraph/load.py
 │       └── oxigraph/load.py
 ├── docs/
 │   ├── REFACTORING_CONSOLIDATED.md  # Architecture et roadmap
@@ -323,9 +358,39 @@ benchmark_results/
 
 Chaque fichier JSON contient :
 - Latences par requete (p50, p95, min, max)
-- RAM utilisee (steady-state, peak)
-- CPU moyen
+- RAM utilisee (steady-state, peak par query)
+- Metriques par container (pour M2/O2)
+- Reponses pour validation inter-moteurs
 - Statut OOM
+
+### Format des resultats
+
+```json
+{
+  "scenario": "M2",
+  "ram_gb": 8,
+  "load_time_s": 3.5,
+  "mem_after_load_mb": {
+    "memgraph": {"memory_mb": 429, "memory_peak_mb": 430},
+    "timescaledb": {"memory_mb": 164, "memory_peak_mb": 169}
+  },
+  "queries": {
+    "Q1": {
+      "row_count": 198,
+      "latency_ms": 14.2,
+      "memory_mb": 593,
+      "memory_peak_mb": 600,
+      "memory_by_container": {
+        "memgraph": {"memory_mb": 429, "peak_mb": 430},
+        "timescaledb": {"memory_mb": 164, "peak_mb": 170}
+      }
+    }
+  },
+  "responses": {
+    "Q1": {"row_count": 198, "hash": 123456789, "sample": [...]}
+  }
+}
+```
 
 ---
 

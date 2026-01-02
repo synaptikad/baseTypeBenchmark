@@ -90,6 +90,11 @@ class OxigraphEngine:
 
     def execute_query(self, query: str) -> Tuple[int, float]:
         """Execute a SPARQL query and return (row_count, latency_ms)."""
+        rows, latency_ms = self.execute_query_with_results(query)
+        return len(rows), latency_ms
+
+    def execute_query_with_results(self, query: str) -> Tuple[list, float]:
+        """Execute a SPARQL query and return (rows, latency_ms) for validation."""
         t0 = time.perf_counter()
         resp = requests.get(
             f"{self.base_url}/query",
@@ -102,9 +107,11 @@ class OxigraphEngine:
         if resp.status_code == 200:
             data = resp.json()
             rows = data.get("results", {}).get("bindings", [])
-            return len(rows), latency_ms
+            # Simplify SPARQL bindings to plain dicts
+            rows_data = [{k: v.get("value") for k, v in row.items()} for row in rows]
+            return rows_data, latency_ms
 
-        return 0, latency_ms
+        return [], latency_ms
 
     def get_executor(self) -> Callable[[str], Tuple[int, float]]:
         """Return query executor function."""
