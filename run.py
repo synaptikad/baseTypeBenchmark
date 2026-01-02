@@ -15,6 +15,7 @@ import json
 import time
 import shutil
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -24,6 +25,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 # Import cgroup-based metrics (precise Linux measurements)
 from metrics import Metrics, compute_delta, check_oom
+
+
+# Custom JSON encoder for Decimal and other types
+class BenchmarkEncoder(json.JSONEncoder):
+    """JSON encoder that handles Decimal, datetime, etc."""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, Path):
+            return str(obj)
+        return super().default(obj)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANSI STYLING
@@ -935,7 +949,7 @@ def workflow_benchmark():
             
             # Save intermediate results
             result_file = run_dir / f"{scenario}_{ram_gb}GB.json"
-            result_file.write_text(json.dumps(scenario_results, indent=2))
+            result_file.write_text(json.dumps(scenario_results, indent=2, cls=BenchmarkEncoder))
             log(f"Résultats {scenario}@{ram_gb}GB sauvegardés", "ok")
             
             # Plateau detection: compare with previous RAM level
@@ -1010,7 +1024,7 @@ def workflow_benchmark():
         "elapsed_s": elapsed_total,
         "results": all_results,
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, cls=BenchmarkEncoder))
     
     print()
     input("Appuyez sur Entrée pour continuer...")
