@@ -105,85 +105,96 @@ bash deploy/ovh_setup.sh
 ### Menu principal interactif
 
 ```bash
-.venv/bin/python run.py
+python run.py
 ```
 
-Affiche le menu :
+Le runner affiche un menu interactif avec feedback detaille sur les operations longues:
 
 ```
-============================================================
+══════════════════════════════════════════════════════════════════════
   BASETYPE BENCHMARK
-============================================================
-Available datasets: small-1w, medium-1m
-On disk: 2 datasets, 1250.5 MB
+══════════════════════════════════════════════════════════════════════
 
-  1. Purge Datasets
-  2. Generate Dataset
-  3. Run Benchmark
-  4. Publish Results
-  0. Exit
+  Datasets disponibles: 2 (14.2 GB)
+    • large-1w_seed42 (1,234,567 noeuds)
+    • small-2d_seed42 (45,678 noeuds)
 
-Select [2]:
+  Actions:
+
+  1. Generer un dataset
+  2. Lancer le benchmark
+  3. Voir les resultats
+  4. Supprimer des datasets
+
+  0. Quitter
 ```
 
 ### Generation de dataset
 
-Option **2. Generate Dataset** :
+Option **1. Generer un dataset** :
 
-1. Choisir la source: HuggingFace Hub (defaut) ou generation locale
-2. Si source externe disponible: importer (choix scale/duree selon disponibilite)
-3. Sinon: generer localement (choix scale, duree, seed)
-4. Le generateur cree le graphe, l'exporteur produit le Parquet (format pivot) puis les 6 formats cibles (P1, P2, M1, M2, O1, O2)
+Le runner recommande automatiquement le profil `large-1w` :
 
-Notes (perf):
-- La generation utilise par defaut le mode **vectorized** et l'export Parquet **direct** par lots (barre de progression "Writing batches").
-- Le mode parallel historique a ete retire du workflow interactif car il est generalement moins performant que vectorized pour ce workload.
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Profil recommande pour ce benchmark:                          │
+│                                                                │
+│    large-1w (1 semaine, ~1.2M points)                         │
+│                                                                │
+│  Ce profil offre un bon equilibre entre:                       │
+│    • Taille suffisante pour stresser les moteurs               │
+│    • Temps de generation raisonnable (~5-10 min)               │
+│    • Taille disque moderee (~14 GB)                           │
+└────────────────────────────────────────────────────────────────┘
+```
 
 ### Execution du benchmark
 
-Option **3. Run Benchmark** :
+Option **2. Lancer le benchmark** :
 
 ```
-============================================================
-  BENCHMARK EXECUTION
-============================================================
-Master dataset: large-1y
-Available scales: small, medium, large
-Available durations: 1w, 1m, 6m, 1y
-Total configurations: 12
+══════════════════════════════════════════════════════════════════════
+  EXECUTION DU BENCHMARK
+══════════════════════════════════════════════════════════════════════
 
-  F. FULL CAMPAIGN - All configurations automatically
-     12 profiles x 6 scenarios x 7 RAM levels = 504 runs
-  S. SELECT - Choose profiles, scenarios, RAM levels
-  Q. QUICK TEST - Single profile, all scenarios, single RAM
-  R. RESUME - Continue interrupted campaign (2 found)
+── Selection du dataset ──
 
-  0. Back
+  Datasets disponibles:
+
+  1. large-1w_seed42 (14.2 GB)
+     1,234,567 noeuds, 2,345,678 aretes
+
+Choisir le dataset [1-1, defaut=1]: 1
+[10:45:32] ✓  Dataset selectionne: large-1w_seed42
 ```
 
-| Mode | Description |
-|------|-------------|
-| **F (Full)** | Execute toutes les combinaisons automatiquement |
-| **S (Select)** | Choix fin des profils, scenarios et niveaux RAM |
-| **Q (Quick)** | Test rapide : 1 profil, 6 scenarios, 1 niveau RAM |
-| **R (Resume)** | Reprend une campagne interrompue |
+Le benchmark affiche une barre de progression et les metriques en temps reel:
 
-### Mode SELECT (selection fine)
+```
+── [1/6] Scenario P1: PostgreSQL Relationnel ──
 
-Permet de choisir :
+[10:46:02] ▸  Demarrage containers: timescaledb (limite 8GB RAM)...
+[10:46:15] ✓  Containers operationnels (13.2s)
+[10:46:15] ▸  Chargement des donnees (P1)...
+[10:47:45] ✓  Donnees chargees en 1m 30s
+[10:47:45] ℹ   RAM timescaledb: 2,456 MB
 
-1. **Scales** : small, medium, large (ou tous)
-2. **Durations** : 1w, 1m, 6m, 1y (ou toutes)
-3. **Scenarios** : P1, P2, M1, M2, O1, O2 (ou tous)
-4. **Niveaux RAM** : 4, 8, 16, 32, 64, 128, 256 GB (ou tous)
+  P1 [████████████████████████░░░░░░] 10/13 (77%) Q10...
+    ✓ Q1: 827 rows, 12.3ms
+    ✓ Q2: 156 rows, 8.7ms
+    ...
+```
 
-### Mode RESUME (reprise)
+Les scenarios disponibles sont:
 
-Detecte automatiquement les campagnes interrompues et permet de les reprendre :
-
-- Affiche la progression (ex: "15/36 complete")
-- Ne re-execute que les combinaisons manquantes
-- Conserve les resultats deja obtenus
+| ID | Nom | Description |
+|----|-----|-------------|
+| P1 | PostgreSQL Relationnel | Tables SQL normalisees + TimescaleDB |
+| P2 | PostgreSQL JSONB | Documents JSONB + TimescaleDB |
+| M1 | Memgraph Standalone | Property Graph in-memory (Cypher) |
+| M2 | Memgraph + TimescaleDB | Graphe hybride + TimescaleDB |
+| O1 | Oxigraph Standalone | Triple Store RDF in-memory (SPARQL) |
+| O2 | Oxigraph + TimescaleDB | RDF hybride + TimescaleDB |
 
 ---
 
@@ -201,14 +212,23 @@ Detecte automatiquement les campagnes interrompues et permet de les reprendre :
 
 | Duration | Jours | Cas d'usage |
 |----------|-------|-------------|
-| 1w | 7 | Tests rapides |
+| 2d | 2 | Tests rapides (smoke test) |
+| 1w | 7 | **Benchmark standard (recommande)** |
 | 1m | 30 | Analyse mensuelle |
-| 6m | 180 | Patterns saisonniers |
-| 1y | 365 | Reporting annuel |
+
+### Profil recommande
+
+Pour valider les hypotheses de ce benchmark, le profil **`large-1w`** est suffisant:
+
+- **~1.2M points de mesure** : stress suffisant pour differencier les moteurs
+- **~14 GB de donnees** : teste les contraintes memoire
+- **Generation en ~10 min** : iteration rapide
+
+> Les profils `6m` et `1y` sont disponibles pour des etudes longitudinales specifiques mais ne sont pas necessaires pour les conclusions principales.
 
 ### Combinaisons (profils)
 
-12 profils disponibles : `small-1w`, `small-1m`, `small-6m`, `small-1y`, `medium-1w`, etc.
+Profils disponibles : `small-2d`, `small-1w`, `small-1m`, `large-1w`, `large-1m`, etc.
 
 ---
 
@@ -344,29 +364,44 @@ Chaque fichier JSON contient :
 
 ## Reproduire l'experience
 
-### Execution complete
+### Workflow recommande
 
 ```bash
-# Lancer le menu interactif
+# 1. Lancer le menu interactif
 python run.py
 
-# → Option 2: Generate Dataset (choisir profil, ex: small-1m)
-# → Option 3: Run Benchmark → F (Full Campaign)
+# 2. Option 1: Generer un dataset
+#    → Choisir echelle: large
+#    → Choisir duree: 1w (recommande)
+#    → Seed: 42
+
+# 3. Option 2: Lancer le benchmark
+#    → Selectionner le dataset large-1w_seed42
+#    → Scenarios: ALL (6 scenarios)
+#    → RAM: 8 GB (recommande)
+#    → Requetes: ALL (Q1-Q13)
+
+# 4. Option 3: Voir les resultats
 ```
 
-Le benchmark execute automatiquement:
-- Generation du dataset (ou telechargement HuggingFace)
-- Test de chaque scenario (P1, P2, M1, M2, O1, O2)
-- Variation RAM (8, 16, 32, 64, 128 Go)
-- 13 requetes avec warmup et mesures repetees
+### Test rapide (smoke test)
+
+Pour valider l'installation:
+
+```bash
+python run.py
+# → Option 1: Generer dataset small-2d
+# → Option 2: Benchmark avec scenarios P1, M1, O1
+```
+
+Duree estimee: ~5 minutes.
 
 ### Resultats attendus
 
 Apres execution, le dossier `benchmark_results/` contient:
-- Latences par requete (p50, p95)
-- RAM utilisee (steady-state, peak)
-- Statut OOM par configuration
-- Matrices RAM × Moteur pour analyse comparative
+- Latences par requete et par scenario
+- RAM utilisee apres chargement
+- Resume comparatif JSON
 
 ---
 
