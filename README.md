@@ -202,11 +202,14 @@ Les scenarios disponibles sont:
 
 ### Echelles (scales)
 
-| Scale | Batiments | Espaces | Equipements | Points |
-|-------|-----------|---------|-------------|--------|
-| small | 1 | ~120 | ~1 800 | ~70 000 |
-| medium | 3 | ~430 | ~6 500 | ~245 000 |
-| large | 12 | ~2 600 | ~39 000 | ~1 500 000 |
+| Scale | Batiments | Espaces | Equipements | Points | Ratio |
+|-------|-----------|---------|-------------|--------|-------|
+| small | 1 | ~90 | ~1 050 | ~12 000 | 1.2 pts/m² |
+| medium | 3 | ~430 | ~4 600 | ~53 000 | 1.3 pts/m² |
+| large | 5 | ~875 | ~9 600 | ~110 000 | 1.3 pts/m² |
+| xlarge | 9 | ~3 100 | ~33 000 | ~365 000 | 1.2 pts/m² |
+
+> Les ratios pts/m² sont calibres sur des batiments tertiaires reels (~1.2-1.3 pts/m²).
 
 ### Durees (durations)
 
@@ -215,20 +218,22 @@ Les scenarios disponibles sont:
 | 2d | 2 | Tests rapides (smoke test) |
 | 1w | 7 | **Benchmark standard (recommande)** |
 | 1m | 30 | Analyse mensuelle |
+| 6m | 180 | Etudes longitudinales |
+| 1y | 365 | Historique annuel |
 
 ### Profil recommande
 
 Pour valider les hypotheses de ce benchmark, le profil **`large-1w`** est suffisant:
 
-- **~1.2M points de mesure** : stress suffisant pour differencier les moteurs
-- **~14 GB de donnees** : teste les contraintes memoire
-- **Generation en ~10 min** : iteration rapide
+- **~110k points de mesure** : stress suffisant pour differencier les moteurs
+- **~5-10 GB de donnees** : teste les contraintes memoire
+- **Generation en ~5 min** : iteration rapide
 
-> Les profils `6m` et `1y` sont disponibles pour des etudes longitudinales specifiques mais ne sont pas necessaires pour les conclusions principales.
+> Le profil `xlarge` (~365k points) est disponible pour des stress-tests comparables a la Tour Duo Paris.
 
 ### Combinaisons (profils)
 
-Profils disponibles : `small-2d`, `small-1w`, `small-1m`, `large-1w`, `large-1m`, etc.
+Profils disponibles : `small-2d`, `small-1w`, `medium-1w`, `large-1w`, `xlarge-1w`, etc.
 
 ---
 
@@ -312,8 +317,11 @@ BaseTypeBenchmark/
 ├── scripts/
 │   └── smoke_benchmark.py      # Execution non-interactive (CI/cloud)
 ├── config/
-│   ├── profiles/               # small.yaml, medium.yaml, large.yaml
-│   └── space_types.yaml        # Types d'espaces et domaines
+│   ├── profiles/               # small.yaml, medium.yaml, large.yaml, xlarge.yaml
+│   ├── equipment/              # Definitions YAML equipements (FCU, AHU, etc.)
+│   ├── equipment_distribution.yaml  # Matrice equipements par espace
+│   ├── space_types.yaml        # Types d'espaces et domaines
+│   └── schemas/                # JSON Schema validation
 ├── docker/
 │   ├── docker-compose.yml      # TimescaleDB, Memgraph, Oxigraph
 │   └── .env                    # Credentials (copier depuis config/benchmark.env)
@@ -325,19 +333,19 @@ BaseTypeBenchmark/
 ├── src/basetype_benchmark/
 │   ├── dataset/
 │   │   ├── generator_v2.py     # Generateur synthetique (seed=42)
+│   │   ├── equipment_loader.py # Chargement definitions equipements
 │   │   ├── exporter_v2.py      # Export Parquet → CSV/N-Triples
 │   │   └── dataset_manager.py  # Workflow lazy export/prune
 │   ├── runner/engines/         # Moteurs de requetes
 │   │   ├── postgres.py         # PostgreSQL/TimescaleDB
 │   │   ├── memgraph.py         # Memgraph (Cypher)
 │   │   └── oxigraph.py         # Oxigraph (SPARQL)
-│   ├── benchmark/
-│       └── oxigraph/load.py
+│   └── loaders/                # Chargement donnees par moteur
 ├── docs/
 │   ├── REFACTORING_CONSOLIDATED.md  # Architecture et roadmap
-│   └── B3_RUNBOOK.md                # Deploiement OVH
-├── deploy/                     # Scripts cloud
-└── benchmark_results/          # Resultats JSON
+│   ├── B3_RUNBOOK.md                # Deploiement OVH
+│   └── Exploration/                 # Documentation equipements (221 types)
+└── deploy/                     # Scripts cloud OVH
 ```
 
 ---
