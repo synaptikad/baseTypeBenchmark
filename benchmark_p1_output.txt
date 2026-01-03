@@ -1,69 +1,0 @@
-nohup: ignoring input
-Auto-selected dataset: small-2d_seed42
-
-============================================================
-  Running P1
-============================================================
-
-============================================================
-SCENARIO: P1 | Profile: parquet | RAM: 8GB
-Protocol: 3 warmup, 10 runs, 3 variants
-============================================================
-
-[0] Checking/exporting data files...
-  [SKIP] P1 files already exported
-
-[1] Starting containers...
-
-[2] Connecting to PostgreSQL...
-
-[3] Loading data...
-  [LOAD] Nodes: 1,000 (25595/s)  [LOAD] Nodes: 2,000 (25708/s)  [LOAD] Nodes: 3,000 (25753/s)  [LOAD] Nodes: 4,000 (25766/s)  [LOAD] Nodes: 5,000 (25685/s)  [LOAD] Nodes: 6,000 (25562/s)  [LOAD] Nodes: 7,000 (25560/s)  [LOAD] Nodes: 8,000 (25597/s)  [LOAD] Nodes: 9,000 (25672/s)  [LOAD] Nodes: 10,000 (25659/s)  [LOAD] Nodes: 11,000 (25639/s)  [LOAD] Nodes: 12,000 (25536/s)  [LOAD] Nodes: 13,000 (25462/s)  [LOAD] Nodes: 14,000 (25417/s)  [LOAD] Nodes: 15,000 (25337/s)  [LOAD] Nodes: 16,000 (25247/s)  [LOAD] Nodes: 17,000 (25205/s)  [LOAD] Nodes: 18,000 (25171/s)  [LOAD] Nodes: 19,000 (25148/s)  [LOAD] Nodes: 20,000 (25134/s)  [LOAD] Nodes: 21,000 (25122/s)  [LOAD] Nodes: 22,000 (25108/s)  [LOAD] Nodes: 23,000 (25088/s)  [LOAD] Nodes: 24,000 (25088/s)  [LOAD] Nodes: 25,000 (25051/s)  [LOAD] Nodes: 26,000 (25055/s)  [LOAD] Nodes: 27,000 (25052/s)  [LOAD] Nodes: 28,000 (25065/s)  [LOAD] Nodes: 29,000 (25073/s)  [LOAD] Nodes: 30,000 (25088/s)  [LOAD] Nodes: 31,000 (25094/s)  [LOAD] Nodes: 32,000 (25092/s)  [LOAD] Nodes: 33,000 (25091/s)  [LOAD] Nodes: 34,000 (25081/s)  [LOAD] Nodes: 35,000 (25095/s)  [LOAD] Nodes: 36,000 (25100/s)  [LOAD] Nodes: 37,000 (25097/s)  [LOAD] Nodes: 38,000 (25091/s)  [LOAD] Nodes: 39,000 (24831/s)  [LOAD] Nodes: 40,000 (24846/s)  [LOAD] Nodes: 41,000 (24863/s)  [LOAD] Nodes: 42,000 (24856/s)  [LOAD] Nodes: 43,000 (24855/s)  [LOAD] Nodes: 44,000 (24855/s)  [LOAD] Nodes: 45,000 (24869/s)  [LOAD] Nodes: 46,000 (24882/s)  [LOAD] Nodes: 47,000 (24889/s)  [LOAD] Nodes: 48,000 (24896/s)  [LOAD] Nodes: 48,765 in 2.0s          
-  [LOAD] Edges: 1,000 (40591/s)  [LOAD] Edges: 2,000 (41166/s)  [LOAD] Edges: 3,000 (41256/s)  [LOAD] Edges: 4,000 (41196/s)  [LOAD] Edges: 5,000 (41333/s)  [LOAD] Edges: 6,000 (41440/s)  [LOAD] Edges: 7,000 (41431/s)  [LOAD] Edges: 8,000 (41466/s)  [LOAD] Edges: 9,000 (41463/s)  [LOAD] Edges: 10,000 (41521/s)  [LOAD] Edges: 11,000 (41491/s)  [LOAD] Edges: 12,000 (41406/s)  [LOAD] Edges: 13,000 (41379/s)  [LOAD] Edges: 14,000 (41321/s)  [LOAD] Edges: 15,000 (39511/s)  [LOAD] Edges: 16,000 (39558/s)  [LOAD] Edges: 17,000 (39664/s)  [LOAD] Edges: 18,000 (39725/s)  [LOAD] Edges: 19,000 (39741/s)  [LOAD] Edges: 20,000 (39764/s)  [LOAD] Edges: 21,000 (39796/s)  [LOAD] Edges: 22,000 (39801/s)  [LOAD] Edges: 23,000 (39778/s)  [LOAD] Edges: 24,000 (39241/s)  [LOAD] Edges: 25,000 (39240/s)  [LOAD] Edges: 26,000 (39251/s)  [LOAD] Edges: 27,000 (39280/s)  [LOAD] Edges: 28,000 (39299/s)  [LOAD] Edges: 29,000 (39303/s)  [LOAD] Edges: 30,000 (39308/s)  [LOAD] Edges: 31,000 (39322/s)  [LOAD] Edges: 32,000 (39353/s)  [LOAD] Edges: 33,000 (39379/s)  [LOAD] Edges: 34,000 (39376/s)  [LOAD] Edges: 35,000 (39382/s)  [LOAD] Edges: 36,000 (39375/s)  [LOAD] Edges: 37,000 (39386/s)  [LOAD] Edges: 38,000 (39403/s)  [LOAD] Edges: 39,000 (39418/s)  [LOAD] Edges: 40,000 (39431/s)  [LOAD] Edges: 41,000 (38841/s)  [LOAD] Edges: 42,000 (38846/s)  [LOAD] Edges: 43,000 (38882/s)  [LOAD] Edges: 44,000 (38902/s)  [LOAD] Edges: 45,000 (38899/s)  [LOAD] Edges: 46,000 (38929/s)  [LOAD] Edges: 47,000 (38948/s)  [LOAD] Edges: 48,000 (38969/s)  [LOAD] Edges: 49,000 (38994/s)  [LOAD] Edges: 50,000 (39016/s)  [LOAD] Edges: 51,000 (39035/s)  [LOAD] Edges: 52,000 (39053/s)  [LOAD] Edges: 53,000 (39070/s)  [LOAD] Edges: 54,000 (39086/s)  [LOAD] Edges: 55,000 (39105/s)  [LOAD] Edges: 56,000 (39123/s)  [LOAD] Edges: 57,000 (39142/s)  [LOAD] Edges: 58,000 (39157/s)  [LOAD] Edges: 59,000 (39168/s)  [LOAD] Edges: 60,000 (39179/s)  [LOAD] Edges: 61,000 (39197/s)  [LOAD] Edges: 62,000 (39211/s)  [LOAD] Edges: 63,000 (39221/s)  [LOAD] Edges: 64,000 (39232/s)  [LOAD] Edges: 65,000 (39247/s)  [LOAD] Edges: 66,000 (39253/s)  [LOAD] Edges: 67,000 (39264/s)  [LOAD] Edges: 68,000 (38913/s)  [LOAD] Edges: 69,000 (38919/s)  [LOAD] Edges: 70,000 (38933/s)  [LOAD] Edges: 71,000 (38943/s)  [LOAD] Edges: 72,000 (38948/s)  [LOAD] Edges: 73,000 (38951/s)  [LOAD] Edges: 74,000 (38954/s)  [LOAD] Edges: 75,000 (38960/s)  [LOAD] Edges: 76,000 (38967/s)  [LOAD] Edges: 77,000 (38974/s)  [LOAD] Edges: 78,000 (38972/s)  [LOAD] Edges: 79,000 (38986/s)  [LOAD] Edges: 80,000 (38998/s)  [LOAD] Edges: 81,000 (39011/s)  [LOAD] Edges: 82,000 (39023/s)  [LOAD] Edges: 83,000 (39033/s)  [LOAD] Edges: 84,000 (39049/s)  [LOAD] Edges: 85,000 (39060/s)  [LOAD] Edges: 86,000 (39067/s)  [LOAD] Edges: 87,000 (39072/s)  [LOAD] Edges: 88,000 (39082/s)  [LOAD] Edges: 89,000 (39094/s)  [LOAD] Edges: 90,000 (39104/s)  [LOAD] Edges: 91,000 (39110/s)  [LOAD] Edges: 92,000 (39118/s)  [LOAD] Edges: 93,000 (39125/s)  [LOAD] Edges: 94,000 (38870/s)  [LOAD] Edges: 95,000 (38876/s)  [LOAD] Edges: 96,000 (38889/s)  [LOAD] Edges: 97,000 (38892/s)  [LOAD] Edges: 98,000 (38917/s)  [LOAD] Edges: 99,000 (38947/s)  [LOAD] Edges: 100,000 (38969/s)  [LOAD] Edges: 101,000 (38989/s)  [LOAD] Edges: 102,000 (38997/s)Traceback (most recent call last):
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/scenario.py", line 329, in _run_postgres
-    ts_rows = engine.load_timeseries_server_copy("/data/timeseries.csv")
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/engines/postgres.py", line 544, in load_timeseries_server_copy
-    return self.load_timeseries_server_direct(container_path)
-           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/engines/postgres.py", line 353, in load_timeseries_server_direct
-    cur.execute(f"""
-    ~~~~~~~~~~~^^^^^
-        COPY timeseries (point_id, time, building_id, value)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        FROM '{container_path}'
-        ^^^^^^^^^^^^^^^^^^^^^^^
-        WITH CSV HEADER
-        ^^^^^^^^^^^^^^^
-    """)
-    ^^^^
-psycopg2.OperationalError: server closed the connection unexpectedly
-	This probably means the server terminated abnormally
-	before or while processing the request.
-
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/scenario.py", line 264, in run_scenario
-    result = _run_postgres(scenario, export_dir, protocol, result)
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/scenario.py", line 332, in _run_postgres
-    ts_rows = engine.load_timeseries(ts_csv)
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/engines/postgres.py", line 528, in load_timeseries
-    return self.load_timeseries_direct(ts_file)
-           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
-  File "/home/ubuntu/baseTypeBenchmark/src/basetype_benchmark/runner/engines/postgres.py", line 242, in load_timeseries_direct
-    with self.conn.cursor() as cur:
-         ~~~~~~~~~~~~~~~~^^
-psycopg2.InterfaceError: connection already closed
-  [LOAD] Edges: 102,860 in 2.6s          
-  [LOAD] Timeseries: server-side COPY into unlogged table...
-  [WARN] Server-side COPY failed (server closed the connection unexpectedly
-	This probably means the server terminated abnormally
-	before or while processing the request.
-), falling back to client-side...
-
-[5] Stopping containers...
-
-[DONE] Results saved to:
-  Full:    benchmark_results/P1_parquet_8GB_full.json
-  Summary: benchmark_results/P1_parquet_8GB_summary.json
