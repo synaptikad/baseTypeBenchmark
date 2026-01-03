@@ -56,8 +56,9 @@ L'hypothese in-memory merite verification empirique avec mesures de latence, RAM
 | P2 | PostgreSQL JSONB | Documents JSONB | Hypertables (TimescaleDB) | timescaledb |
 | M1 | Memgraph Standalone | Property Graph (Cypher) | Chunks en memoire | memgraph |
 | M2 | Memgraph + TimescaleDB | Property Graph (Cypher) | Hypertables (externe) | memgraph + timescaledb |
-| O1 | Oxigraph Standalone | Triplets RDF (SPARQL) | Chunks RDF | oxigraph |
 | O2 | Oxigraph + TimescaleDB | Triplets RDF (SPARQL) | Hypertables (externe) | oxigraph + timescaledb |
+
+> **Note**: O1 (Oxigraph standalone) n'est pas teste car RDF n'a pas de type liste natif pour stocker des series temporelles. Les alternatives (triplet par valeur, `rdf:List`, litteraux JSON) sont soit explosives en volume, soit inexploitables par SPARQL.
 
 ---
 
@@ -193,7 +194,6 @@ Les scenarios disponibles sont:
 | P2 | PostgreSQL JSONB | Documents JSONB + TimescaleDB |
 | M1 | Memgraph Standalone | Property Graph in-memory (Cypher) |
 | M2 | Memgraph + TimescaleDB | Graphe hybride + TimescaleDB |
-| O1 | Oxigraph Standalone | Triple Store RDF in-memory (SPARQL) |
 | O2 | Oxigraph + TimescaleDB | RDF hybride + TimescaleDB |
 
 ---
@@ -321,7 +321,6 @@ BaseTypeBenchmark/
 │   ├── p1_p2/                  # SQL PostgreSQL (Q1-Q13)
 │   ├── m1/                     # Cypher standalone avec chunks
 │   ├── m2/graph/ + m2/ts/      # Cypher + SQL federation
-│   ├── o1/                     # SPARQL standalone avec chunks
 │   └── o2/graph/ + o2/ts/      # SPARQL + SQL federation
 ├── src/basetype_benchmark/
 │   ├── dataset/
@@ -442,7 +441,7 @@ python run.py
 
 # 3. Option 2: Lancer le benchmark
 #    → Selectionner le dataset large-1w_seed42
-#    → Scenarios: ALL (6 scenarios)
+#    → Scenarios: ALL (5 scenarios)
 #    → RAM: 8 GB (recommande)
 #    → Requetes: ALL (Q1-Q13)
 
@@ -491,7 +490,6 @@ queries/
 ├── m2/
 │   ├── graph/       # Cypher pour la partie graphe
 │   └── ts/          # SQL pour la partie TimescaleDB
-├── o1/              # SPARQL Oxigraph standalone (avec chunks)
 └── o2/
     ├── graph/       # SPARQL pour la partie graphe
     └── ts/          # SQL pour la partie TimescaleDB
