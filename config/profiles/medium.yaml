@@ -1,10 +1,13 @@
 # config/profiles/medium.yaml
-# Profile MEDIUM - 3 bâtiments, ~245k points
+# Profile MEDIUM - 3 bâtiments campus, ~30k m², ~40k points
+# Ratio terrain : ~1.3 pts/m²
 
 profile: medium
 seed: 42
 
 buildings: 3
+
+# Structure verticale par bâtiment
 floors:
   - type: basement
     count: 1
@@ -16,18 +19,57 @@ floors:
     count: 1
 
 tenants: 10
-meters:
-  main: 3
-  sub_per_main: 5
 
+# Comptage réglementaire (Décret Tertiaire + BACS)
+meters:
+  electrical:
+    per_building: 11     # TGBT + 4 TD usage + 6 TD zone
+  thermal:
+    per_building: 5      # Prod chaud/froid + 3 sous-stations
+
+# Cibles volumétriques
 targets:
-  spaces: 430
-  equipments: 6500
-  points: 245000
-  meters: 18
+  spaces: 300
+  equipments: 3500
+  points: 40000          # ~40k (3 bât × ~13k)
+  meters: 48
+
+# Distribution spatiale par type d'étage
+space_distribution:
+  basement:
+    parking: 1           # Parking souterrain par bâtiment
+    technical_elec: 1    # Local TGBT
+    technical_hvac: 1    # Chaufferie centrale
+    storage: 3
+    vertical: 2          # Gaines techniques
+
+  ground:
+    lobby: 1             # Hall principal
+    corridor: 3
+    restroom: 2
+    meeting_small: 3
+    meeting_large: 1
+    conference: 1        # Salle de conférence
+    office_open: 2
+    kitchen: 1
+
+  standard:
+    corridor: 2
+    restroom: 2
+    vertical: 1          # Gaine technique
+    office_open: 4       # Plateaux open space
+    office_closed: 6     # Bureaux individuels
+    meeting_small: 3
+    meeting_large: 2
+
+  rooftop:
+    technical_hvac: 1    # CTA, groupes froids
+    technical_it: 1      # Datacenter/local IT
 
 # Durées disponibles pour timeseries
 durations:
+  - name: 2d
+    days: 2
   - name: 1w
     days: 7
   - name: 1m

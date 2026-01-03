@@ -1,33 +1,76 @@
 # config/profiles/large.yaml
-# Profile LARGE - 12 bâtiments, ~1.5M points
+# Profile LARGE - 5 bâtiments grand campus, ~75k m², ~100k points
+# Comparable à Campus Archipel Vinci (74k m², 5 bâtiments)
+# Ratio terrain : ~1.3 pts/m²
 
 profile: large
 seed: 42
 
-buildings: 12
+buildings: 5
+
+# Structure verticale par bâtiment (tours moyennes)
 floors:
   - type: basement
-    count: 2
+    count: 2             # 2 niveaux parking souterrain
   - type: ground
     count: 1
   - type: standard
-    count: 15
+    count: 12
   - type: rooftop
     count: 1
 
-tenants: 30
-meters:
-  main: 12
-  sub_per_main: 5
+tenants: 20
 
+# Comptage réglementaire (Décret Tertiaire + BACS complet)
+meters:
+  electrical:
+    per_building: 18     # TGBT + 6 TD usage + 11 TD zone
+  thermal:
+    per_building: 14     # Prod×2 + distrib×4 + sous-stations×4 + zones×4
+
+# Cibles volumétriques
 targets:
-  spaces: 2600
-  equipments: 39000
-  points: 1500000
-  meters: 72
+  spaces: 750
+  equipments: 8000
+  points: 100000         # ~100k (5 bât × ~20k)
+  meters: 160
+
+# Distribution spatiale par type d'étage
+space_distribution:
+  basement:
+    parking: 2           # 2 zones parking par niveau souterrain
+    technical_elec: 1    # TGBT + transformateur HT/BT
+    technical_hvac: 1    # Chaufferie/Prod froid centralisée
+    storage: 4
+    vertical: 3          # Gaines techniques
+
+  ground:
+    lobby: 1             # Hall principal avec sécurité
+    corridor: 4
+    restroom: 3
+    meeting_small: 4
+    meeting_large: 2
+    conference: 1        # Grande salle de conférence
+    office_open: 2
+    kitchen: 1
+
+  standard:
+    corridor: 2
+    restroom: 3
+    vertical: 2          # Gaines techniques
+    office_open: 5       # Grands plateaux
+    office_closed: 8     # Bureaux individuels
+    meeting_small: 4
+    meeting_large: 2
+
+  rooftop:
+    technical_hvac: 2    # CTA×2, groupes froids
+    technical_it: 1      # Datacenter
 
 # Durées disponibles pour timeseries
 durations:
+  - name: 2d
+    days: 2
   - name: 1w
     days: 7
   - name: 1m

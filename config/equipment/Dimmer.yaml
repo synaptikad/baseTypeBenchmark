@@ -1,0 +1,41 @@
+# Dimmer - Variateur d'éclairage simple
+# 4 points
+
+equipment:
+  code: DIM
+  domain: Lighting
+  haystack: dimmer
+  brick: Dimmer
+  protocols: [dali, knx, modbus, bacnet]
+
+points:
+  - id: level_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne niveau lumineux (0-100%)
+    bacnet: "AO:1"
+    modbus: "40101"
+
+  - id: level_fb
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: level
+    desc: Retour niveau lumineux
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: status
+    type: etat
+    freq: event
+    desc: État (on/off)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut variateur
+    bacnet: "BI:2"
+    modbus: "10002"

@@ -1,0 +1,39 @@
+# Occupancy_Sensor - Capteur de présence/mouvement
+# 4 points
+
+equipment:
+  code: OCC
+  domain: BMS
+  haystack: occupancy sensor
+  brick: Occupancy_Sensor
+  protocols: [bacnet, modbus, knx, dali]
+
+points:
+  - id: occupied
+    type: etat
+    freq: event
+    desc: Espace occupé (oui/non)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: motion_detected
+    type: etat
+    freq: event
+    desc: Mouvement détecté
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: sensor_status
+    type: etat
+    freq: event
+    values: [ok, warning, error]
+    desc: État capteur
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut capteur
+    bacnet: "BI:3"
+    modbus: "10003"

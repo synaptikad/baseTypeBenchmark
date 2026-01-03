@@ -1,0 +1,159 @@
+# EnergyMeter - Compteur d'énergie triphasé principal (TGBT)
+# 17 points
+
+equipment:
+  code: MTR
+  domain: Electrical
+  haystack: elec-meter
+  brick: Electrical_Meter
+  protocols: [modbus_tcp, modbus_rtu, bacnet]
+
+points:
+  # === TENSIONS PAR PHASE ===
+  - id: v_l1
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    tags: [ac, volt, phase, sensor]
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: v_l2
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: v_l3
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  # === COURANTS PAR PHASE ===
+  - id: i_l1
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    tags: [ac, current, phase, sensor]
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  - id: i_l2
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    bacnet: "AI:5"
+    modbus: "40005"
+
+  - id: i_l3
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    bacnet: "AI:6"
+    modbus: "40006"
+
+  # === PUISSANCES TOTALES ===
+  - id: p_total
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: active_power
+    tags: [ac, active, power, total, sensor]
+    desc: Puissance active totale
+    bacnet: "AI:7"
+    modbus: "40007"
+
+  - id: q_total
+    type: mesure
+    freq: normal
+    unit: kVAR
+    quantity: reactive_power
+    desc: Puissance réactive totale
+    bacnet: "AI:8"
+    modbus: "40008"
+
+  - id: pf_total
+    type: mesure
+    freq: normal
+    unit: "-"
+    quantity: power_factor
+    desc: Facteur de puissance total
+    bacnet: "AI:9"
+    modbus: "40009"
+
+  # === ÉNERGIES ===
+  - id: energy_import
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    tags: [ac, active, import, energy, meter]
+    desc: Énergie active importée
+    bacnet: "AI:10"
+    modbus: "40010"
+
+  - id: energy_export
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie active exportée
+    bacnet: "AI:11"
+    modbus: "40012"
+
+  # === QUALITÉ RÉSEAU ===
+  - id: freq
+    type: mesure
+    freq: slow
+    unit: Hz
+    quantity: frequency
+    desc: Fréquence réseau
+    bacnet: "AI:12"
+    modbus: "40014"
+
+  - id: thd_v
+    type: mesure
+    freq: slow
+    unit: "%"
+    quantity: thd
+    desc: Distorsion harmonique tension
+    bacnet: "AI:13"
+    modbus: "40015"
+
+  # === ÉTATS / ALARMES ===
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: phase_loss
+    type: alarme
+    freq: event
+    desc: Perte de phase
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: over_voltage
+    type: alarme
+    freq: event
+    desc: Surtension
+    bacnet: "BI:3"
+    modbus: "10003"
+
+  - id: under_voltage
+    type: alarme
+    freq: event
+    desc: Sous-tension
+    bacnet: "BI:4"
+    modbus: "10004"

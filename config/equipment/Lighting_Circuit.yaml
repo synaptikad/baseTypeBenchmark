@@ -1,0 +1,40 @@
+# Lighting_Circuit - Circuit éclairage TOR simple
+# 4 points - Pour corridor, parking
+
+equipment:
+  code: LTC
+  domain: Lighting
+  haystack: lighting circuit
+  brick: Lighting_Circuit
+  protocols: [modbus, bacnet, knx]
+
+points:
+  - id: on_off_cmd
+    type: cmd
+    freq: event
+    desc: Commande marche/arrêt
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  - id: status
+    type: etat
+    freq: event
+    desc: État actuel
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: power
+    type: mesure
+    freq: normal
+    unit: kW
+    quantity: power
+    desc: Puissance consommée
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut circuit
+    bacnet: "BI:2"
+    modbus: "10002"

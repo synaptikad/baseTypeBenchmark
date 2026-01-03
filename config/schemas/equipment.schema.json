@@ -1,0 +1,195 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://benchmark.example.com/schemas/equipment.schema.json",
+  "title": "Equipment Definition Schema",
+  "description": "Schema for validating building equipment definitions (BOS benchmark)",
+  "type": "object",
+  "required": ["equipment", "points"],
+  "additionalProperties": false,
+  "properties": {
+    "equipment": {
+      "type": "object",
+      "description": "Equipment metadata",
+      "required": ["code", "domain", "haystack", "brick"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]+$",
+          "description": "Unique equipment code (PascalCase or UPPER_SNAKE)"
+        },
+        "domain": {
+          "type": "string",
+          "enum": ["HVAC", "Electrical", "Lighting", "Security", "FireSafety", "IT", "AV", "Plumbing", "Elevator", "Parking", "BMS"],
+          "description": "Equipment domain/category"
+        },
+        "haystack": {
+          "type": "string",
+          "description": "Project Haystack marker tags (space-separated)"
+        },
+        "brick": {
+          "type": "string",
+          "description": "Brick Schema class name"
+        },
+        "protocols": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["bacnet", "modbus", "knx", "dali", "snmp", "onvif", "ocpp", "mbus", "lonworks", "mqtt"]
+          },
+          "description": "Supported communication protocols"
+        },
+        "parent": {
+          "type": "string",
+          "description": "Parent equipment code for hierarchical relationships"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable equipment description"
+        }
+      }
+    },
+    "points": {
+      "type": "array",
+      "description": "List of data points for this equipment",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/point"
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Named profiles selecting subsets of points",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of point IDs included in this profile"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": ["points"]
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reference documentation URLs"
+    }
+  },
+  "definitions": {
+    "point": {
+      "type": "object",
+      "required": ["id", "type", "freq"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Unique point identifier (snake_case)"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["mesure", "cmd", "etat", "alarme"],
+          "description": "Point category: mesure=sensor, cmd=command/setpoint, etat=status, alarme=alarm"
+        },
+        "freq": {
+          "type": "string",
+          "enum": ["event", "fast", "normal", "slow", "energy", "daily"],
+          "description": "Sampling frequency category"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Engineering unit (SI preferred)"
+        },
+        "quantity": {
+          "type": "string",
+          "enum": [
+            "temperature", "humidity", "pressure", "flow", "level", "speed",
+            "power", "energy", "voltage", "current", "frequency", "power_factor",
+            "co2", "co", "o2", "voc", "pm25", "lux", "occupancy", "count",
+            "position", "percent", "time", "boolean", "enum", "string"
+          ],
+          "description": "Physical quantity type"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Haystack-style semantic tags"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" }
+            ]
+          },
+          "description": "Enumerated values for discrete points"
+        },
+        "range": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          },
+          "description": "Valid numeric range"
+        },
+        "deadband": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Change-of-value deadband (same unit as point)"
+        },
+        "bacnet": {
+          "type": "string",
+          "pattern": "^(AI|AO|AV|BI|BO|BV|MSV|MI|MO):[0-9]+$",
+          "description": "BACnet object type:instance"
+        },
+        "modbus": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\s*\\(.*\\))?$",
+          "description": "Modbus register address"
+        },
+        "desc": {
+          "type": "string",
+          "description": "Point description"
+        }
+      }
+    },
+    "frequency": {
+      "description": "Frequency category definitions",
+      "type": "object",
+      "properties": {
+        "event": {
+          "description": "Change-of-value only (alarms, commands, status)",
+          "const": "cov"
+        },
+        "fast": {
+          "description": "1 minute interval with deadband (~85% reduction)",
+          "const": "1min"
+        },
+        "normal": {
+          "description": "5 minute interval with deadband (~85% reduction)",
+          "const": "5min"
+        },
+        "slow": {
+          "description": "15 minute interval with deadband",
+          "const": "15min"
+        },
+        "energy": {
+          "description": "15 minute fixed interval, no deadband (regulatory)",
+          "const": "15min_fixed"
+        },
+        "daily": {
+          "description": "24 hour aggregation",
+          "const": "24h"
+        }
+      }
+    }
+  }
+}

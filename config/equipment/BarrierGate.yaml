@@ -1,0 +1,53 @@
+# BarrierGate - Barrière levante véhicules
+# 6 points
+
+equipment:
+  code: BAR
+  domain: Parking
+  haystack: barrier gate
+  brick: Barrier_Gate
+  protocols: [bacnet, modbus, dry_contact]
+
+points:
+  - id: gate_status
+    type: etat
+    freq: event
+    values: [open, closed, moving, fault]
+    desc: État barrière
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: open_cmd
+    type: cmd
+    freq: event
+    desc: Commande ouverture
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  - id: close_cmd
+    type: cmd
+    freq: event
+    desc: Commande fermeture
+    bacnet: "BO:2"
+    modbus: "00002"
+
+  - id: vehicle_detected
+    type: etat
+    freq: event
+    desc: Véhicule détecté (boucle inductive)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut barrière
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:3"
+    modbus: "10003"

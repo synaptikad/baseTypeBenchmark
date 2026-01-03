@@ -1,0 +1,77 @@
+# config/profiles/xlarge.yaml
+# Profile XLARGE - 9 bâtiments tours, ~150k m², 500k points
+# Stress-test comparable à Tour Duo Paris (2×37 niveaux)
+# Ratio terrain : ~3-4 pts/m²
+
+profile: xlarge
+seed: 42
+
+buildings: 9
+
+# Structure verticale - tours hautes
+floors:
+  - type: basement
+    count: 3             # 3 niveaux parking souterrain
+  - type: ground
+    count: 1
+  - type: standard
+    count: 25            # Tours hautes (25 étages)
+  - type: rooftop
+    count: 1
+
+tenants: 45
+
+# Comptage réglementaire (Décret Tertiaire + BACS complet + multilocataire)
+meters:
+  electrical:
+    per_building: 25     # TGBT + 6 TD usage + 18 TD zone/locataire
+  thermal:
+    per_building: 18     # Prod×3 + distrib×5 + sous-stations×5 + zones×5
+
+# Cibles volumétriques
+targets:
+  spaces: 1800
+  equipments: 18000
+  points: 500000         # Stress-test - Tour Duo reference
+  meters: 390
+
+# Distribution spatiale par type d'étage
+space_distribution:
+  basement:
+    parking: 3           # 3 zones parking par niveau souterrain
+    technical_elec: 1    # TGBT + transfo HT/BT
+    technical_hvac: 2    # Centrale thermique + stockage
+    storage: 6
+    vertical: 4          # Gaines techniques majeures
+
+  ground:
+    lobby: 1             # Grand hall sécurisé
+    corridor: 5
+    restroom: 4
+    meeting_small: 4
+    meeting_large: 3
+    conference: 2        # Salles de conférence
+    office_open: 3
+    kitchen: 2
+
+  standard:
+    corridor: 3
+    restroom: 4
+    vertical: 3          # Gaines techniques
+    office_open: 6       # Grands plateaux open space
+    office_closed: 10    # Bureaux individuels
+    meeting_small: 5
+    meeting_large: 3
+
+  rooftop:
+    technical_hvac: 3    # CTA×3, groupes froids
+    technical_it: 2      # Datacenter redondant
+
+# Durées disponibles pour timeseries (limitées pour stress-test)
+durations:
+  - name: 2d
+    days: 2
+  - name: 1w
+    days: 7
+  - name: 1m
+    days: 30

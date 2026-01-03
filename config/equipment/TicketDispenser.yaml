@@ -1,0 +1,47 @@
+# TicketDispenser - Distributeur de tickets parking
+# 5 points
+
+equipment:
+  code: TKD
+  domain: Parking
+  haystack: ticket dispenser
+  brick: Ticket_Dispenser
+  protocols: [modbus, rest_api, dry_contact]
+
+points:
+  - id: ticket_count
+    type: mesure
+    freq: slow
+    unit: "-"
+    desc: Nombre de tickets restants
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: paper_low
+    type: alarme
+    freq: event
+    desc: Niveau papier bas
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: status
+    type: etat
+    freq: event
+    values: [ready, busy, out_of_service, fault]
+    desc: État borne
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut équipement
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:3"
+    modbus: "10003"

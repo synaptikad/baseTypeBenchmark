@@ -10,7 +10,7 @@ distribution:
       - { type: TemperatureSensor, min: 1, max: 2 }
       - { type: CO2_Sensor, min: 1, max: 2 }
     Lighting:
-      - { type: LED_Luminaire, min: 8, max: 16 }
+      - { type: DALI_Gateway, min: 1, max: 2 }
       - { type: Occupancy_Sensor, min: 2, max: 4 }
     IT:
       - { type: WirelessAccessPoint, min: 1, max: 3 }
@@ -24,7 +24,7 @@ distribution:
       - { type: FCU, min: 1, max: 1 }
       - { type: Thermostat, min: 1, max: 1 }
     Lighting:
-      - { type: LED_Luminaire, min: 2, max: 4 }
+      - { type: DALI_Gateway, min: 1, max: 1 }
       - { type: Occupancy_Sensor, min: 1, max: 1 }
     Security:
       - { type: DoorContact, min: 1, max: 1 }
@@ -39,7 +39,7 @@ distribution:
       - { type: FCU, min: 1, max: 1 }
       - { type: Thermostat, min: 1, max: 1 }
     Lighting:
-      - { type: LED_Luminaire, min: 2, max: 4 }
+      - { type: DALI_Gateway, min: 1, max: 1 }
       - { type: Dimmer, min: 1, max: 1 }
     Security:
       - { type: DoorContact, min: 1, max: 1 }
@@ -54,7 +54,7 @@ distribution:
       - { type: Thermostat, min: 1, max: 1 }
       - { type: CO2_Sensor, min: 1, max: 1 }
     Lighting:
-      - { type: LED_Luminaire, min: 4, max: 8 }
+      - { type: DALI_Gateway, min: 1, max: 1 }
       - { type: Dimmer, min: 1, max: 1 }
     BMS:
       - { type: PeopleCounter, min: 1, max: 1 }
@@ -70,7 +70,7 @@ distribution:
       - { type: FCU, min: 2, max: 4 }
       - { type: Thermostat, min: 1, max: 2 }
     Lighting:
-      - { type: LED_Luminaire, min: 8, max: 16 }
+      - { type: DALI_Gateway, min: 2, max: 4 }
       - { type: Dimmer, min: 2, max: 4 }
     Security:
       - { type: DoorContact, min: 2, max: 4 }
@@ -84,7 +84,7 @@ distribution:
       - { type: SmokeDetector, min: 2, max: 4 }
       - { type: ManualCallPoint, min: 1, max: 1 }
     Lighting:
-      - { type: LED_Luminaire, min: 4, max: 8 }
+      - { type: Lighting_Circuit, min: 2, max: 4 }
       - { type: Emergency_Lighting, min: 2, max: 4 }
     Security:
       - { type: IPCamera, min: 1, max: 2 }
@@ -97,7 +97,7 @@ distribution:
       - { type: IPCamera, min: 2, max: 4 }
       - { type: BadgeReader, min: 2, max: 4 }
     Lighting:
-      - { type: LED_Luminaire, min: 6, max: 12 }
+      - { type: Lighting_Circuit, min: 3, max: 6 }
     HVAC:
       - { type: AHU, min: 0, max: 1 }
     AV:
@@ -119,19 +119,19 @@ distribution:
     Plumbing:
       - { type: Water_Meter, min: 1, max: 1 }
     Lighting:
-      - { type: LED_Luminaire, min: 2, max: 4 }
+      - { type: Lighting_Circuit, min: 1, max: 2 }
       - { type: Occupancy_Sensor, min: 1, max: 1 }
     FireSafety:
       - { type: SmokeDetector, min: 1, max: 1 }
 
   kitchen:
     Electrical:
-      - { type: ElectricalPanel, min: 1, max: 1 }
+      - { type: SubMeter, min: 1, max: 1 }
     FireSafety:
       - { type: SmokeDetector, min: 1, max: 2 }
       - { type: FireExtinguisher, min: 1, max: 2 }
     Lighting:
-      - { type: LED_Luminaire, min: 4, max: 8 }
+      - { type: Lighting_Circuit, min: 2, max: 4 }
     HVAC:
       - { type: ExhaustFan, min: 1, max: 2 }
       - { type: FCU, min: 1, max: 1 }
@@ -147,10 +147,9 @@ distribution:
   # === TECHNIQUES ===
   technical_elec:
     Electrical:
-      - { type: TGBT, min: 1, max: 1 }
-      - { type: ElectricalPanel, min: 2, max: 6 }
+      - { type: EnergyMeter, min: 1, max: 1 }
+      - { type: SubMeter, min: 4, max: 8 }
       - { type: UPS, min: 1, max: 2 }
-      - { type: EnergyMeter, min: 4, max: 12 }
     Security:
       - { type: DoorContact, min: 1, max: 1 }
       - { type: BadgeReader, min: 1, max: 1 }
@@ -166,6 +165,7 @@ distribution:
       - { type: Pump, min: 4, max: 12 }
       - { type: VFD, min: 4, max: 12 }
       - { type: CoolingTower, min: 0, max: 2 }
+      - { type: ThermalMeter, min: 2, max: 4 }
     Plumbing:
       - { type: Pump, min: 2, max: 6 }
       - { type: Water_Meter, min: 1, max: 2 }
@@ -194,8 +194,9 @@ distribution:
   # === PARKING ===
   parking:
     Parking:
-      - { type: ParkingSensor, min: 20, max: 100 }
-      - { type: EVCharger, min: 2, max: 10 }
+      - { type: ParkingSensorMagnetic, min: 10, max: 30 }
+      - { type: ParkingGuidanceController, min: 1, max: 2 }
+      - { type: EVChargerLevel2, min: 2, max: 10 }
       - { type: BarrierGate, min: 2, max: 4 }
       - { type: TicketDispenser, min: 1, max: 2 }
     FireSafety:
@@ -206,5 +207,5 @@ distribution:
       - { type: IPCamera, min: 4, max: 12 }
       - { type: BadgeReader, min: 2, max: 4 }
     Lighting:
-      - { type: LED_Luminaire, min: 10, max: 40 }
+      - { type: Lighting_Circuit, min: 4, max: 10 }
       - { type: Emergency_Lighting, min: 4, max: 8 }

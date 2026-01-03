@@ -26,7 +26,10 @@ except ImportError:
     HAS_TQDM = False
     tqdm = None
 
-from .equipment_loader import EquipmentDef, load_exploration, get_equipment_by_type
+from .equipment_loader import (
+    EquipmentDef, load_exploration, get_equipment_by_type,
+    load_yaml_equipment, FREQ_MAP, resolve_equipment_type
+)
 from .simulation import SimulationEngine, SimulationConfig, PointInfo
 
 
@@ -227,10 +230,23 @@ class DatasetGeneratorV2:
         self.space_types = load_yaml_config(self.config_path / "space_types.yaml")
         self.distribution = load_yaml_config(self.config_path / "equipment_distribution.yaml")
 
-        # Load equipment definitions from Exploration
+        # Load equipment definitions (YAML prioritaire, Exploration fallback)
         self.equipment_defs: Dict[str, EquipmentDef] = {}
+
+        # 1. Charger YAML depuis config/equipment/
+        self.equipment_defs = load_yaml_equipment(self.config_path)
+
+        # 2. Fallback: charger depuis Exploration (si pas déjà défini)
         if self.exploration_path and self.exploration_path.exists():
-            self.equipment_defs = load_exploration(self.exploration_path)
+            exploration_defs = load_exploration(self.exploration_path)
+            for key, eq_def in exploration_defs.items():
+                # Indexer par code (ex: DISPLAY)
+                if eq_def.code not in self.equipment_defs:
+                    self.equipment_defs[eq_def.code] = eq_def
+                # Indexer aussi par nom du dossier (ex: Display)
+                folder_name = key.split("/")[-1] if "/" in key else key
+                if folder_name not in self.equipment_defs:
+                    self.equipment_defs[folder_name] = eq_def
 
         # Generated data
         self.nodes: List[Node] = []
@@ -512,12 +528,9 @@ class DatasetGeneratorV2:
 
     def _create_equipment_points(self, equipment: Node, equip_type: str, domain: str) -> None:
         """Create points for an equipment based on definitions or defaults."""
-        # Try to find equipment definition
-        eq_def = None
-        for key, ed in self.equipment_defs.items():
-            if ed.code == equip_type or key.endswith(f"/{equip_type}"):
-                eq_def = ed
-                break
+        # Résoudre alias (ex: DALI_Gateway -> DGW) puis chercher définition
+        resolved_type = resolve_equipment_type(equip_type)
+        eq_def = self.equipment_defs.get(resolved_type)
 
         if eq_def and eq_def.points:
             points_def = eq_def.points
@@ -1060,7 +1073,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate smart building dataset v2.0")
-    parser.add_argument("profile", choices=["small", "medium", "large"],
+    parser.add_argument("profile", choices=["small", "medium", "large", "xlarge"],
                         help="Profile to generate")
     parser.add_argument("--config", type=Path, default=Path("config"),
                         help="Path to config directory")

@@ -1,33 +1,72 @@
 # config/profiles/small.yaml
-# Profile SMALL - 1 bâtiment, ~70k points
+# Profile SMALL - 1 bâtiment tertiaire, ~10k m², ~12-15k points
+# Ratio terrain : ~1.2 pts/m² (bâtiment tertiaire standard)
 
 profile: small
 seed: 42
 
 buildings: 1
+
+# Structure verticale du bâtiment
 floors:
   - type: basement
     count: 1
   - type: ground
     count: 1
   - type: standard
-    count: 8
+    count: 6
   - type: rooftop
     count: 1
 
 tenants: 3
-meters:
-  main: 1
-  sub_per_main: 5
 
+# Comptage réglementaire (Décret Tertiaire)
+meters:
+  electrical:
+    per_building: 4      # TGBT (1) + SubMeter CVC/Éclairage/Prises (3)
+  thermal:
+    per_building: 2      # Production chaud + froid
+
+# Cibles volumétriques
 targets:
-  spaces: 120
-  equipments: 1800
-  points: 70000
+  spaces: 90
+  equipments: 1050
+  points: 12500          # ~12-15k (réaliste 1 bâtiment, ~1.2 pts/m²)
   meters: 6
+
+# Distribution spatiale par type d'étage
+# Définit combien d'espaces de chaque type par niveau
+space_distribution:
+  basement:
+    parking: 1           # 1 zone parking souterrain
+    technical_elec: 1    # Local TGBT
+    technical_hvac: 1    # Chaufferie/Prod froid
+    storage: 2
+
+  ground:
+    lobby: 1             # Hall d'accueil
+    corridor: 2
+    restroom: 2
+    meeting_small: 2
+    office_open: 1
+    kitchen: 1
+
+  standard:
+    corridor: 1
+    restroom: 2
+    office_open: 3       # Plateaux bureaux
+    office_closed: 4     # Bureaux individuels
+    meeting_small: 2
+    meeting_large: 1
+
+  rooftop:
+    technical_hvac: 1    # CTA, groupes froids
+    technical_it: 1      # Local technique IT
 
 # Durées disponibles pour timeseries
 durations:
+  - name: 2d
+    days: 2
   - name: 1w
     days: 7
   - name: 1m

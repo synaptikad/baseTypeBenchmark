@@ -1,0 +1,47 @@
+# LED_Driver_DALI2 - Driver individuel avec diagnostics D4i
+# 6 points - Premium
+
+equipment:
+  code: LDD
+  domain: Lighting
+  haystack: led driver dali2
+  brick: LED_Driver
+  protocols: [dali2]
+
+points:
+  - id: level_fb
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: level
+    desc: Niveau lumineux
+
+  - id: power
+    type: mesure
+    freq: normal
+    unit: W
+    quantity: power
+    desc: Puissance
+
+  - id: temp
+    type: mesure
+    freq: slow
+    unit: "°C"
+    quantity: temperature
+    desc: Température driver
+
+  - id: operating_hours
+    type: mesure
+    freq: daily
+    unit: h
+    desc: Heures fonctionnement
+
+  - id: status
+    type: etat
+    freq: event
+    desc: État driver
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut driver

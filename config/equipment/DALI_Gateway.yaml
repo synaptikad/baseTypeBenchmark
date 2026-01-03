@@ -1,0 +1,85 @@
+# DALI_Gateway - Contrôleur DALI pour bureaux
+# 10 points
+
+equipment:
+  code: DGW
+  domain: Lighting
+  haystack: dali gateway
+  brick: DALI_Gateway
+  protocols: [dali, bacnet, modbus]
+
+points:
+  - id: group_level_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande niveau groupe
+    bacnet: "AO:1"
+    modbus: "40101"
+
+  - id: group_level_fb
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: level
+    desc: Retour niveau groupe
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: scene_cmd
+    type: cmd
+    freq: event
+    desc: Activation scène
+    bacnet: "MSV:1"
+    modbus: "40102"
+
+  - id: power_total
+    type: mesure
+    freq: normal
+    unit: W
+    quantity: power
+    desc: Puissance totale circuit
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: device_count
+    type: mesure
+    freq: slow
+    desc: Nb luminaires connectés
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: device_online
+    type: mesure
+    freq: slow
+    desc: Nb luminaires en ligne
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: lamp_fault_count
+    type: mesure
+    freq: slow
+    desc: Nb luminaires en défaut
+    bacnet: "AI:5"
+    modbus: "40005"
+
+  - id: emergency_active
+    type: etat
+    freq: event
+    desc: Mode secours actif
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut gateway
+    bacnet: "BI:3"
+    modbus: "10003"

@@ -1,0 +1,41 @@
+# CO2_Sensor - Capteur CO2 standalone
+# 4 points
+
+equipment:
+  code: CO2
+  domain: BMS
+  haystack: co2 sensor
+  brick: CO2_Sensor
+  protocols: [bacnet, modbus, knx, lora]
+
+points:
+  - id: co2_level
+    type: mesure
+    freq: normal
+    unit: ppm
+    quantity: co2
+    desc: Concentration CO2
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: sensor_status
+    type: etat
+    freq: event
+    values: [ok, warning, error]
+    desc: État capteur
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: high_alarm
+    type: alarme
+    freq: event
+    desc: Alarme CO2 élevé (>1000 ppm)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut capteur
+    bacnet: "BI:2"
+    modbus: "10002"

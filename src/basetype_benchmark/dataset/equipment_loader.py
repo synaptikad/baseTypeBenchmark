@@ -1,7 +1,8 @@
-"""Parser multi-format pour equipment.md et points.md.
+"""Parser multi-format pour définitions d'équipements.
 
-Charge les définitions d'équipements depuis docs/Exploration/domains/
-avec support des 3 formats de points détectés automatiquement.
+Charge depuis:
+1. config/equipment/*.yaml (prioritaire, format validé)
+2. docs/Exploration/domains/ (fallback, format markdown)
 """
 
 import re
@@ -9,12 +10,63 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import yaml
+
+
+# =============================================================================
+# FRÉQUENCES SÉMANTIQUES → INTERVALLES (secondes)
+# =============================================================================
+FREQ_MAP = {
+    "event": 0,       # Sur changement uniquement
+    "fast": 60,       # 1 min - positions, vitesses
+    "normal": 300,    # 5 min - températures, mesures courantes
+    "slow": 900,      # 15 min - diagnostics, efficacité
+    "energy": 900,    # 15 min - compteurs (réglementaire, pas de deadband)
+    "daily": 86400,   # 24h - cumuls
+}
+
+# =============================================================================
+# ALIAS : noms longs (distribution) → codes courts (YAML) ou noms Exploration
+# =============================================================================
+EQUIPMENT_ALIAS = {
+    # HVAC
+    "Thermostat": "TMP",
+    "TemperatureSensor": "TMP",
+    "CO2_Sensor": "CO2",
+    "Occupancy_Sensor": "OCC",
+    "DALI_Gateway": "DGW",
+    "Dimmer": "DIM",
+    "Emergency_Lighting": "EML",
+    "ManualCallPoint": "MCP",
+    "Lighting_Circuit": "LTC",
+    "LED_Driver_DALI2": "LDD",
+    # Electrical
+    "EnergyMeter": "MTR",
+    "SubMeter": "SMT",
+    "ThermalMeter": "THM",
+    "Transformer_HT_BT": "TRF",
+    # Parking
+    "ParkingSensorMagnetic": "PKS",
+    "ParkingGuidanceController": "PKC",
+    "EVChargerLevel2": "EVC",
+    "BarrierGate": "BAR",
+    "TicketDispenser": "TKD",
+    "SpeedGate": "SPG",
+    # Fire/Safety
+    "FireExtinguisher": "FEX",
+    "CO_Sensor": "AirQualitySensor",  # Proxy vers AirQualitySensor (HVAC)
+    # AV - noms génériques vers Exploration
+    "Microphone": "TableMicrophone",
+    "Speaker": "CeilingSpeaker",
+    "PeopleCounter": "Occupancy_Sensor",  # Proxy vers occupancy
+}
+
 
 @dataclass
 class EquipmentDef:
     """Définition d'un type d'équipement."""
     code: str
-    domain: str  # Inféré du dossier parent
+    domain: str
     haystack_tag: str
     brick_class: str
     description: str
@@ -24,9 +76,121 @@ class EquipmentDef:
 
 # Fallbacks pour les points par défaut
 DEFAULT_POINTS = [
-    {"name": "status", "unit": "-", "range_min": 0, "range_max": 1, "frequency": 60, "type": "etat"},
-    {"name": "value", "unit": "-", "range_min": 0, "range_max": 100, "frequency": 60, "type": "mesure"},
+    {"name": "status", "unit": "-", "range_min": 0, "range_max": 1, "frequency": 0, "type": "etat"},
+    {"name": "value", "unit": "-", "range_min": 0, "range_max": 100, "frequency": 300, "type": "mesure"},
 ]
+
+
+# =============================================================================
+# CHARGEMENT YAML (config/equipment/*.yaml)
+# =============================================================================
+
+def load_yaml_equipment(config_path: Path) -> Dict[str, EquipmentDef]:
+    """Charge les définitions depuis config/equipment/*.yaml.
+
+    Args:
+        config_path: Chemin vers config/
+
+    Returns:
+        Dict code_équipement -> EquipmentDef
+    """
+    defs = {}
+    equip_dir = config_path / "equipment"
+
+    if not equip_dir.exists():
+        return defs
+
+    for yaml_file in equip_dir.glob("*.yaml"):
+        eq_def = _parse_yaml_equipment(yaml_file)
+        if eq_def:
+            defs[eq_def.code] = eq_def
+
+    return defs
+
+
+def _parse_yaml_equipment(path: Path) -> Optional[EquipmentDef]:
+    """Parse un fichier YAML d'équipement."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except Exception:
+        return None
+
+    if not data or "equipment" not in data:
+        return None
+
+    eq = data["equipment"]
+    points_raw = data.get("points", [])
+
+    # Convertir les points au format interne
+    points = [_convert_yaml_point(p) for p in points_raw]
+
+    return EquipmentDef(
+        code=eq.get("code", path.stem),
+        domain=eq.get("domain", "Unknown"),
+        haystack_tag=eq.get("haystack", ""),
+        brick_class=eq.get("brick", ""),
+        description=eq.get("desc", ""),
+        characteristics={},
+        points=points,
+    )
+
+
+def _convert_yaml_point(p: dict) -> dict:
+    """Convertit un point YAML au format générateur."""
+    freq_key = p.get("freq", "normal")
+    frequency = FREQ_MAP.get(freq_key, 300)
+
+    # Inférer range depuis quantity ou unit
+    range_min, range_max = _infer_range(p)
+
+    return {
+        "name": p.get("id", "unknown"),
+        "unit": p.get("unit", "-"),
+        "range_min": range_min,
+        "range_max": range_max,
+        "frequency": frequency,
+        "type": p.get("type", "mesure"),
+        "freq_category": freq_key,  # Garder pour le simulateur
+    }
+
+
+def _infer_range(p: dict) -> tuple:
+    """Infère les bornes min/max depuis quantity ou unit."""
+    quantity = p.get("quantity", "").lower()
+    unit = p.get("unit", "").lower()
+
+    # Ranges par défaut selon quantity
+    ranges = {
+        "temperature": (10.0, 35.0),
+        "humidity": (0.0, 100.0),
+        "pressure": (0.0, 1000.0),
+        "differential_pressure": (0.0, 500.0),
+        "co2": (350.0, 2000.0),
+        "speed": (0.0, 100.0),
+        "position": (0.0, 100.0),
+        "power": (0.0, 1000.0),
+        "energy": (0.0, 100000.0),
+        "flow": (0.0, 5000.0),
+        "level": (0.0, 100.0),
+        "voltage": (380.0, 420.0),
+        "current": (0.0, 1000.0),
+    }
+
+    if quantity in ranges:
+        return ranges[quantity]
+
+    # Fallback par unit
+    if "°c" in unit:
+        return (10.0, 35.0)
+    elif "%" in unit:
+        return (0.0, 100.0)
+    elif unit in ("pa", "mbar"):
+        return (0.0, 1000.0)
+    elif unit in ("ppm",):
+        return (350.0, 2000.0)
+
+    return (0.0, 100.0)
 
 # Patterns de colonnes reconnus (français)
 COLUMN_PATTERNS = {
@@ -403,18 +567,38 @@ def extract(content: str, pattern: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def resolve_equipment_type(equipment_type: str) -> str:
+    """Résout un type d'équipement via alias si nécessaire.
+
+    Args:
+        equipment_type: Nom long ou code court
+
+    Returns:
+        Code court (ou le type original si pas d'alias)
+    """
+    return EQUIPMENT_ALIAS.get(equipment_type, equipment_type)
+
+
 def get_equipment_by_type(defs: Dict[str, EquipmentDef], equipment_type: str) -> Optional[EquipmentDef]:
     """Trouve une définition d'équipement par type.
 
     Args:
         defs: Dict des définitions chargées
-        equipment_type: Type d'équipement (ex: "FCU", "AHU")
+        equipment_type: Type d'équipement (ex: "FCU", "AHU", "DALI_Gateway")
 
     Returns:
         EquipmentDef correspondante ou None
     """
+    # Résoudre alias si présent
+    resolved = resolve_equipment_type(equipment_type)
+
+    # Chercher par code résolu
+    if resolved in defs:
+        return defs[resolved]
+
+    # Fallback: chercher par chemin (Domain/Name)
     for key, eq_def in defs.items():
-        if eq_def.code == equipment_type or key.endswith(f"/{equipment_type}"):
+        if eq_def.code == resolved or key.endswith(f"/{equipment_type}"):
             return eq_def
     return None
 
