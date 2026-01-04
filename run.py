@@ -817,7 +817,9 @@ def workflow_generate():
 def workflow_benchmark():
     """Run benchmark on selected dataset."""
     log_section("EXÉCUTION DU BENCHMARK")
-    
+
+    repo_root = Path(__file__).parent
+
     # Check datasets
     datasets = get_available_datasets()
     if not datasets:
