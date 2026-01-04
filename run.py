@@ -866,33 +866,33 @@ def workflow_benchmark():
                     ram_levels.append(float(x.rstrip("gb")))
             ram_levels = sorted(set(ram_levels))  # Sort and dedupe
     else:  # AUTO
-        # Intelligent estimation based on dataset size and timeseries count
+        # Intelligent estimation based on dataset size
         ds_size_mb = selected_ds['size_mb']
-        ts_count = selected_ds.get('timeseries', 0)
-        points_count = ts_count  # timeseries rows ≈ data volume indicator
 
-        # Heuristic: PostgreSQL needs ~2-3x data size for indexes + working memory
-        # TimescaleDB is more efficient with compression
-        # Memgraph needs more RAM (in-memory graph)
+        # Heuristic based on Parquet size on disk:
+        # - PostgreSQL: ~1.5-2x Parquet size with indexes
+        # - TimescaleDB: very efficient compression, often < Parquet
+        # - Memgraph: ~3-5x for in-memory property graph
+        # We use aggressive low RAM levels to find the minimum viable allocation
 
-        if ds_size_mb < 50:  # < 50MB (small-2d type)
+        if ds_size_mb < 100:  # < 100MB (small-2d ~25MB parquet)
             ram_levels = [0.5, 1, 2, 4]
             log(f"Dataset très petit ({ds_size_mb:.0f}MB) → RAM: 512MB, 1, 2, 4 GB", "info")
-        elif ds_size_mb < 200:  # < 200MB (small-1w type)
+        elif ds_size_mb < 500:  # < 500MB (small-1w, small with exports ~374MB)
+            ram_levels = [0.5, 1, 2, 4]
+            log(f"Dataset petit ({ds_size_mb:.0f}MB) → RAM: 512MB, 1, 2, 4 GB", "info")
+        elif ds_size_mb < 2048:  # < 2GB (medium-1w type)
             ram_levels = [1, 2, 4, 8]
-            log(f"Dataset petit ({ds_size_mb:.0f}MB) → RAM: 1, 2, 4, 8 GB", "info")
-        elif ds_size_mb < 1024:  # < 1GB (medium-1w type)
+            log(f"Dataset moyen ({ds_size_mb:.0f}MB) → RAM: 1, 2, 4, 8 GB", "info")
+        elif ds_size_mb < 8192:  # < 8GB (large-1w type)
             ram_levels = [2, 4, 8, 16]
-            log(f"Dataset moyen ({ds_size_mb:.0f}MB) → RAM: 2, 4, 8, 16 GB", "info")
-        elif ds_size_mb < 5120:  # < 5GB (large-1w type)
+            log(f"Dataset large ({ds_size_mb/1024:.1f}GB) → RAM: 2, 4, 8, 16 GB", "info")
+        elif ds_size_mb < 30720:  # < 30GB (large-1m / xlarge-1w type)
             ram_levels = [4, 8, 16, 32]
-            log(f"Dataset large ({ds_size_mb/1024:.1f}GB) → RAM: 4, 8, 16, 32 GB", "info")
-        elif ds_size_mb < 20480:  # < 20GB (large-1m / xlarge-1w type)
+            log(f"Dataset très large ({ds_size_mb/1024:.1f}GB) → RAM: 4, 8, 16, 32 GB", "info")
+        else:  # >= 30GB (xlarge-1m+ type)
             ram_levels = [8, 16, 32, 64]
-            log(f"Dataset très large ({ds_size_mb/1024:.1f}GB) → RAM: 8, 16, 32, 64 GB", "info")
-        else:  # >= 20GB (xlarge-1m+ type)
-            ram_levels = [16, 32, 64, 128]
-            log(f"Dataset massif ({ds_size_mb/1024:.1f}GB) → RAM: 16, 32, 64, 128 GB", "info")
+            log(f"Dataset massif ({ds_size_mb/1024:.1f}GB) → RAM: 8, 16, 32, 64 GB", "info")
 
     log(f"Niveaux RAM: {', '.join(format_ram(r) for r in ram_levels)}", "ok")
     
