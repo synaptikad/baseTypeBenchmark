@@ -81,15 +81,38 @@ def read_memory_peak(cgroup_path: Path) -> int:
 
 
 def reset_memory_peak(cgroup_path: Path) -> bool:
-    """Reset memory.peak counter (requires root)."""
+    """Reset memory.peak counter (requires root).
+
+    Returns True only if peak was actually reset (value decreased).
+    """
     peak_file = cgroup_path / "memory.peak"
-    if peak_file.exists():
+    if not peak_file.exists():
+        return False
+
+    try:
+        # 1. Read BEFORE
+        peak_before = int(peak_file.read_text().strip())
+
+        # 2. Write "0"
         try:
             peak_file.write_text("0")
-            return True
         except PermissionError:
-            return False
-    return False
+            # Try with sudo if direct write fails (cgroup files often need root)
+            if not str(peak_file).startswith("/sys/fs/cgroup/"):
+                return False
+            result = subprocess.run(
+                ["sudo", "-n", "tee", str(peak_file)],
+                input="0", text=True, capture_output=True,
+            )
+            if result.returncode != 0:
+                return False
+
+        # 3. Verify AFTER - did the reset actually work?
+        peak_after = int(peak_file.read_text().strip())
+        return peak_after < peak_before
+
+    except Exception:
+        return False
 
 
 def read_cpu_usage(cgroup_path: Path) -> int:
