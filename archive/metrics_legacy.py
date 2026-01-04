@@ -80,18 +80,23 @@ def get_cgroup_metrics(cgroup_path: str) -> Optional[Dict]:
 
 
 def reset_memory_peak(cgroup_path: str) -> bool:
-    """Reset memory.peak counter to current value (requires root/sudo)."""
+    """Reset memory.peak counter (requires root/sudo).
+
+    Returns True only if peak was actually reset (value decreased).
+    """
     if not cgroup_path:
         return False
     try:
         mem_peak = Path(cgroup_path) / "memory.peak"
         if not mem_peak.exists():
             return False
-        
-        # Try direct write first
+
+        # 1. Read BEFORE
+        peak_before = int(mem_peak.read_text().strip())
+
+        # 2. Write "0"
         try:
             mem_peak.write_text("0")
-            return True
         except PermissionError:
             # Requires sudo - try non-interactive
             if not str(mem_peak).startswith("/sys/fs/cgroup/"):
@@ -100,7 +105,12 @@ def reset_memory_peak(cgroup_path: str) -> bool:
                 ["sudo", "-n", "tee", str(mem_peak)],
                 input="0", text=True, capture_output=True,
             )
-            return r.returncode == 0
+            if r.returncode != 0:
+                return False
+
+        # 3. Verify AFTER - did the reset actually work?
+        peak_after = int(mem_peak.read_text().strip())
+        return peak_after < peak_before
     except Exception:
         return False
 

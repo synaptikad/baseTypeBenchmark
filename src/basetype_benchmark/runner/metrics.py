@@ -1,34 +1,23 @@
 """Resource metrics collection via cgroup v2.
 
 Collects RAM, CPU usage from Docker containers using cgroup v2 interface.
+Consolidated module - single source of truth for all metrics operations.
 """
 
 import os
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Event, Thread
 from typing import Dict, List, Optional
-from threading import Thread, Event
+
+IS_LINUX = os.name == "posix" and os.path.exists("/sys/fs/cgroup")
 
 
-@dataclass
-class ResourceSnapshot:
-    """Single resource measurement."""
-    timestamp: float
-    mem_bytes: int
-    cpu_usage_usec: int
-
-
-@dataclass
-class ResourceStats:
-    """Aggregated resource statistics."""
-    mem_mb_avg: float = 0.0
-    mem_mb_max: float = 0.0
-    mem_mb_min: float = 0.0
-    cpu_pct_avg: float = 0.0
-    samples: int = 0
-
+# =============================================================================
+# Low-level cgroup functions
+# =============================================================================
 
 def get_cgroup_path(container_name: str) -> Optional[Path]:
     """Get cgroup v2 path for a container.
@@ -39,29 +28,34 @@ def get_cgroup_path(container_name: str) -> Optional[Path]:
     Returns:
         Path to cgroup directory or None if not found
     """
-    # Get container ID
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.Id}}", container_name],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
+    if not IS_LINUX:
         return None
 
-    container_id = result.stdout.strip()
-    if not container_id:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Id}}", container_name],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return None
+
+        container_id = result.stdout.strip()
+        if not container_id:
+            return None
+
+        # cgroup v2 paths (Linux)
+        candidates = [
+            Path(f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope"),
+            Path(f"/sys/fs/cgroup/docker/{container_id}"),
+        ]
+
+        for path in candidates:
+            if path.exists():
+                return path
+
         return None
-
-    # cgroup v2 paths (Linux)
-    candidates = [
-        Path(f"/sys/fs/cgroup/system.slice/docker-{container_id}.scope"),
-        Path(f"/sys/fs/cgroup/docker/{container_id}"),
-    ]
-
-    for path in candidates:
-        if path.exists():
-            return path
-
-    return None
+    except Exception:
+        return None
 
 
 def read_memory_current(cgroup_path: Path) -> int:
@@ -85,6 +79,9 @@ def reset_memory_peak(cgroup_path: Path) -> bool:
 
     Returns True only if peak was actually reset (value decreased).
     """
+    if not cgroup_path:
+        return False
+
     peak_file = cgroup_path / "memory.peak"
     if not peak_file.exists():
         return False
@@ -123,6 +120,175 @@ def read_cpu_usage(cgroup_path: Path) -> int:
             if line.startswith("usage_usec"):
                 return int(line.split()[1])
     return 0
+
+
+def get_cgroup_metrics(cgroup_path: Path) -> Optional[Dict]:
+    """Read all cgroup v2 metrics from filesystem.
+
+    Returns:
+        Dict with memory_bytes, memory_peak_bytes, cpu_usage_usec, etc.
+    """
+    if not cgroup_path or not cgroup_path.exists():
+        return None
+
+    metrics = {}
+    try:
+        mem_current = cgroup_path / "memory.current"
+        if mem_current.exists():
+            metrics["memory_bytes"] = int(mem_current.read_text().strip())
+
+        mem_peak = cgroup_path / "memory.peak"
+        if mem_peak.exists():
+            metrics["memory_peak_bytes"] = int(mem_peak.read_text().strip())
+
+        cpu_stat = cgroup_path / "cpu.stat"
+        if cpu_stat.exists():
+            for line in cpu_stat.read_text().strip().split("\n"):
+                parts = line.split()
+                if len(parts) == 2:
+                    key, value = parts
+                    if key == "usage_usec":
+                        metrics["cpu_usage_usec"] = int(value)
+                    elif key == "user_usec":
+                        metrics["cpu_user_usec"] = int(value)
+                    elif key == "system_usec":
+                        metrics["cpu_system_usec"] = int(value)
+
+        return metrics if metrics else None
+    except Exception:
+        return None
+
+
+# =============================================================================
+# High-level Metrics class (used by run.py)
+# =============================================================================
+
+@dataclass
+class Metrics:
+    """Container metrics snapshot."""
+    container: str
+    timestamp: float
+    memory_mb: float
+    memory_peak_mb: float
+    cpu_time_sec: float
+    cgroup_path: Optional[Path] = None
+
+    @classmethod
+    def capture(cls, container_name: str) -> "Metrics":
+        """Capture current metrics for a container."""
+        cgroup_path = get_cgroup_path(container_name)
+        metrics = get_cgroup_metrics(cgroup_path) if cgroup_path else None
+
+        if metrics:
+            return cls(
+                container=container_name,
+                timestamp=time.time(),
+                memory_mb=metrics.get("memory_bytes", 0) / (1024 * 1024),
+                memory_peak_mb=metrics.get("memory_peak_bytes", 0) / (1024 * 1024),
+                cpu_time_sec=metrics.get("cpu_usage_usec", 0) / 1_000_000,
+                cgroup_path=cgroup_path,
+            )
+
+        # Fallback to docker stats
+        return cls._from_docker_stats(container_name)
+
+    @classmethod
+    def _from_docker_stats(cls, container_name: str) -> "Metrics":
+        """Fallback: get metrics from docker stats."""
+        try:
+            result = subprocess.run(
+                f"docker stats --no-stream --format '{{{{.MemUsage}}}}' {container_name}",
+                shell=True, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                usage = result.stdout.strip().split("/")[0].strip()
+                mem_mb = 0.0
+                if "GiB" in usage:
+                    mem_mb = float(usage.replace("GiB", "").strip()) * 1024
+                elif "MiB" in usage:
+                    mem_mb = float(usage.replace("MiB", "").strip())
+
+                return cls(
+                    container=container_name,
+                    timestamp=time.time(),
+                    memory_mb=mem_mb,
+                    memory_peak_mb=mem_mb,  # No peak available via docker stats
+                    cpu_time_sec=0.0,
+                )
+        except Exception:
+            pass
+
+        return cls(
+            container=container_name,
+            timestamp=time.time(),
+            memory_mb=0.0,
+            memory_peak_mb=0.0,
+            cpu_time_sec=0.0,
+        )
+
+    def reset_peak(self) -> bool:
+        """Reset memory peak counter (for query-only measurements)."""
+        if self.cgroup_path:
+            return reset_memory_peak(self.cgroup_path)
+        return False
+
+
+def compute_delta(before: Metrics, after: Metrics) -> Dict:
+    """Compute resource usage delta between two snapshots."""
+    wall_time = after.timestamp - before.timestamp
+    cpu_delta = after.cpu_time_sec - before.cpu_time_sec
+
+    return {
+        "memory_before_mb": before.memory_mb,
+        "memory_after_mb": after.memory_mb,
+        "memory_delta_mb": after.memory_mb - before.memory_mb,
+        "memory_peak_mb": after.memory_peak_mb,
+        "cpu_time_sec": cpu_delta,
+        "cpu_percent": (cpu_delta / wall_time * 100) if wall_time > 0 else 0.0,
+        "wall_time_sec": wall_time,
+    }
+
+
+def check_oom(container_name: str) -> bool:
+    """Check if container was OOM-killed."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.OOMKilled}}", container_name],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.stdout.strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def get_peak_memory_mb(container_name: str) -> float:
+    """Get peak memory usage for a container in MB."""
+    cgroup_path = get_cgroup_path(container_name)
+    if cgroup_path:
+        return read_memory_peak(cgroup_path) / (1024 * 1024)
+    return 0.0
+
+
+# =============================================================================
+# Background monitoring (for stress tests / continuous monitoring)
+# =============================================================================
+
+@dataclass
+class ResourceSnapshot:
+    """Single resource measurement."""
+    timestamp: float
+    mem_bytes: int
+    cpu_usage_usec: int
+
+
+@dataclass
+class ResourceStats:
+    """Aggregated resource statistics."""
+    mem_mb_avg: float = 0.0
+    mem_mb_max: float = 0.0
+    mem_mb_min: float = 0.0
+    cpu_pct_avg: float = 0.0
+    samples: int = 0
 
 
 class ResourceMonitor:
@@ -198,11 +364,3 @@ class ResourceMonitor:
             cpu_pct_avg=sum(cpu_pcts) / len(cpu_pcts) if cpu_pcts else 0,
             samples=len(self._samples),
         )
-
-
-def get_peak_memory_mb(container_name: str) -> float:
-    """Get peak memory usage for a container in MB."""
-    cgroup_path = get_cgroup_path(container_name)
-    if cgroup_path:
-        return read_memory_peak(cgroup_path) / (1024 * 1024)
-    return 0.0

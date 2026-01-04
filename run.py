@@ -24,7 +24,7 @@ from typing import Optional, List, Dict, Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 # Import cgroup-based metrics (precise Linux measurements)
-from metrics import Metrics, compute_delta, check_oom
+from basetype_benchmark.runner.metrics import Metrics, compute_delta, check_oom
 
 
 # Custom JSON encoder for Decimal and other types
@@ -1119,26 +1119,38 @@ def workflow_benchmark():
 
                 try:
                     # Reset peak RAM before each query for accurate per-query measurement
+                    peak_reset_ok = True
                     for container in sc_info["containers"]:
                         m = get_container_metrics(container)
-                        m.reset_peak()
+                        if not m.reset_peak():
+                            peak_reset_ok = False
 
                     # Small pause to let memory stabilize (GC, buffers)
                     time.sleep(0.1)
 
-                    # Capture metrics before query
+                    # Capture metrics BEFORE query (baseline peak after reset attempt)
                     m_before = {c: get_container_metrics(c) for c in sc_info["containers"]}
+                    peak_before = sum(m_before[c].memory_peak_mb for c in sc_info["containers"])
 
                     row_count, latency_ms, rows_data = execute_query_for_scenario(
                         scenario, query, selected_ds["path"], return_rows=True
                     )
 
-                    # Capture metrics after query (peak is now query-specific)
+                    # Capture metrics AFTER query
                     m_after = {c: get_container_metrics(c) for c in sc_info["containers"]}
-                    
-                    # Aggregate RAM across all containers (sum, not max)
+
+                    # Calculate peak for this query
                     query_mem_mb = sum(m_after[c].memory_mb for c in sc_info["containers"])
-                    query_peak_mb = sum(m_after[c].memory_peak_mb for c in sc_info["containers"])
+                    peak_after = sum(m_after[c].memory_peak_mb for c in sc_info["containers"])
+
+                    # If reset worked, peak_after IS the query peak
+                    # If reset failed, use delta (peak_after - peak_before) + current mem as estimate
+                    if peak_reset_ok:
+                        query_peak_mb = peak_after
+                    else:
+                        # Fallback: peak delta + baseline memory
+                        peak_delta = peak_after - peak_before
+                        query_peak_mb = query_mem_mb + max(0, peak_delta)
                     
                     # Per-container breakdown for detailed analysis
                     mem_breakdown = {c: {
