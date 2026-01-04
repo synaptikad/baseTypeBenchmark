@@ -953,43 +953,50 @@ def workflow_benchmark():
 
     log(f"Niveaux RAM: {', '.join(format_ram(r) for r in ram_levels)}", "ok")
     
-    # Query selection
-    log_subsection("Sélection des requêtes")
-    print("  Requêtes benchmark (Q1-Q13):\n")
-    print("  • Q1-Q5:   Traversées de graphe (structure)")
-    print("  • Q6-Q7:   Agrégations séries temporelles")
-    print("  • Q8-Q13:  Requêtes hybrides (graphe + séries)")
-    
-    print()
-    query_choice = prompt("Requêtes (ALL ou liste: Q1,Q4,Q6)", "ALL")
-    
-    if query_choice.upper() == "ALL":
-        queries = QUERIES
-    else:
-        queries = [q.strip().upper() for q in query_choice.split(",")]
-    
-    log(f"Requêtes: {', '.join(queries)}", "ok")
-
-    # Workload selection
+    # Workload selection (before queries - workload defines its own queries)
     workload_config = select_workload(repo_root)
+
     if workload_config:
-        log(f"Workload: {workload_config.name}", "ok")
+        # Workload mode: queries defined by workload config
+        queries = QUERIES  # Used for expansion, actual selection by workload
+        log(f"Workload: {workload_config.name} ({workload_config.execution.iterations} queries)", "ok")
     else:
-        log("Mode séquentiel (défaut)", "info")
+        # Sequential mode: manual query selection
+        log_subsection("Sélection des requêtes")
+        print("  • Q1-Q5:   Graphe (structure)")
+        print("  • Q6-Q7:   Timeseries (agrégations)")
+        print("  • Q8-Q13:  Hybrid (graphe + TS)")
+        print()
+        query_choice = prompt("Requêtes (ALL ou Q1,Q4,Q6)", "ALL")
+
+        if query_choice.upper() == "ALL":
+            queries = QUERIES
+        else:
+            queries = [q.strip().upper() for q in query_choice.split(",")]
+
+        log(f"Mode séquentiel: {len(queries)} queries ({queries[0]}→{queries[-1]})", "ok")
 
     # Summary
     log_subsection("Récapitulatif")
 
     total_combinations = len(scenarios) * len(ram_levels)
-    total_runs = total_combinations * len(queries)
     print(f"  Dataset:    {BOLD}{selected_ds['name']}{RESET}")
     print(f"  Scénarios:  {', '.join(scenarios)} ({len(scenarios)})")
     print(f"  RAM:        {', '.join(format_ram(r) for r in ram_levels)} ({len(ram_levels)} niveaux)")
-    print(f"  Requêtes:   {len(queries)} ({queries[0]}...{queries[-1]})")
+
+    if workload_config:
+        n_queries = workload_config.execution.iterations
+        print(f"  Workload:   {workload_config.name} ({n_queries} queries)")
+        total_runs = total_combinations * n_queries
+    else:
+        n_queries = len(queries)
+        print(f"  Requêtes:   {n_queries} ({queries[0]}→{queries[-1]})")
+        total_runs = total_combinations * n_queries
+
     print()
-    print(f"  {BOLD}Total:      {len(scenarios)} × {len(ram_levels)} × {len(queries)} = {total_runs} exécutions{RESET}")
-    
-    est_time = total_combinations * 120 + total_runs * 3  # ~2min load + 3s/query
+    print(f"  {BOLD}Total: {len(scenarios)} scénarios × {len(ram_levels)} RAM × {n_queries} queries = {total_runs}{RESET}")
+
+    est_time = total_combinations * 60 + total_runs * 2  # ~1min load + 2s/query
     print(f"  Durée est.: ~{elapsed_str(est_time)}")
     
     print()
