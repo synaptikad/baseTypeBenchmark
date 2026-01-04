@@ -3,17 +3,17 @@
 
 workload:
   name: bos_operational
-  description: "BOS middleware stress test - 5min duration, 4 threads, weighted queries"
+  description: "BOS stress test - 50 queries, weighted random, 2 threads"
   version: "1.0"
 
 metrics:
   strategy: aggregate
 
 execution:
-  mode: duration
-  duration_seconds: 300
-  concurrency: 4
-  warmup_iterations: 20
+  mode: iterations
+  iterations: 50
+  concurrency: 2
+  warmup_iterations: 5
 
 queries:
   # Dashboard queries - very frequent (operators monitoring)

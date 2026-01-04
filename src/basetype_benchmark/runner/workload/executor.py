@@ -98,6 +98,7 @@ class WorkloadExecutor:
         query_executor: QueryExecutorFn,
         containers: List[str],
         all_queries: List[str],
+        progress_callback: Optional[Callable[[int, float, str], None]] = None,
     ):
         """Initialize executor.
 
@@ -106,10 +107,12 @@ class WorkloadExecutor:
             query_executor: Function to execute a query, returns (row_count, latency_ms, error)
             containers: Container names without btb_ prefix
             all_queries: List of all available query IDs
+            progress_callback: Optional fn(query_count, elapsed_s, last_query_id) for live feedback
         """
         self.config = config
         self.query_executor = query_executor
         self.containers = containers
+        self.progress_callback = progress_callback
 
         # Expand queries (handle ALL)
         self.queries = config.expand_queries(all_queries)
@@ -128,6 +131,8 @@ class WorkloadExecutor:
         # Thread safety
         self._lock = Lock()
         self._stop_flag = False
+        self._query_count = 0
+        self._start_time = 0.0
 
     def run(self) -> WorkloadResult:
         """Execute the workload.
@@ -135,7 +140,8 @@ class WorkloadExecutor:
         Returns:
             WorkloadResult with all metrics
         """
-        start_time = time.time()
+        self._start_time = time.time()
+        self._query_count = 0
 
         # Signal workload start to collector
         self.collector.on_workload_start()
@@ -280,6 +286,13 @@ class WorkloadExecutor:
             error = str(e)
 
         latency_ms = (time.time() - start) * 1000
+
+        # Update counter and notify progress
+        with self._lock:
+            self._query_count += 1
+            if self.progress_callback:
+                elapsed = time.time() - self._start_time
+                self.progress_callback(self._query_count, elapsed, query.id)
 
         return self.collector.after_query(query.id, latency_ms, row_count, error)
 
