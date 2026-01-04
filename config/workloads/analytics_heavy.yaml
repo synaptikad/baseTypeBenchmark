@@ -1,19 +1,19 @@
-# Analytics-heavy workload
-# Simulates batch analysis / reporting system
+# Analytics-heavy workload - focus Q6-Q12 (hybrid queries)
+# Usage: Test performance of analytics/timeseries joins
 
 workload:
   name: analytics_heavy
-  description: "Focus on hybrid analytics queries (Q6-Q12)"
+  description: "50 analytics queries (Q6-Q12) - hybrid graph+timeseries"
   version: "1.0"
 
 metrics:
   strategy: aggregate
 
 execution:
-  mode: duration
-  duration_seconds: 120
-  concurrency: 2
-  warmup_iterations: 15
+  mode: iterations
+  iterations: 50
+  concurrency: 1
+  warmup_iterations: 3
 
 queries:
   - id: Q6

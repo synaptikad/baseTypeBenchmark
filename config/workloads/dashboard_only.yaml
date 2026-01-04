@@ -1,9 +1,9 @@
-# Dashboard-only workload
-# Simulates operator console refreshing frequently
+# Dashboard-only workload - Q1-Q5 (pure graph traversal)
+# Usage: Test graph engine performance without timeseries
 
 workload:
   name: dashboard_only
-  description: "Dashboard queries only - high frequency graph traversals"
+  description: "50 dashboard queries (Q1-Q5) - pure graph traversal"
   version: "1.0"
 
 metrics:
@@ -11,9 +11,9 @@ metrics:
 
 execution:
   mode: iterations
-  iterations: 500
-  concurrency: 2
-  warmup_iterations: 10
+  iterations: 50
+  concurrency: 1
+  warmup_iterations: 3
 
 queries:
   - id: Q1

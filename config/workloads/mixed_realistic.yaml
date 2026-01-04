@@ -1,19 +1,19 @@
-# Mixed realistic workload
-# Balanced mix simulating typical BOS daily operation
+# Mixed realistic workload - all Q1-Q13 weighted
+# Usage: Balanced test of entire query portfolio
 
 workload:
   name: mixed_realistic
-  description: "Balanced daily BOS operation - all query types"
+  description: "50 mixed queries (Q1-Q13) - balanced workload"
   version: "1.0"
 
 metrics:
   strategy: aggregate
 
 execution:
-  mode: duration
-  duration_seconds: 180
-  concurrency: 3
-  warmup_iterations: 10
+  mode: iterations
+  iterations: 50
+  concurrency: 1
+  warmup_iterations: 3
 
 queries:
   # Dashboard (50% of traffic)
