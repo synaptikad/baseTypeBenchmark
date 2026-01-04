@@ -163,7 +163,7 @@ class WorkloadExecutor:
         strategy_stats = self.collector.on_workload_end()
 
         end_time = time.time()
-        duration = end_time - start_time
+        duration = end_time - self._start_time
 
         # Compute results
         results = self.collector.get_results()
