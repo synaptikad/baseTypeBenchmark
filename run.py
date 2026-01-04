@@ -1055,7 +1055,29 @@ def workflow_benchmark():
                     continue
             
             first_ram_run = False
-            
+
+            # Check for OOM after load (container may have crashed)
+            from metrics import check_oom
+            oom_detected = False
+            for container in sc_info["containers"]:
+                container_name = f"btb_{container}"
+                # Check if container is still running
+                check = subprocess.run(
+                    f"docker ps -q --filter 'name={container_name}'",
+                    shell=True, capture_output=True, text=True
+                )
+                if not check.stdout.strip():
+                    log(f"Container {container} mort après load (probable OOM)", "error")
+                    oom_detected = True
+                elif check_oom(container_name):
+                    log(f"OOM détecté sur {container}", "error")
+                    oom_detected = True
+
+            if oom_detected:
+                all_results[scenario][ram_gb] = {"status": "oom", "queries": {}}
+                docker_stop_all()
+                continue
+
             # Capture metrics after load and RESET peak for query-only measurement
             metrics_after_load = {}
             total_mem_after_load = 0
@@ -1094,16 +1116,24 @@ def workflow_benchmark():
             for q_idx, query in enumerate(queries, 1):
                 progress = progress_bar(q_idx, len(queries), width=30, prefix=f"  {scenario}@{ram_str} ")
                 print(f"\r{progress} {query}...", end="", flush=True)
-                
+
                 try:
+                    # Reset peak RAM before each query for accurate per-query measurement
+                    for container in sc_info["containers"]:
+                        m = get_container_metrics(container)
+                        m.reset_peak()
+
+                    # Small pause to let memory stabilize (GC, buffers)
+                    time.sleep(0.1)
+
                     # Capture metrics before query
                     m_before = {c: get_container_metrics(c) for c in sc_info["containers"]}
-                    
+
                     row_count, latency_ms, rows_data = execute_query_for_scenario(
                         scenario, query, selected_ds["path"], return_rows=True
                     )
-                    
-                    # Capture metrics after query (includes peak since reset)
+
+                    # Capture metrics after query (peak is now query-specific)
                     m_after = {c: get_container_metrics(c) for c in sc_info["containers"]}
                     
                     # Aggregate RAM across all containers (sum, not max)
@@ -1202,7 +1232,7 @@ def workflow_benchmark():
         
         for ram_gb in ram_levels:
             results = all_results.get(scenario, {}).get(ram_gb, {})
-            if results.get("status") == "OOM":
+            if results.get("status") in ("oom", "OOM"):
                 cell = f"{RED}OOM{RESET}"
             elif "queries" in results:
                 ok_count = sum(1 for q in results["queries"].values() if q.get("status") == "ok")
