@@ -706,12 +706,14 @@ class PostgresEngine:
         self.conn.commit()
 
         # Prefer in-container parallel-copy if the file is mounted at /data/parquet/
+        # parallel-copy handles: logged table, hypertable, indexes
         try:
             ts_rows = self.load_timeseries_parallel_copy(
                 "/data/parquet/timeseries_enriched.csv",
                 csv_columns="time,point_id,building_id,value",
             )
         except Exception as e:
+            # Fallback: client-side COPY + manual logged/hypertable/indexes
             print(f"  [WARN] parallel-copy failed ({e}); falling back to client-side COPY...")
             print(f"  [LOAD] COPY FROM file...")
             t_load = time.time()
@@ -725,37 +727,37 @@ class PostgresEngine:
             load_time = time.time() - t_load
             print(f"  [LOAD] COPY done: {total_rows:,} rows in {load_time:.1f}s ({total_rows/load_time:,.0f}/s)")
 
-        # Convert to LOGGED table
-        print(f"  [LOAD] Converting to logged table...")
-        t_log = time.time()
-        with self.conn.cursor() as cur:
-            cur.execute("ALTER TABLE timeseries SET LOGGED")
-        self.conn.commit()
-        print(f"  [LOAD] Logged in {time.time() - t_log:.1f}s")
+            # Convert to LOGGED table (only needed for fallback path)
+            print(f"  [LOAD] Converting to logged table...")
+            t_log = time.time()
+            with self.conn.cursor() as cur:
+                cur.execute("ALTER TABLE timeseries SET LOGGED")
+            self.conn.commit()
+            print(f"  [LOAD] Logged in {time.time() - t_log:.1f}s")
 
-        # Convert to hypertable
-        print(f"  [LOAD] Creating hypertable...")
-        t_hyper = time.time()
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                SELECT create_hypertable(
-                    'timeseries', 'time',
-                    chunk_time_interval => interval '1 day',
-                    migrate_data => TRUE,
-                    if_not_exists => TRUE
-                )
-            """)
-        self.conn.commit()
-        print(f"  [LOAD] Hypertable created in {time.time() - t_hyper:.1f}s")
+            # Convert to hypertable
+            print(f"  [LOAD] Creating hypertable...")
+            t_hyper = time.time()
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT create_hypertable(
+                        'timeseries', 'time',
+                        chunk_time_interval => interval '1 day',
+                        migrate_data => TRUE,
+                        if_not_exists => TRUE
+                    )
+                """)
+            self.conn.commit()
+            print(f"  [LOAD] Hypertable created in {time.time() - t_hyper:.1f}s")
 
-        # Create indexes
-        print(f"  [LOAD] Creating indexes...")
-        t_idx = time.time()
-        with self.conn.cursor() as cur:
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries (point_id, time DESC)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_timeseries_building ON timeseries (building_id, time DESC)")
-        self.conn.commit()
-        print(f"  [LOAD] Indexes created in {time.time() - t_idx:.1f}s")
+            # Create indexes
+            print(f"  [LOAD] Creating indexes...")
+            t_idx = time.time()
+            with self.conn.cursor() as cur:
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries (point_id, time DESC)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_timeseries_building ON timeseries (building_id, time DESC)")
+            self.conn.commit()
+            print(f"  [LOAD] Indexes created in {time.time() - t_idx:.1f}s")
 
         total_time = time.time() - t0
         print(f"  [LOAD] Total timeseries load: {total_time:.1f}s ({total_rows/total_time:,.0f}/s overall)")
