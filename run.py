@@ -1057,7 +1057,7 @@ def workflow_benchmark():
             first_ram_run = False
 
             # Check for OOM after load (container may have crashed)
-            from metrics import check_oom
+            # check_oom already imported at top level
             oom_detected = False
             for container in sc_info["containers"]:
                 container_name = f"btb_{container}"
