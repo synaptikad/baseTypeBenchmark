@@ -1,0 +1,21 @@
+# Debug mode - reproduces current behavior
+# Each query executed once in order, with per-query peak reset
+
+workload:
+  name: debug_sequential
+  description: "Sequential execution Q1->Q13, reset peak between queries (debug mode)"
+  version: "1.0"
+
+metrics:
+  strategy: per_query
+
+execution:
+  mode: sequential
+  iterations_per_query: 1
+  concurrency: 1
+
+queries:
+  - id: ALL
+
+selection:
+  strategy: sequential

@@ -1,0 +1,43 @@
+# Analytics-heavy workload
+# Simulates batch analysis / reporting system
+
+workload:
+  name: analytics_heavy
+  description: "Focus on hybrid analytics queries (Q6-Q12)"
+  version: "1.0"
+
+metrics:
+  strategy: aggregate
+
+execution:
+  mode: duration
+  duration_seconds: 120
+  concurrency: 2
+  warmup_iterations: 15
+
+queries:
+  - id: Q6
+    weight: 20
+    category: realtime
+  - id: Q7
+    weight: 15
+    category: analytics
+  - id: Q8
+    weight: 15
+    category: analytics
+  - id: Q9
+    weight: 10
+    category: analytics
+  - id: Q10
+    weight: 10
+    category: analytics
+  - id: Q11
+    weight: 10
+    category: analytics
+  - id: Q12
+    weight: 20
+    category: analytics
+
+selection:
+  strategy: weighted_random
+  seed: 456

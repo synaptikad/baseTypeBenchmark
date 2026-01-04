@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 # Import cgroup-based metrics (precise Linux measurements)
 from basetype_benchmark.runner.metrics import Metrics, compute_delta, check_oom
+from basetype_benchmark.runner.workload import WorkloadConfig, WorkloadExecutor
 
 
 # Custom JSON encoder for Decimal and other types
@@ -650,6 +651,43 @@ def confirm(question: str, default: bool = True) -> bool:
     return answer in ("o", "y", "oui", "yes")
 
 
+def select_workload(repo_root: Path) -> Optional[WorkloadConfig]:
+    """Menu interactif pour sélection du workload."""
+    workloads_dir = repo_root / "config" / "workloads"
+    if not workloads_dir.exists():
+        return None
+
+    available = sorted(workloads_dir.glob("*.yaml"))
+    if not available:
+        return None
+
+    log_subsection("Mode d'exécution")
+    print("  [0] Séquentiel (défaut) - Q1→Q13, 1x chaque")
+
+    for i, wl_path in enumerate(available, 1):
+        try:
+            config = WorkloadConfig.load(wl_path)
+            desc = config.description[:45] + "..." if len(config.description) > 45 else config.description
+            print(f"  [{i}] {config.name}: {desc}")
+        except Exception:
+            print(f"  [{i}] {wl_path.stem} (erreur de lecture)")
+
+    print()
+    choice = input("Choix [0]: ").strip()
+    if not choice or choice == "0":
+        return None
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(available):
+            return WorkloadConfig.load(available[idx])
+    except (ValueError, IndexError):
+        pass
+
+    log("Choix invalide, mode séquentiel", "warn")
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # WORKFLOW: GENERATE DATASET
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -913,7 +951,14 @@ def workflow_benchmark():
         queries = [q.strip().upper() for q in query_choice.split(",")]
     
     log(f"Requêtes: {', '.join(queries)}", "ok")
-    
+
+    # Workload selection
+    workload_config = select_workload(repo_root)
+    if workload_config:
+        log(f"Workload: {workload_config.name}", "ok")
+    else:
+        log("Mode séquentiel (défaut)", "info")
+
     # Summary
     log_subsection("Récapitulatif")
 
@@ -973,6 +1018,15 @@ def workflow_benchmark():
     if scenarios_ordered != scenarios:
         log(f"Ordre optimisé: {' → '.join(scenarios_ordered)} (partage TimescaleDB)", "info")
     
+    # Factory pour créer un query_executor compatible WorkloadExecutor
+    def make_query_executor(scenario: str, dataset_path: Path):
+        def executor(query_id: str) -> tuple:
+            row_count, latency_ms, _ = execute_query_for_scenario(
+                scenario, query_id, dataset_path
+            )
+            return (row_count, latency_ms, None)
+        return executor
+
     all_results = {}  # {scenario: {ram_gb: {queries...}}}
     t0_total = time.time()
     
@@ -1113,72 +1167,111 @@ def workflow_benchmark():
             }
             
             print()
-            for q_idx, query in enumerate(queries, 1):
-                progress = progress_bar(q_idx, len(queries), width=30, prefix=f"  {scenario}@{ram_str} ")
-                print(f"\r{progress} {query}...", end="", flush=True)
+            if workload_config:
+                # === Mode Workload YAML ===
+                log(f"Workload: {workload_config.name} ({workload_config.execution.mode.value})", "info")
 
-                try:
-                    # Reset peak RAM before each query for accurate per-query measurement
-                    peak_reset_ok = True
-                    for container in sc_info["containers"]:
-                        m = get_container_metrics(container)
-                        if not m.reset_peak():
-                            peak_reset_ok = False
+                wl_executor = WorkloadExecutor(
+                    config=workload_config,
+                    query_executor=make_query_executor(scenario, selected_ds["path"]),
+                    containers=sc_info["containers"],
+                    all_queries=QUERIES,
+                )
+                wl_result = wl_executor.run()
 
-                    # Small pause to let memory stabilize (GC, buffers)
-                    time.sleep(0.1)
-
-                    # Capture metrics BEFORE query (baseline peak after reset attempt)
-                    m_before = {c: get_container_metrics(c) for c in sc_info["containers"]}
-                    peak_before = sum(m_before[c].memory_peak_mb for c in sc_info["containers"])
-
-                    row_count, latency_ms, rows_data = execute_query_for_scenario(
-                        scenario, query, selected_ds["path"], return_rows=True
-                    )
-
-                    # Capture metrics AFTER query
-                    m_after = {c: get_container_metrics(c) for c in sc_info["containers"]}
-
-                    # Calculate peak for this query
-                    query_mem_mb = sum(m_after[c].memory_mb for c in sc_info["containers"])
-                    peak_after = sum(m_after[c].memory_peak_mb for c in sc_info["containers"])
-
-                    # If reset worked, peak_after IS the query peak
-                    # If reset failed, use delta (peak_after - peak_before) + current mem as estimate
-                    if peak_reset_ok:
-                        query_peak_mb = peak_after
-                    else:
-                        # Fallback: peak delta + baseline memory
-                        peak_delta = peak_after - peak_before
-                        query_peak_mb = query_mem_mb + max(0, peak_delta)
-                    
-                    # Per-container breakdown for detailed analysis
-                    mem_breakdown = {c: {
-                        "memory_mb": m_after[c].memory_mb,
-                        "peak_mb": m_after[c].memory_peak_mb,
-                    } for c in sc_info["containers"]}
-                    
-                    scenario_results["queries"][query] = {
-                        "row_count": row_count,
-                        "latency_ms": latency_ms,
-                        "memory_mb": query_mem_mb,
-                        "memory_peak_mb": query_peak_mb,
-                        "memory_by_container": mem_breakdown,
-                        "status": "ok"
+                # Convertir WorkloadResult → format existant
+                for qm in wl_result.query_metrics:
+                    scenario_results["queries"][qm.query_id] = {
+                        "row_count": qm.row_count,
+                        "latency_ms": qm.latency_ms,
+                        "memory_mb": qm.memory_mb,
+                        "memory_peak_mb": qm.peak_memory_mb,
+                        "status": qm.status,
+                        "error": qm.error,
                     }
-                    
-                    # Store response fingerprint for cross-engine validation
-                    if rows_data:
-                        scenario_results["responses"][query] = {
+
+                # Stats workload
+                scenario_results["workload"] = {
+                    "name": wl_result.workload_name,
+                    "total_queries": wl_result.total_queries,
+                    "duration_s": wl_result.total_duration_s,
+                    "throughput_qps": wl_result.throughput_qps,
+                    "latency_p50_ms": wl_result.latency_stats.p50_ms,
+                    "latency_p95_ms": wl_result.latency_stats.p95_ms,
+                    "peak_memory_mb": wl_result.peak_memory_mb,
+                }
+
+                log(f"{wl_result.total_queries} queries en {wl_result.total_duration_s:.1f}s "
+                    f"({wl_result.throughput_qps:.1f} q/s, peak:{wl_result.peak_memory_mb:.0f}MB)", "ok")
+
+            else:
+                # === Mode séquentiel (backward compatible) ===
+                for q_idx, query in enumerate(queries, 1):
+                    progress = progress_bar(q_idx, len(queries), width=30, prefix=f"  {scenario}@{ram_str} ")
+                    print(f"\r{progress} {query}...", end="", flush=True)
+
+                    try:
+                        # Reset peak RAM before each query for accurate per-query measurement
+                        peak_reset_ok = True
+                        for container in sc_info["containers"]:
+                            m = get_container_metrics(container)
+                            if not m.reset_peak():
+                                peak_reset_ok = False
+
+                        # Small pause to let memory stabilize (GC, buffers)
+                        time.sleep(0.1)
+
+                        # Capture metrics BEFORE query (baseline peak after reset attempt)
+                        m_before = {c: get_container_metrics(c) for c in sc_info["containers"]}
+                        peak_before = sum(m_before[c].memory_peak_mb for c in sc_info["containers"])
+
+                        row_count, latency_ms, rows_data = execute_query_for_scenario(
+                            scenario, query, selected_ds["path"], return_rows=True
+                        )
+
+                        # Capture metrics AFTER query
+                        m_after = {c: get_container_metrics(c) for c in sc_info["containers"]}
+
+                        # Calculate peak for this query
+                        query_mem_mb = sum(m_after[c].memory_mb for c in sc_info["containers"])
+                        peak_after = sum(m_after[c].memory_peak_mb for c in sc_info["containers"])
+
+                        # If reset worked, peak_after IS the query peak
+                        # If reset failed, use delta (peak_after - peak_before) + current mem as estimate
+                        if peak_reset_ok:
+                            query_peak_mb = peak_after
+                        else:
+                            # Fallback: peak delta + baseline memory
+                            peak_delta = peak_after - peak_before
+                            query_peak_mb = query_mem_mb + max(0, peak_delta)
+
+                        # Per-container breakdown for detailed analysis
+                        mem_breakdown = {c: {
+                            "memory_mb": m_after[c].memory_mb,
+                            "peak_mb": m_after[c].memory_peak_mb,
+                        } for c in sc_info["containers"]}
+
+                        scenario_results["queries"][query] = {
                             "row_count": row_count,
-                            "sample": rows_data[:5] if len(rows_data) > 5 else rows_data,
-                            "hash": hash(str(sorted(str(r) for r in rows_data))) if rows_data else 0,
+                            "latency_ms": latency_ms,
+                            "memory_mb": query_mem_mb,
+                            "memory_peak_mb": query_peak_mb,
+                            "memory_by_container": mem_breakdown,
+                            "status": "ok"
                         }
-                    
-                except Exception as e:
-                    scenario_results["queries"][query] = {"error": str(e), "status": "error"}
-            
-            print(f"\r{progress_bar(len(queries), len(queries), width=30, prefix=f'  {scenario}@{ram_str} ')} Terminé")
+
+                        # Store response fingerprint for cross-engine validation
+                        if rows_data:
+                            scenario_results["responses"][query] = {
+                                "row_count": row_count,
+                                "sample": rows_data[:5] if len(rows_data) > 5 else rows_data,
+                                "hash": hash(str(sorted(str(r) for r in rows_data))) if rows_data else 0,
+                            }
+
+                    except Exception as e:
+                        scenario_results["queries"][query] = {"error": str(e), "status": "error"}
+
+                print(f"\r{progress_bar(len(queries), len(queries), width=30, prefix=f'  {scenario}@{ram_str} ')} Terminé")
             
             # Summary for this scenario/RAM combination
             print()

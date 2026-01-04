@@ -1,0 +1,28 @@
+# Report batch workload
+# Simulates end-of-day/week report generation
+
+workload:
+  name: report_batch
+  description: "Heavy report queries (Q12+Q13) with some analytics"
+  version: "1.0"
+
+metrics:
+  strategy: aggregate
+
+execution:
+  mode: iterations
+  iterations: 50
+  concurrency: 1
+  warmup_iterations: 5
+
+queries:
+  - id: Q12
+    weight: 30
+    category: analytics
+  - id: Q13
+    weight: 70
+    category: report
+
+selection:
+  strategy: weighted_random
+  seed: 789

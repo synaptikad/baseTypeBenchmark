@@ -1,0 +1,68 @@
+# BOS Digital Twin - Operational stress test
+# Simulates realistic middleware usage with weighted queries
+
+workload:
+  name: bos_operational
+  description: "BOS middleware stress test - 5min duration, 4 threads, weighted queries"
+  version: "1.0"
+
+metrics:
+  strategy: aggregate
+
+execution:
+  mode: duration
+  duration_seconds: 300
+  concurrency: 4
+  warmup_iterations: 20
+
+queries:
+  # Dashboard queries - very frequent (operators monitoring)
+  - id: Q1
+    weight: 25
+    category: dashboard
+  - id: Q2
+    weight: 20
+    category: dashboard
+  - id: Q3
+    weight: 15
+    category: dashboard
+  - id: Q4
+    weight: 10
+    category: dashboard
+  - id: Q5
+    weight: 10
+    category: dashboard
+
+  # Direct TS query - frequent (real-time values)
+  - id: Q6
+    weight: 15
+    category: realtime
+
+  # Hybrid analytics - moderate frequency
+  - id: Q7
+    weight: 8
+    category: analytics
+  - id: Q8
+    weight: 6
+    category: analytics
+  - id: Q9
+    weight: 5
+    category: analytics
+  - id: Q10
+    weight: 5
+    category: analytics
+  - id: Q11
+    weight: 4
+    category: analytics
+  - id: Q12
+    weight: 3
+    category: analytics
+
+  # Heavy report - rare
+  - id: Q13
+    weight: 2
+    category: report
+
+selection:
+  strategy: weighted_random
+  seed: 42

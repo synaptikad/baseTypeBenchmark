@@ -35,6 +35,28 @@ QUERY_TYPE = {
     "Q13": "hybrid",
 }
 
+# Query categories for workload grouping
+QUERY_CATEGORY = {
+    "Q1": "dashboard",
+    "Q2": "dashboard",
+    "Q3": "dashboard",
+    "Q4": "dashboard",
+    "Q5": "dashboard",
+    "Q6": "realtime",
+    "Q7": "analytics",
+    "Q8": "analytics",
+    "Q9": "analytics",
+    "Q10": "analytics",
+    "Q11": "analytics",
+    "Q12": "analytics",
+    "Q13": "report",
+}
+
+
+def get_query_category(query_id: str) -> str:
+    """Get default category for a query."""
+    return QUERY_CATEGORY.get(query_id, "default")
+
 
 @dataclass
 class Protocol:

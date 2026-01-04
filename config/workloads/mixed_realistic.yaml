@@ -1,0 +1,68 @@
+# Mixed realistic workload
+# Balanced mix simulating typical BOS daily operation
+
+workload:
+  name: mixed_realistic
+  description: "Balanced daily BOS operation - all query types"
+  version: "1.0"
+
+metrics:
+  strategy: aggregate
+
+execution:
+  mode: duration
+  duration_seconds: 180
+  concurrency: 3
+  warmup_iterations: 10
+
+queries:
+  # Dashboard (50% of traffic)
+  - id: Q1
+    weight: 15
+    category: dashboard
+  - id: Q2
+    weight: 12
+    category: dashboard
+  - id: Q3
+    weight: 10
+    category: dashboard
+  - id: Q4
+    weight: 8
+    category: dashboard
+  - id: Q5
+    weight: 5
+    category: dashboard
+
+  # Real-time (15% of traffic)
+  - id: Q6
+    weight: 15
+    category: realtime
+
+  # Analytics (30% of traffic)
+  - id: Q7
+    weight: 8
+    category: analytics
+  - id: Q8
+    weight: 6
+    category: analytics
+  - id: Q9
+    weight: 5
+    category: analytics
+  - id: Q10
+    weight: 4
+    category: analytics
+  - id: Q11
+    weight: 4
+    category: analytics
+  - id: Q12
+    weight: 3
+    category: analytics
+
+  # Reports (5% of traffic)
+  - id: Q13
+    weight: 5
+    category: report
+
+selection:
+  strategy: weighted_random
+  seed: 2024

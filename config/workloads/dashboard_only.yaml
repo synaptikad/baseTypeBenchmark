@@ -1,0 +1,37 @@
+# Dashboard-only workload
+# Simulates operator console refreshing frequently
+
+workload:
+  name: dashboard_only
+  description: "Dashboard queries only - high frequency graph traversals"
+  version: "1.0"
+
+metrics:
+  strategy: per_query
+
+execution:
+  mode: iterations
+  iterations: 500
+  concurrency: 2
+  warmup_iterations: 10
+
+queries:
+  - id: Q1
+    weight: 30
+    category: dashboard
+  - id: Q2
+    weight: 25
+    category: dashboard
+  - id: Q3
+    weight: 20
+    category: dashboard
+  - id: Q4
+    weight: 15
+    category: dashboard
+  - id: Q5
+    weight: 10
+    category: dashboard
+
+selection:
+  strategy: weighted_random
+  seed: 123
