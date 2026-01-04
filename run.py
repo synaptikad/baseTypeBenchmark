@@ -309,26 +309,24 @@ def docker_update_memory(containers: List[str], ram_gb: float, clear_cache: bool
 
 def docker_stop_all(preserve_volumes: bool = False):
     """Stop all benchmark containers.
-    
+
     Args:
-        preserve_volumes: If True, keep volumes (for reuse across RAM levels)
+        preserve_volumes: If True, keep containers stopped (for restart with RAM update)
+                         This preserves PostgreSQL data across RAM level changes.
     """
     log("Arrêt de tous les containers benchmark...", "step")
-    
+
     if preserve_volumes:
-        # Just stop and remove containers, keep volumes
+        # Just stop containers, DON'T remove them
+        # This allows docker_start() to detect them and use docker_update_memory()
+        # which restarts them (clearing cache) while preserving data
         subprocess.run(
             f"{DOCKER_COMPOSE} stop",
             shell=True,
             cwd=str(DOCKER_DIR),
             capture_output=True
         )
-        subprocess.run(
-            f"{DOCKER_COMPOSE} rm -f",
-            shell=True,
-            cwd=str(DOCKER_DIR),
-            capture_output=True
-        )
+        # DO NOT run 'docker compose rm' - we need containers to exist for restart
     else:
         # Full cleanup with volumes
         subprocess.run(
@@ -338,7 +336,7 @@ def docker_stop_all(preserve_volumes: bool = False):
             capture_output=True
         )
     
-    # Force stop any remaining btb_ containers
+    # Force stop any remaining RUNNING btb_ containers
     result = subprocess.run(
         "docker ps -q --filter 'name=btb_'",
         shell=True,
@@ -352,14 +350,16 @@ def docker_stop_all(preserve_volumes: bool = False):
             shell=True,
             capture_output=True
         )
-        rm_flag = "" if preserve_volumes else "-v"
+
+    # Only remove containers if we're NOT preserving
+    if not preserve_volumes:
         subprocess.run(
-            f"docker ps -aq --filter 'name=btb_' | xargs -r docker rm -f {rm_flag}",
+            "docker ps -aq --filter 'name=btb_' | xargs -r docker rm -fv",
             shell=True,
             capture_output=True
         )
-    
-    log("Environnement nettoyé", "ok")
+
+    log("Environnement nettoyé" + (" (containers préservés)" if preserve_volumes else ""), "ok")
 
 
 def docker_verify_isolation(expected_containers: List[str]) -> bool:
