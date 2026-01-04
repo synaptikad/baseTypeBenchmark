@@ -440,7 +440,7 @@ def docker_start(containers: List[str], ram_gb: float, data_dir: Optional[Path] 
         log("Démarrage containers avec volumes existants...", "step")
     else:
         # CRITICAL: Full cleanup for isolation
-        log("Nettoyage environnement (isolation académique)...", "step")
+        log("Nettoyage environnement...", "step")
         subprocess.run(
             f"{DOCKER_COMPOSE} down -v --remove-orphans",
             shell=True,
@@ -1005,8 +1005,8 @@ def workflow_benchmark():
         return
     
     # Helper function for loading with error handling
-    def _do_load(scenario: str, path: Path, ram: int, graph_only: bool = False) -> Optional[float]:
-        """Load data, return elapsed time or None on error."""
+    def _do_load(scenario: str, path: Path, ram: int, graph_only: bool = False) -> Tuple[Optional[float], str]:
+        """Load data, return (elapsed_time, status). Status: 'ok', 'oom', 'error'."""
         what = "graphe" if graph_only else "données"
         log(f"Chargement {what} ({scenario})...", "step")
         t0 = time.time()
@@ -1014,14 +1014,22 @@ def workflow_benchmark():
             load_data_for_scenario(scenario, path, ram, graph_only=graph_only)
             elapsed = time.time() - t0
             log(f"Chargé en {elapsed_str(elapsed)}", "ok")
-            return elapsed
+            return elapsed, "ok"
         except Exception as e:
+            err_str = str(e).lower()
             log(f"Erreur chargement: {e}", "error")
-            is_oom = "OOM" in str(e) or "memory" in str(e).lower()
+            # Detect OOM patterns: explicit OOM, memory errors, or connection died (container crashed)
+            is_oom = (
+                "oom" in err_str
+                or "memory" in err_str
+                or "defunct connection" in err_str
+                or "connection reset" in err_str
+                or "broken pipe" in err_str
+            )
             if is_oom:
-                log(f"{RED}OOM détecté{RESET}", "warn")
+                log("OOM probable (container crashed)", "warn")
             docker_stop_all()
-            return None
+            return None, "oom" if is_oom else "error"
     
     # Execute benchmark
     log_section("EXÉCUTION DU BENCHMARK")
@@ -1109,28 +1117,28 @@ def workflow_benchmark():
                 else:
                     if not first_ram_run and not tables_exist:
                         log(f"Tables manquantes → rechargement nécessaire", "warn")
-                    load_time = _do_load(scenario, selected_ds["path"], ram_gb)
+                    load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
                     if load_time is None:
-                        all_results[scenario][ram_gb] = {"status": "load_error", "queries": {}}
+                        all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
                         continue
                     timescale_loaded_for_ram[ram_gb] = True
-                    
+
             elif scenario in ("M2", "O2"):
                 # Hybrid: need to load graph, but TimescaleDB may be ready
                 if timescale_ready:
                     log(f"TimescaleDB déjà chargé → chargement graphe uniquement", "info")
-                    load_time = _do_load(scenario, selected_ds["path"], ram_gb, graph_only=True)
+                    load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb, graph_only=True)
                 else:
-                    load_time = _do_load(scenario, selected_ds["path"], ram_gb)
+                    load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
                     timescale_loaded_for_ram[ram_gb] = True
                 if load_time is None:
-                    all_results[scenario][ram_gb] = {"status": "load_error", "queries": {}}
+                    all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
                     continue
-                    
+
             else:  # M1 - standalone with chunks
-                load_time = _do_load(scenario, selected_ds["path"], ram_gb)
+                load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
                 if load_time is None:
-                    all_results[scenario][ram_gb] = {"status": "load_error", "queries": {}}
+                    all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
                     continue
             
             first_ram_run = False
@@ -1362,8 +1370,11 @@ def workflow_benchmark():
         
         for ram_gb in ram_levels:
             results = all_results.get(scenario, {}).get(ram_gb, {})
-            if results.get("status") in ("oom", "OOM"):
+            status = results.get("status", "")
+            if status in ("oom", "OOM"):
                 cell = f"{RED}OOM{RESET}"
+            elif status == "error":
+                cell = f"{RED}ERR{RESET}"
             elif "queries" in results:
                 ok_count = sum(1 for q in results["queries"].values() if q.get("status") == "ok")
                 total_count = len(results["queries"])
