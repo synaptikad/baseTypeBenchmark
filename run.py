@@ -112,6 +112,13 @@ def elapsed_str(seconds: float) -> str:
         return f"{h}h {m}m {s}s"
 
 
+def format_ram(gb: float) -> str:
+    """Format RAM value for display (supports sub-GB values)."""
+    if gb < 1:
+        return f"{int(gb * 1024)}MB"
+    return f"{int(gb)}GB"
+
+
 def progress_bar(current: int, total: int, width: int = 40, prefix: str = "") -> str:
     """Generate a progress bar string."""
     pct = current / total if total > 0 else 0
@@ -197,26 +204,30 @@ def check_postgres_tables_exist() -> bool:
         return False
 
 
-def docker_update_memory(containers: List[str], ram_gb: int, clear_cache: bool = True) -> bool:
+def docker_update_memory(containers: List[str], ram_gb: float, clear_cache: bool = True) -> bool:
     """Update memory limit on containers and optionally restart to clear caches.
-    
+
     This preserves PostgreSQL/TimescaleDB data between RAM level iterations
     while ensuring cache isolation for accurate benchmarking.
-    
+
     Uses 'docker update --memory' + 'docker restart' to:
     - Change RAM limit dynamically
     - Clear PostgreSQL shared_buffers and OS page cache (restart)
     - Preserve data on named volumes
-    
+
     Args:
         containers: List of container names to update
-        ram_gb: New RAM limit in GB
+        ram_gb: New RAM limit in GB (supports floats like 0.5 for 512MB)
         clear_cache: If True, restart containers to clear caches (default True for benchmark accuracy)
-        
+
     Returns:
         True if all containers updated successfully
     """
-    memory_limit = f"{ram_gb}g"
+    # Docker memory limit: use MB for sub-GB values
+    if ram_gb < 1:
+        memory_limit = f"{int(ram_gb * 1024)}m"
+    else:
+        memory_limit = f"{int(ram_gb)}g"
     success = True
     
     for container in containers:
@@ -262,7 +273,7 @@ def docker_update_memory(containers: List[str], ram_gb: int, clear_cache: bool =
                 success = False
                 continue
                 
-        log(f"RAM {container_name} → {ram_gb}GB ✓" + (" (cache vidé)" if clear_cache else ""), "ok")
+        log(f"RAM {container_name} → {format_ram(ram_gb)} ✓" + (" (cache vidé)" if clear_cache else ""), "ok")
     
     # Wait for containers to be healthy after restart
     if clear_cache and success:
@@ -375,20 +386,24 @@ def docker_verify_isolation(expected_containers: List[str]) -> bool:
     return True
 
 
-def docker_start(containers: List[str], ram_gb: int, data_dir: Optional[Path] = None, preserve_volumes: bool = False) -> bool:
+def docker_start(containers: List[str], ram_gb: float, data_dir: Optional[Path] = None, preserve_volumes: bool = False) -> bool:
     """Start ONLY specified containers with RAM limit (strict isolation).
-    
+
     Args:
         containers: List of container names to start
-        ram_gb: RAM limit in GB
+        ram_gb: RAM limit in GB (supports floats like 0.5 for 512MB)
         data_dir: Dataset directory path
         preserve_volumes: If True, don't delete volumes (for RAM variance on persistent storage)
                          If containers are already running, just update RAM limit
     """
-    log(f"Démarrage containers: {', '.join(containers)} (limite {ram_gb}GB RAM)...", "step")
-    
+    log(f"Démarrage containers: {', '.join(containers)} (limite {format_ram(ram_gb)} RAM)...", "step")
+
     env = os.environ.copy()
-    env["MEMORY_LIMIT"] = f"{ram_gb}g"
+    # Docker memory limit: use MB for sub-GB values
+    if ram_gb < 1:
+        env["MEMORY_LIMIT"] = f"{int(ram_gb * 1024)}m"
+    else:
+        env["MEMORY_LIMIT"] = f"{int(ram_gb)}g"
     if data_dir:
         env["BTB_DATA_DIR"] = str(data_dir.resolve())
     
@@ -412,7 +427,7 @@ def docker_start(containers: List[str], ram_gb: int, data_dir: Optional[Path] = 
             if docker_update_memory(containers, ram_gb, clear_cache=True):
                 # docker_update_memory already waits for health after restart
                 if docker_verify_isolation(containers):
-                    log(f"RAM mise à jour avec succès → {ram_gb}GB (cache vidé)", "ok")
+                    log(f"RAM mise à jour avec succès → {format_ram(ram_gb)} (cache vidé)", "ok")
                     return True
                 else:
                     log("Containers non sains après update, recréation...", "warn")
@@ -810,46 +825,76 @@ def workflow_benchmark():
     log_subsection("Protocole RAM-Gradient")
     print("  Le benchmark teste chaque scénario avec différents niveaux de RAM")
     print("  pour identifier les seuils OOM et mesurer l'efficience (perf/GB).\n")
-    
-    print("  Niveaux disponibles:\n")
-    all_ram_levels = [4, 8, 16, 32, 64, 128, 256]
-    
+
+    # Extended RAM levels including sub-GB for small datasets
+    # Format: value in GB (0.5 = 512MB, 1 = 1GB, etc.)
+    all_ram_levels = [0.5, 1, 2, 4, 8, 16, 32, 64, 128]
+
     print("  Mode de sélection:\n")
     ram_modes = [
         "SINGLE   - Un seul niveau (test rapide)",
         "GRADIENT - Plusieurs niveaux (protocole complet)",
-        "AUTO     - Niveaux adaptés au dataset"
+        f"{BOLD}AUTO     - Niveaux adaptés au dataset (recommandé){RESET}"
     ]
-    ram_mode_idx = prompt_choice("Choisir le mode", ram_modes, default=2)
-    
+    ram_mode_idx = prompt_choice("Choisir le mode", ram_modes, default=3)
+
     if ram_mode_idx == 1:  # SINGLE
         print("\n  Niveaux RAM:\n")
-        ram_options = [f"{r} GB" for r in all_ram_levels]
-        ram_idx = prompt_choice("Choisir la RAM", ram_options, default=2)
+        ram_options = [format_ram(r) for r in all_ram_levels]
+        ram_idx = prompt_choice("Choisir la RAM", ram_options, default=5)  # Default 8GB
         ram_levels = [all_ram_levels[ram_idx - 1]]
     elif ram_mode_idx == 2:  # GRADIENT
-        print("\n  Niveaux à tester (ex: 8,16,32,64 ou ALL):\n")
-        for i, r in enumerate(all_ram_levels):
-            print(f"    {r} GB")
-        ram_input = prompt("\n  Niveaux", "8,16,32,64")
+        print("\n  Niveaux disponibles:\n")
+        for r in all_ram_levels:
+            print(f"    {format_ram(r)}")
+        print(f"\n  Syntaxe: valeurs séparées par virgules (ex: 0.5,1,2,4 ou 8,16,32)")
+        print(f"           utilisez GB (ex: 8) ou MB (ex: 512m)")
+        ram_input = prompt("\n  Niveaux", "4,8,16,32")
         if ram_input.upper() == "ALL":
             ram_levels = all_ram_levels
         else:
-            ram_levels = [int(x.strip()) for x in ram_input.split(",")]
+            # Parse input: support both GB and MB notation
+            ram_levels = []
+            for x in ram_input.split(","):
+                x = x.strip().lower()
+                if x.endswith("m") or x.endswith("mb"):
+                    # MB notation: 512m → 0.5 GB
+                    mb = int(x.rstrip("mb"))
+                    ram_levels.append(mb / 1024)
+                else:
+                    # GB notation (default)
+                    ram_levels.append(float(x.rstrip("gb")))
+            ram_levels = sorted(set(ram_levels))  # Sort and dedupe
     else:  # AUTO
-        # Estimate based on dataset size
-        ds_size_gb = selected_ds['size_mb'] / 1024
-        if ds_size_gb < 1:
-            ram_levels = [4, 8, 16]
-            log(f"Dataset petit ({ds_size_gb:.1f}GB) → RAM: 4, 8, 16 GB", "info")
-        elif ds_size_gb < 5:
-            ram_levels = [8, 16, 32]
-            log(f"Dataset moyen ({ds_size_gb:.1f}GB) → RAM: 8, 16, 32 GB", "info")
-        else:
+        # Intelligent estimation based on dataset size and timeseries count
+        ds_size_mb = selected_ds['size_mb']
+        ts_count = selected_ds.get('timeseries', 0)
+        points_count = ts_count  # timeseries rows ≈ data volume indicator
+
+        # Heuristic: PostgreSQL needs ~2-3x data size for indexes + working memory
+        # TimescaleDB is more efficient with compression
+        # Memgraph needs more RAM (in-memory graph)
+
+        if ds_size_mb < 50:  # < 50MB (small-2d type)
+            ram_levels = [0.5, 1, 2, 4]
+            log(f"Dataset très petit ({ds_size_mb:.0f}MB) → RAM: 512MB, 1, 2, 4 GB", "info")
+        elif ds_size_mb < 200:  # < 200MB (small-1w type)
+            ram_levels = [1, 2, 4, 8]
+            log(f"Dataset petit ({ds_size_mb:.0f}MB) → RAM: 1, 2, 4, 8 GB", "info")
+        elif ds_size_mb < 1024:  # < 1GB (medium-1w type)
+            ram_levels = [2, 4, 8, 16]
+            log(f"Dataset moyen ({ds_size_mb:.0f}MB) → RAM: 2, 4, 8, 16 GB", "info")
+        elif ds_size_mb < 5120:  # < 5GB (large-1w type)
+            ram_levels = [4, 8, 16, 32]
+            log(f"Dataset large ({ds_size_mb/1024:.1f}GB) → RAM: 4, 8, 16, 32 GB", "info")
+        elif ds_size_mb < 20480:  # < 20GB (large-1m / xlarge-1w type)
+            ram_levels = [8, 16, 32, 64]
+            log(f"Dataset très large ({ds_size_mb/1024:.1f}GB) → RAM: 8, 16, 32, 64 GB", "info")
+        else:  # >= 20GB (xlarge-1m+ type)
             ram_levels = [16, 32, 64, 128]
-            log(f"Dataset large ({ds_size_gb:.1f}GB) → RAM: 16, 32, 64, 128 GB", "info")
-    
-    log(f"Niveaux RAM: {ram_levels} GB", "ok")
+            log(f"Dataset massif ({ds_size_mb/1024:.1f}GB) → RAM: 16, 32, 64, 128 GB", "info")
+
+    log(f"Niveaux RAM: {', '.join(format_ram(r) for r in ram_levels)}", "ok")
     
     # Query selection
     log_subsection("Sélection des requêtes")
@@ -870,12 +915,12 @@ def workflow_benchmark():
     
     # Summary
     log_subsection("Récapitulatif")
-    
+
     total_combinations = len(scenarios) * len(ram_levels)
     total_runs = total_combinations * len(queries)
     print(f"  Dataset:    {BOLD}{selected_ds['name']}{RESET}")
     print(f"  Scénarios:  {', '.join(scenarios)} ({len(scenarios)})")
-    print(f"  RAM:        {', '.join(str(r) for r in ram_levels)} GB ({len(ram_levels)} niveaux)")
+    print(f"  RAM:        {', '.join(format_ram(r) for r in ram_levels)} ({len(ram_levels)} niveaux)")
     print(f"  Requêtes:   {len(queries)} ({queries[0]}...{queries[-1]})")
     print()
     print(f"  {BOLD}Total:      {len(scenarios)} × {len(ram_levels)} × {len(queries)} = {total_runs} exécutions{RESET}")
@@ -944,42 +989,43 @@ def workflow_benchmark():
         skip_remaining_ram = False  # Set True if plateau detected
         
         for ram_gb in ram_levels:
+            ram_str = format_ram(ram_gb)
             # Skip if plateau was detected
             if skip_remaining_ram:
-                log(f"Plateau détecté → skip {scenario}@{ram_gb}GB", "info")
+                log(f"Plateau détecté → skip {scenario}@{ram_str}", "info")
                 combo_idx += 1
                 continue
-            
+
             combo_idx += 1
-            
-            log_subsection(f"[{combo_idx}/{total_combinations}] {sc_info['color']}{scenario}{RESET} @ {ram_gb}GB RAM")
-            
+
+            log_subsection(f"[{combo_idx}/{total_combinations}] {sc_info['color']}{scenario}{RESET} @ {ram_str} RAM")
+
             # Determine container and loading strategy
             # - P1/P2: preserve TimescaleDB volumes across RAM levels
             # - M2/O2: can reuse TimescaleDB if already loaded at this RAM level
             # - M1: always full reload (standalone in-memory with chunks)
-            
+
             uses_timescale = scenario in ("P1", "P2", "M2", "O2")
             timescale_ready = timescale_loaded_for_ram.get(ram_gb, False)
             can_preserve = uses_timescale and (not first_ram_run or timescale_ready)
-            
+
             # Start containers with specific RAM
             if not docker_start(sc_info["containers"], ram_gb, selected_ds["path"], preserve_volumes=can_preserve):
-                log(f"Échec démarrage containers pour {scenario}@{ram_gb}GB", "error")
+                log(f"Échec démarrage containers pour {scenario}@{ram_str}", "error")
                 all_results[scenario][ram_gb] = {"status": "container_error", "queries": {}}
                 continue
-            
+
             # Smart loading strategy
             load_time = 0
-            
+
             if scenario in ("P1", "P2"):
                 # PostgreSQL: check if tables actually exist before skipping
                 tables_exist = check_postgres_tables_exist() if not first_ram_run else False
-                
+
                 if not first_ram_run and tables_exist:
                     log(f"PostgreSQL persistant → skip rechargement", "ok")
                 elif timescale_ready and tables_exist:
-                    log(f"TimescaleDB déjà chargé (RAM {ram_gb}GB) → skip", "ok")
+                    log(f"TimescaleDB déjà chargé (RAM {ram_str}) → skip", "ok")
                 else:
                     if not first_ram_run and not tables_exist:
                         log(f"Tables manquantes → rechargement nécessaire", "warn")
@@ -1045,7 +1091,7 @@ def workflow_benchmark():
             
             print()
             for q_idx, query in enumerate(queries, 1):
-                progress = progress_bar(q_idx, len(queries), width=30, prefix=f"  {scenario}@{ram_gb}GB ")
+                progress = progress_bar(q_idx, len(queries), width=30, prefix=f"  {scenario}@{ram_str} ")
                 print(f"\r{progress} {query}...", end="", flush=True)
                 
                 try:
@@ -1089,7 +1135,7 @@ def workflow_benchmark():
                 except Exception as e:
                     scenario_results["queries"][query] = {"error": str(e), "status": "error"}
             
-            print(f"\r{progress_bar(len(queries), len(queries), width=30, prefix=f'  {scenario}@{ram_gb}GB ')} Terminé")
+            print(f"\r{progress_bar(len(queries), len(queries), width=30, prefix=f'  {scenario}@{ram_str} ')} Terminé")
             
             # Summary for this scenario/RAM combination
             print()
@@ -1101,11 +1147,11 @@ def workflow_benchmark():
                     print(f"    {RED}✗{RESET} {query}: {data.get('error', 'Unknown error')}")
             
             all_results[scenario][ram_gb] = scenario_results
-            
-            # Save intermediate results
-            result_file = run_dir / f"{scenario}_{ram_gb}GB.json"
+
+            # Save intermediate results (use ram_str for filename to handle 512MB etc)
+            result_file = run_dir / f"{scenario}_{ram_str}.json"
             result_file.write_text(json.dumps(scenario_results, indent=2, cls=BenchmarkEncoder))
-            log(f"Résultats {scenario}@{ram_gb}GB sauvegardés", "ok")
+            log(f"Résultats {scenario}@{ram_str} sauvegardés", "ok")
             
             # Plateau detection: compare with previous RAM level
             ok_queries = [q for q in scenario_results["queries"].values() if q.get("status") == "ok"]
@@ -1143,9 +1189,9 @@ def workflow_benchmark():
     print()
     print(f"  {BOLD}Résumé par scénario × RAM:{RESET}")
     print()
-    
+
     # Table header
-    ram_header = "  " + "Scénario".ljust(12) + "".join(f"{r}GB".rjust(10) for r in ram_levels)
+    ram_header = "  " + "Scénario".ljust(12) + "".join(format_ram(r).rjust(10) for r in ram_levels)
     print(ram_header)
     print("  " + "─" * (12 + 10 * len(ram_levels)))
     
