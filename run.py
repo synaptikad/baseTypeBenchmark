@@ -182,16 +182,18 @@ DOCKER_COMPOSE = get_docker_compose_cmd()
 def check_postgres_tables_exist() -> bool:
     """Check if PostgreSQL tables exist (nodes, edges, timeseries)."""
     try:
-        from src.basetype_benchmark.engines.postgres import PostgresEngine
-        engine = PostgresEngine()
+        from basetype_benchmark.runner.engines.postgres import PostgresEngine
+        engine = PostgresEngine("P1")
+        engine.connect()
         result = engine.execute_query("""
-            SELECT COUNT(*) FROM information_schema.tables 
+            SELECT COUNT(*) FROM information_schema.tables
             WHERE table_name IN ('nodes', 'edges', 'timeseries')
         """)
         count = result[0][0] if result else 0
         engine.close()
         return count >= 3  # All 3 tables exist
-    except Exception:
+    except Exception as e:
+        # Log error but don't spam - this may fail if container not ready
         return False
 
 
