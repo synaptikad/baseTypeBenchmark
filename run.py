@@ -674,22 +674,19 @@ def select_workload(repo_root: Path) -> Optional[WorkloadConfig]:
                 configs.append((wl_path, None))
 
     log_subsection("Mode d'exécution")
-    print()
-    print(f"  {BOLD}[0] Séquentiel{RESET} (défaut)")
-    print("      Q1→Q13, 1x chaque, mesure RAM isolée par requête")
-    print()
+    print(f"  {BOLD}[0]{RESET} Séquentiel (défaut) - Q1→Q13, 1x chaque")
 
     for i, (wl_path, config) in enumerate(configs, 1):
         if config:
-            print(f"  {BOLD}[{i}] {config.name}{RESET}")
-            print(f"      {config.description[:60]}")
             mode = config.execution.mode.value
             threads = config.execution.concurrency
-            strategy = config.metrics.strategy.value
-            print(f"      Mode: {mode}, {threads} thread(s), métriques: {strategy}")
+            info = f"{mode}"
+            if threads > 1:
+                info += f", {threads}t"
+            print(f"  {BOLD}[{i}]{RESET} {config.name} - {info}")
         else:
-            print(f"  [{i}] {wl_path.stem} (erreur de lecture)")
-        print()
+            print(f"  [{i}] {wl_path.stem} (erreur)")
+    print()
 
     choice = input("Choix [0]: ").strip()
     if not choice or choice == "0":
