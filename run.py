@@ -653,6 +653,8 @@ def confirm(question: str, default: bool = True) -> bool:
 
 def select_workload(repo_root: Path) -> Optional[WorkloadConfig]:
     """Menu interactif pour sélection du workload."""
+    import warnings
+
     workloads_dir = repo_root / "config" / "workloads"
     if not workloads_dir.exists():
         return None
@@ -661,26 +663,43 @@ def select_workload(repo_root: Path) -> Optional[WorkloadConfig]:
     if not available:
         return None
 
+    # Load configs silently (suppress warnings during menu display)
+    configs = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for wl_path in available:
+            try:
+                configs.append((wl_path, WorkloadConfig.load(wl_path)))
+            except Exception:
+                configs.append((wl_path, None))
+
     log_subsection("Mode d'exécution")
-    print("  [0] Séquentiel (défaut) - Q1→Q13, 1x chaque")
-
-    for i, wl_path in enumerate(available, 1):
-        try:
-            config = WorkloadConfig.load(wl_path)
-            desc = config.description[:45] + "..." if len(config.description) > 45 else config.description
-            print(f"  [{i}] {config.name}: {desc}")
-        except Exception:
-            print(f"  [{i}] {wl_path.stem} (erreur de lecture)")
-
     print()
+    print(f"  {BOLD}[0] Séquentiel{RESET} (défaut)")
+    print("      Q1→Q13, 1x chaque, mesure RAM isolée par requête")
+    print()
+
+    for i, (wl_path, config) in enumerate(configs, 1):
+        if config:
+            print(f"  {BOLD}[{i}] {config.name}{RESET}")
+            print(f"      {config.description[:60]}")
+            mode = config.execution.mode.value
+            threads = config.execution.concurrency
+            strategy = config.metrics.strategy.value
+            print(f"      Mode: {mode}, {threads} thread(s), métriques: {strategy}")
+        else:
+            print(f"  [{i}] {wl_path.stem} (erreur de lecture)")
+        print()
+
     choice = input("Choix [0]: ").strip()
     if not choice or choice == "0":
         return None
 
     try:
         idx = int(choice) - 1
-        if 0 <= idx < len(available):
-            return WorkloadConfig.load(available[idx])
+        if 0 <= idx < len(configs):
+            _, config = configs[idx]
+            return config
     except (ValueError, IndexError):
         pass
 
