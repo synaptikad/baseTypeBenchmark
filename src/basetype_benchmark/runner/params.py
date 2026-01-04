@@ -203,10 +203,6 @@ def extract_dataset_info_from_parquet(nodes_parquet: Path) -> Dict[str, List[str
         print(f"  [WARN] Failed to read nodes.parquet: {e}")
         return info
 
-    counts = {k: len(v) for k, v in info.items() if isinstance(v, list) and v}
-    if counts:
-        print(f"  [INFO] Dataset IDs (parquet): {counts}")
-
     return info
 
 
