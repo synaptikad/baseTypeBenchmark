@@ -735,9 +735,12 @@ def workflow_generate():
         log(f"Dataset généré en {elapsed_str(elapsed)}", "ok")
         print()
         print(f"  {BOLD}Statistiques:{RESET}")
-        print(f"    Nœuds:          {fingerprint.get('nodes_count', 'N/A'):,}")
-        print(f"    Arêtes:         {fingerprint.get('edges_count', 'N/A'):,}")
-        print(f"    Points mesure:  {fingerprint.get('timeseries_count', 'N/A'):,}")
+        nodes = fingerprint.get('nodes_count')
+        edges = fingerprint.get('edges_count')
+        points = fingerprint.get('timeseries_count')
+        print(f"    Nœuds:          {nodes:,}" if nodes else "    Nœuds:          N/A")
+        print(f"    Arêtes:         {edges:,}" if edges else "    Arêtes:         N/A")
+        print(f"    Points mesure:  {points:,}" if points else "    Points mesure:  N/A")
         print(f"    Destination:    {parquet_dir}")
         
     except Exception as e:
