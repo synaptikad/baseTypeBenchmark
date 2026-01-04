@@ -1243,12 +1243,29 @@ def load_data_for_scenario(scenario: str, dataset_path: Path, ram_gb: int, graph
         engine = MemgraphEngine(scenario)
         engine.connect()
         engine.clear()
-        
+
         m1_dir = dataset_path / "m1"
-        if m1_dir.exists():
-            engine.load_nodes(m1_dir / "mg_nodes.csv")
+        mg_nodes_file = m1_dir / "mg_nodes.csv"
+
+        # Generate M1 export if not exists (like O2)
+        if not mg_nodes_file.exists():
+            log("  Génération export Memgraph CSV...", "step")
+            m1_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                from basetype_benchmark.dataset.exporter_v2 import export_memgraph_csv, export_memgraph_chunks_csv
+                export_memgraph_csv(parquet_dir, m1_dir, skip_timeseries=True)
+                if scenario == "M1":
+                    log("  Génération chunks daily (M1)...", "step")
+                    export_memgraph_chunks_csv(parquet_dir, m1_dir)
+            except Exception as e:
+                log(f"  Échec génération export Memgraph: {e}", "error")
+                engine.close()
+                return {"status": "error", "error": str(e)}
+
+        if mg_nodes_file.exists():
+            engine.load_nodes(mg_nodes_file)
             engine.load_edges(m1_dir / "mg_edges.csv")
-            
+
             # M1: load chunks in-memory
             # M2: TimescaleDB handled separately (skip if graph_only or if already loaded)
             if scenario == "M1":
@@ -1256,6 +1273,15 @@ def load_data_for_scenario(scenario: str, dataset_path: Path, ram_gb: int, graph
                 if chunks_file.exists():
                     log("  Chargement chunks timeseries (M1)...", "step")
                     engine.load_chunks(chunks_file)
+                else:
+                    # Generate chunks if missing (e.g., first M1 run after M2-only generation)
+                    log("  Génération chunks daily (M1)...", "step")
+                    try:
+                        from basetype_benchmark.dataset.exporter_v2 import export_memgraph_chunks_csv
+                        export_memgraph_chunks_csv(parquet_dir, m1_dir)
+                        engine.load_chunks(chunks_file)
+                    except Exception as e:
+                        log(f"  Échec génération chunks: {e}", "error")
             elif scenario == "M2" and not graph_only:
                 # M2 needs TimescaleDB - load via PostgresEngine
                 log("  Chargement TimescaleDB pour M2...", "step")
@@ -1267,7 +1293,7 @@ def load_data_for_scenario(scenario: str, dataset_path: Path, ram_gb: int, graph
                     pg_engine.load_timeseries_from_parquet(ts_file)
                 pg_engine.close()
         else:
-            log("  Export M1 non trouvé", "warn")
+            log("  Export M1 non trouvé après génération", "warn")
         
         engine.close()
         return {"status": "ok"}
