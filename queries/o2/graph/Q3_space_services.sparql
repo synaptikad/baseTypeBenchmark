@@ -1,10 +1,10 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-# Q3: Space Services - What equipment serves this space?
-# Parameter: $SPACE_ID - space to query for serving equipment
-# Returns each (equipment, relationship) pair like SQL version
-# Canonical: equipment_type is always "Equipment" (node type)
+# Q3: Space Services - What equipment serves/monitors this space?
+# Benchmark: Lookup relationship pattern (multi-relation)
+# Parameter: $SPACE_ID - space to query for serving/monitoring equipment
+# Relations: SERVES (HVAC), LOCATED_IN (equipment in space), CONTAINS (space contains), MONITORS (sensors)
 
 SELECT DISTINCT ?space_id ?space_name ?building_id ?equipment_id ?equipment_name ?equipment_type
 WHERE {
@@ -18,6 +18,7 @@ WHERE {
   # - CONTAINS: Space -> contains -> Equipment (space contains equipment)
   # - SERVES: Equipment -> serves -> Space (equipment serves space)
   # - LOCATED_IN: Equipment -> locatedIn -> Space (equipment located in space)
+  # - MONITORS: Equipment -> monitors -> Space (sensor monitors space)
   {
     ?space btb:contains ?eq .
     BIND("CONTAINS" AS ?relationship)
@@ -27,6 +28,9 @@ WHERE {
   } UNION {
     ?eq btb:locatedIn ?space .
     BIND("LOCATED_IN" AS ?relationship)
+  } UNION {
+    ?eq btb:monitors ?space .
+    BIND("MONITORS" AS ?relationship)
   }
 
   ?eq rdf:type btb:Equipment ;

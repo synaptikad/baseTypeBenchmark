@@ -9,7 +9,7 @@ from . import docker
 from .protocol import Protocol, get_protocol, QUERIES, QUERY_TYPE
 from .metrics import ResourceMonitor, get_peak_memory_mb
 from .results import BenchmarkResult, QueryResult, LoadResult, save_results
-from .params import (
+from .params_core import (
     extract_dataset_info,
     extract_timeseries_range,
     extract_dataset_info_from_parquet,
