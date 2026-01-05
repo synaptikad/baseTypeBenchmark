@@ -747,12 +747,14 @@ def workflow_generate():
     log_subsection("Fenêtre temporelle")
     print("  La durée détermine la quantité de séries temporelles:\n")
     durations = [
-        "2d - 2 jours (~500 MB, test rapide)",
-        f"{BOLD}1w - 1 semaine (~2 GB, recommandé){RESET}",
-        "1m - 1 mois (~8 GB, patterns mensuels)",
+        "2d - 2 jours (test rapide)",
+        f"{BOLD}1w - 1 semaine (recommandé){RESET}",
+        "1m - 1 mois (patterns mensuels)",
+        "6m - 6 mois (saisonnalité)",
+        "1y - 1 an (benchmark complet)",
     ]
     duration_idx = prompt_choice("Choisir la durée", durations, default=2)
-    duration = ["2d", "1w", "1m"][duration_idx - 1]
+    duration = ["2d", "1w", "1m", "6m", "1y"][duration_idx - 1]
     log(f"Durée sélectionnée: {duration}", "ok")
     
     profile = f"{scale}-{duration}"
