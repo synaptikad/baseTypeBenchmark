@@ -1,7 +1,8 @@
 -- Q9: Tenant Carbon Footprint
 -- Benchmark: Complex aggregation with carbon factor calculation
 -- Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END - time range
--- Pattern: Energy → Carbon conversion
+-- Pattern: Energy -> Carbon conversion
+-- P1: Uses direct column access (quantity)
 
 WITH tenant_energy AS (
     SELECT DISTINCT
@@ -17,7 +18,7 @@ WITH tenant_energy AS (
     JOIN edges e3 ON e3.src_id = eq.id AND e3.rel_type = 'HAS_POINT'
     JOIN nodes p ON p.id = e3.dst_id AND p.type = 'Point'
     WHERE t.id = '$TENANT_ID'
-      AND p.properties->>'quantity' = 'power'
+      AND p.quantity = 'power'
 ),
 energy_consumption AS (
     SELECT

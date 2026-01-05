@@ -545,7 +545,8 @@ def export_postgresql_csv(
             "building_id": props.get("building_id", ""),
             "floor_id": props.get("floor_id", ""),
             "space_id": props.get("space_id", ""),
-            "data": row["properties"]  # Keep JSON for flexibility
+            "quantity": props.get("quantity", ""),
+            # P1: NO JSONB column - all properties are explicit columns
         }
         nodes_expanded.append(node_row)
 
@@ -587,7 +588,8 @@ def export_postgresql_jsonb_csv(
     nodes_df = pd.read_parquet(parquet_dir / "nodes.parquet")
     edges_df = pd.read_parquet(parquet_dir / "edges.parquet")
 
-    # Nodes with JSONB properties - extract equipment_type for meter detection
+    # P2: Minimal columns + properties JSONB
+    # All domain-specific data is in the properties column (accessed via ->>'key')
     nodes_expanded = []
     for _, row in nodes_df.iterrows():
         props = json.loads(row["properties"]) if row["properties"] else {}
@@ -596,8 +598,7 @@ def export_postgresql_jsonb_csv(
             "type": row["type"],
             "name": row.get("name", props.get("name", "")),
             "building_id": props.get("building_id", ""),
-            "equipment_type": props.get("equipment_type", ""),  # For meter detection
-            "properties": row["properties"]
+            "properties": row["properties"]  # All other data accessed via JSONB
         })
 
     pd.DataFrame(nodes_expanded).to_csv(

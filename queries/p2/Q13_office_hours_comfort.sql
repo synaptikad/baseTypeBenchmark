@@ -1,6 +1,8 @@
--- Q13 (P2): Office Hours Comfort - Stress-test for dechunking
+-- Q13: Office Hours Comfort - Stress-test for dechunking
 -- Benchmark: Hour filtering + occupancy correlation (optimal on TimescaleDB)
 -- Parameters: $SPACE_TYPE - space type pattern (e.g. 'office_%'), $DATE_START/$DATE_END
+-- Pattern: EXTRACT(DOW) + spatial join + grouping
+-- P2: Uses JSONB property access (properties->>'space_type', properties->>'equipment_type')
 
 WITH office_setpoints AS (
     -- Find temperature setpoint points in spaces of given type
@@ -15,7 +17,7 @@ WITH office_setpoints AS (
     WHERE p.type = 'Point'
       AND p.name ILIKE '%setpoint%'
       AND p.name ILIKE '%temp%'
-      AND (sp.properties->>'space_type') LIKE '$SPACE_TYPE'
+      AND sp.properties->>'space_type' LIKE '$SPACE_TYPE'
 ),
 office_occupancy AS (
     -- Find PeopleCounter points in offices
@@ -28,8 +30,8 @@ office_occupancy AS (
     JOIN edges e2 ON e2.src_id = eq.id AND e2.rel_type = 'LOCATED_IN'
     JOIN nodes sp ON sp.id = e2.dst_id AND sp.type = 'Space'
     WHERE p.type = 'Point'
-      AND (eq.properties->>'equipment_type') = 'PeopleCounter'
-      AND (sp.properties->>'space_type') LIKE '$SPACE_TYPE'
+      AND eq.properties->>'equipment_type' = 'PeopleCounter'
+      AND sp.properties->>'space_type' LIKE '$SPACE_TYPE'
 ),
 friday_setpoints AS (
     -- Get setpoint values on office hours (9h-17h) only in date range

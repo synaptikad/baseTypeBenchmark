@@ -1,7 +1,7 @@
 -- Q4: Inventory - Temperature points for a specific floor
 -- Benchmark: Filtering + aggregation (typical BMS inventory query)
 -- Parameter: $FLOOR_ID - floor to inventory temperature points
--- Canonical: uses properties->>'quantity' = 'temperature' (lowercase)
+-- P1: Uses direct column access (quantity)
 
 SELECT DISTINCT
     f.id as floor_id,
@@ -22,5 +22,5 @@ JOIN nodes eq ON eq.id = CASE WHEN e2.rel_type = 'CONTAINS' THEN e2.dst_id ELSE 
 JOIN edges e3 ON e3.src_id = eq.id AND e3.rel_type = 'HAS_POINT'
 JOIN nodes p ON p.id = e3.dst_id AND p.type = 'Point'
 WHERE f.id = '$FLOOR_ID'
-  AND p.properties->>'quantity' = 'temperature'
+  AND p.quantity = 'temperature'
 ORDER BY p.name;

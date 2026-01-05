@@ -1590,8 +1590,12 @@ def execute_query_for_scenario(scenario: str, query: str, dataset_path: Path, re
     # Get profile name from path
     profile = dataset_path.name.split("_seed")[0] if "_seed" in dataset_path.name else "small-2d"
     
-    # Generate one variant of parameters
-    variants = get_query_variants(query, profile, dataset_info, seed=42, scenario=scenario, n_variants=1)
+    # Generate one variant of parameters (auto-extracts from query file)
+    variants = get_query_variants(
+        query, profile, dataset_info,
+        seed=42, scenario=scenario, n_variants=1,
+        queries_dir=queries_dir
+    )
     params = variants[0] if variants else {}
     
     if scenario in ("P1", "P2"):

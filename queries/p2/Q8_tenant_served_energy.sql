@@ -1,7 +1,8 @@
 -- Q8: Tenant Energy Consumption
 -- Benchmark: Multi-hop traversal + timeseries aggregation (hybrid query)
 -- Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END - time range
--- Pattern: Tenant → Spaces → Equipment → Points → Timeseries
+-- Pattern: Tenant -> Spaces -> Equipment -> Points -> Timeseries
+-- P2: Uses JSONB property access (properties->>'quantity')
 
 WITH tenant_points AS (
     SELECT DISTINCT

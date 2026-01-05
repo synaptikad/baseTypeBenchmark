@@ -1,7 +1,7 @@
 -- Q11: IT Infrastructure Impact Analysis
 -- Benchmark: Network/IT equipment dependency analysis
 -- Parameter: $BUILDING_ID - building to analyze
--- Pattern: Server room → IT equipment → Network
+-- Pattern: Server room -> IT equipment -> Network
 
 WITH it_equipment AS (
     SELECT

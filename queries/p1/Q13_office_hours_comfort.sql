@@ -1,6 +1,8 @@
--- Q13 (P1): Office Hours Comfort - Stress-test for dechunking
+-- Q13: Office Hours Comfort - Stress-test for dechunking
 -- Benchmark: Hour filtering + occupancy correlation (optimal on TimescaleDB)
 -- Parameters: $SPACE_TYPE - space type pattern (e.g. 'office_%'), $DATE_START/$DATE_END
+-- Pattern: EXTRACT(DOW) + spatial join + grouping
+-- P1: Uses direct column access (space_type, equipment_type)
 
 WITH office_setpoints AS (
     -- Find temperature setpoint points in spaces of given type

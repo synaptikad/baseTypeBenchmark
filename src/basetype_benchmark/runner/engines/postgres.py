@@ -130,10 +130,19 @@ class PostgresEngine:
         self.conn.commit()
 
     def create_schema(self) -> None:
-        """Create schema based on scenario."""
+        """Create schema based on scenario.
+
+        P1 (Relational strict): All properties as explicit columns, no JSONB.
+            - Pros: Maximum query performance, B-tree indexes
+            - Cons: Rigid schema, migration required for new properties
+
+        P2 (JSONB flexible): Minimal columns + properties JSONB document.
+            - Pros: Schema flexibility, can add properties without migration
+            - Cons: GIN index overhead, JSONB extraction cost
+        """
         with self.conn.cursor() as cur:
             if self.scenario == "P1":
-                # Relational schema with explicit columns
+                # P1: Relational strict - NO JSONB, all properties as columns
                 cur.execute("""
                     CREATE TABLE nodes (
                         id TEXT PRIMARY KEY,
@@ -145,12 +154,11 @@ class PostgresEngine:
                         building_id TEXT,
                         floor_id TEXT,
                         space_id TEXT,
-                        quantity TEXT,
-                        properties JSONB DEFAULT '{}'
+                        quantity TEXT
                     )
                 """)
             else:  # P2
-                # JSONB schema with minimal extracted columns
+                # P2: JSONB flexible - minimal columns + properties document
                 cur.execute("""
                     CREATE TABLE nodes (
                         id TEXT PRIMARY KEY,
@@ -208,6 +216,16 @@ class PostgresEngine:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_building ON nodes(building_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_src_rel ON edges(src_id, rel_type)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst_rel ON edges(dst_id, rel_type)")
+
+            # Scenario-specific indexes
+            if self.scenario == "P1":
+                # P1: B-tree indexes on denormalized columns for filtering (Q4, Q8, Q9, Q13)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_quantity ON nodes(quantity)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_space_type ON nodes(space_type)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_equipment_type ON nodes(equipment_type)")
+            else:  # P2
+                # P2: GIN index on JSONB for flexible property queries
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nodes_properties ON nodes USING GIN(properties)")
 
         self.conn.commit()
 
@@ -542,7 +560,11 @@ class PostgresEngine:
         return total
 
     def load_nodes(self, nodes_file: Path, batch_size: int = 1000) -> int:
-        """Load nodes from CSV."""
+        """Load nodes from CSV.
+
+        P1: Expects pg_nodes.csv with explicit columns (no JSONB)
+        P2: Expects pg_jsonb_nodes.csv with properties JSONB column
+        """
         total = 0
         t0 = time.time()
 
@@ -552,14 +574,16 @@ class PostgresEngine:
 
             for row in reader:
                 if self.scenario == "P1":
+                    # P1: All properties as explicit columns (NO JSONB)
                     batch.append((
                         row["id"], row["type"], row.get("name", ""),
                         row.get("domain", ""), row.get("equipment_type", ""),
                         row.get("space_type", ""), row.get("building_id", ""),
                         row.get("floor_id", ""), row.get("space_id", ""),
-                        row.get("quantity", ""), row.get("data", "{}")
+                        row.get("quantity", "")
                     ))
                 else:  # P2
+                    # P2: Minimal columns + properties JSONB
                     batch.append((
                         row["id"], row["type"], row.get("name", ""),
                         row.get("building_id", ""), row.get("properties", "{}")
@@ -583,13 +607,15 @@ class PostgresEngine:
         """Insert batch of nodes."""
         with self.conn.cursor() as cur:
             if self.scenario == "P1":
+                # P1: 10 columns (NO JSONB)
                 execute_batch(cur, """
                     INSERT INTO nodes (id, type, name, domain, equipment_type, space_type,
-                                      building_id, floor_id, space_id, quantity, properties)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                      building_id, floor_id, space_id, quantity)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                 """, batch)
             else:
+                # P2: 5 columns (with JSONB)
                 execute_batch(cur, """
                     INSERT INTO nodes (id, type, name, building_id, properties)
                     VALUES (%s, %s, %s, %s, %s)

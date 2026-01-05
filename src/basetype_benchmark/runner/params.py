@@ -1,6 +1,7 @@
 """Query parameter management for benchmark execution.
 
 This module handles:
+- Auto-extracting parameters from query files ($PARAM placeholders)
 - Extracting available IDs from loaded datasets (floors, buildings, equipment, etc.)
 - Generating deterministic query variants with different parameter values
 - Substituting $PARAM placeholders in query text
@@ -8,27 +9,92 @@ This module handles:
 
 import csv
 import random
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Cache for extracted params (avoid re-reading files)
+_PARAMS_CACHE: Dict[str, List[str]] = {}
 
-# Query parameters by query ID
-QUERY_PARAMS = {
-    "Q1": ["meter_id"],
-    "Q2": ["equipment_id"],
-    "Q3": ["space_id"],
-    "Q4": ["floor_id"],
-    "Q5": [],  # No parameters
-    "Q6": ["building_id", "date_start", "date_end"],
-    "Q7": ["building_id", "date_start", "date_end"],
-    "Q8": ["tenant_id", "date_start", "date_end"],
-    "Q9": ["tenant_id", "date_start", "date_end"],
-    "Q10": ["building_id"],
-    "Q11": ["building_id"],
-    "Q12": ["building_id", "date_start", "date_end"],
-    "Q13": ["building_id", "space_type", "date_start", "date_end"],
-}
+
+def extract_params_from_query(query_text: str) -> List[str]:
+    """Extract $PARAM placeholders from query text.
+
+    Args:
+        query_text: SQL, Cypher, or SPARQL query text
+
+    Returns:
+        List of parameter names (lowercase), deduplicated, order preserved
+    """
+    # Match $WORD but not $$WORD (escaped) or $1 (positional)
+    matches = re.findall(r'\$([A-Za-z_][A-Za-z0-9_]*)', query_text)
+    # Normalize to lowercase and dedupe while preserving order
+    seen = set()
+    params = []
+    for m in matches:
+        m_lower = m.lower()
+        if m_lower not in seen:
+            seen.add(m_lower)
+            params.append(m_lower)
+    return params
+
+
+def get_query_params(query_id: str, queries_dir: Path, scenario: str = "P1") -> List[str]:
+    """Get parameters for a query by reading the query file.
+
+    Auto-extracts $PARAM placeholders from the query file.
+    Results are cached to avoid repeated file reads.
+
+    Args:
+        query_id: Query identifier (Q1, Q2, etc.)
+        queries_dir: Path to queries/ directory
+        scenario: Scenario code (P1, P2, M1, M2, O1, O2)
+
+    Returns:
+        List of parameter names (lowercase)
+    """
+    cache_key = f"{query_id}:{scenario}"
+    if cache_key in _PARAMS_CACHE:
+        return _PARAMS_CACHE[cache_key]
+
+    # Determine which subdirectories to search based on scenario
+    # Scenario-specific directory takes priority (p1/, p2/) over shared (p1_p2/)
+    scenario_upper = scenario.upper()
+    if scenario_upper == "P1":
+        search_dirs = ["p1"]  # P1: Relational strict (queries/p1/)
+        extensions = [".sql"]
+    elif scenario_upper == "P2":
+        search_dirs = ["p2"]  # P2: JSONB flexible (queries/p2/)
+        extensions = [".sql"]
+    elif scenario_upper in ("M1", "M2"):
+        search_dirs = [scenario_upper.lower()]
+        extensions = [".cypher"]
+    elif scenario_upper in ("O1", "O2"):
+        search_dirs = [scenario_upper.lower()]
+        extensions = [".rq", ".sparql"]
+    else:
+        search_dirs = ["p1"]  # Default to P1
+        extensions = [".sql"]
+
+    # Find matching query file
+    for subdir in search_dirs:
+        subdir_path = queries_dir / subdir
+        if not subdir_path.exists():
+            continue
+
+        for ext in extensions:
+            pattern = f"{query_id}_*{ext}"
+            matches = list(subdir_path.glob(pattern))
+            if matches:
+                query_text = matches[0].read_text(encoding="utf-8")
+                params = extract_params_from_query(query_text)
+                _PARAMS_CACHE[cache_key] = params
+                return params
+
+    # No query file found
+    _PARAMS_CACHE[cache_key] = []
+    return []
 
 
 def extract_dataset_info(nodes_csv: Path, scenario: str = "P1") -> Dict[str, List[str]]:
@@ -330,6 +396,7 @@ def get_query_variants(
     seed: int = 42,
     scenario: str = "P1",
     n_variants: int = None,
+    queries_dir: Path = None,
 ) -> List[Dict]:
     """Generate parameter variants for a query (deterministic).
 
@@ -340,11 +407,15 @@ def get_query_variants(
         seed: Random seed for reproducibility
         scenario: P1, P2, M1, M2, O1, O2 (affects date format)
         n_variants: Number of variants to generate (overrides profile default)
+        queries_dir: Path to queries/ directory (for auto-extraction)
 
     Returns:
         List of dicts, each containing parameter values for one variant
     """
-    params = QUERY_PARAMS.get(query_id, [])
+    # Auto-extract params from query file
+    if queries_dir is None:
+        queries_dir = Path("queries")
+    params = get_query_params(query_id, queries_dir, scenario)
     if not params:
         return [{}]  # No parameters needed
 
