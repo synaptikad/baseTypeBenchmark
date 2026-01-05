@@ -7,16 +7,15 @@
 
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX brick: <https://brickschema.org/schema/Brick#>
 PREFIX ts: <http://example.org/ts/>
-PREFIX btb: <http://basetype-benchmark.org/>
+PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 # Fetch all chunks for thermostat setpoints and PeopleCounters in specified space type
 # Client must:
 # 1. Parse timestamps and values JSON strings into arrays
 # 2. Iterate over (timestamp, value) pairs directly
-# 3. Filter to office hours (9h-17h) (DOW = 5)
+# 3. Filter to office hours (9h-17h)
 # 4. Correlate setpoint with occupancy at same timestamp
 # 5. Group by occupancy level
 
@@ -25,14 +24,15 @@ SELECT ?space ?spaceType
        ?occChunk ?occTimestamps ?occValues
 WHERE {
     # Spaces of specified type
-    ?space rdf:type brick:Space ;
+    ?space rdf:type btb:Space ;
            btb:spaceType ?spaceType .
     FILTER (STRSTARTS(?spaceType, "$SPACE_TYPE"))
 
     # Thermostat with setpoint point in this space
-    ?equip brick:isLocationOf ?space ;
-           rdf:type brick:Thermostat ;
-           brick:hasPoint ?setpointPoint .
+    ?equip btb:locatedIn ?space ;
+           rdf:type btb:Equipment ;
+           btb:equipment_type "Thermostat" ;
+           btb:hasPoint ?setpointPoint .
     ?setpointPoint rdfs:label ?pointName .
     FILTER (CONTAINS(LCASE(?pointName), "setpoint"))
 
@@ -43,9 +43,10 @@ WHERE {
 
     # Optional: PeopleCounter in same space for occupancy correlation
     OPTIONAL {
-        ?occEquip brick:isLocationOf ?space ;
-                  rdf:type brick:People_Count_Sensor ;
-                  brick:hasPoint ?occPoint .
+        ?occEquip btb:locatedIn ?space ;
+                  rdf:type btb:Equipment ;
+                  btb:equipment_type "PeopleCounter" ;
+                  btb:hasPoint ?occPoint .
         ?occPoint ts:hasChunk ?occChunk .
         ?occChunk ts:timestamps ?occTimestamps ;
                   ts:values ?occValues .
@@ -56,15 +57,15 @@ ORDER BY ?space ?setpointChunk
 # POST-PROCESSING REQUIRED (Python):
 #
 # def process_q13_sparql_results(results):
-#     friday_data = []
+#     office_data = []
 #     for row in results:
 #         timestamps = json.loads(row['setpointTimestamps'])
 #         setpoint_values = json.loads(row['setpointValues'])
 #
 #         for ts, setpoint in zip(timestamps, setpoint_values):
-#             dow = (ts % 86400) // 3600  # 0=Sun, 5=Fri
-#             if 9 <= hour <= 17:  # Friday
+#             hour = (ts % 86400) // 3600
+#             if 9 <= hour <= 17:  # Office hours
 #                 occupancy = find_occupancy_at_ts(row, ts)
-#                 friday_data.append({'setpoint': setpoint, 'occupancy': occupancy})
+#                 office_data.append({'setpoint': setpoint, 'occupancy': occupancy})
 #
-#     return aggregate_by_occupancy_level(friday_data)
+#     return aggregate_by_occupancy_level(office_data)

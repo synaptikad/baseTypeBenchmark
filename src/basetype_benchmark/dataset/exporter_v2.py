@@ -783,6 +783,8 @@ def export_ntriples(parquet_dir: Path, output_dir: Path) -> None:
         "CONTROLS": "btb:controls",
         "MONITORS": "btb:monitors",
         "IS_METERED_BY": "btb:isMeteredBy",
+        "METERS_TENANT": "btb:metersTenant",
+        "METERS_ZONE": "btb:metersZone",
     }
 
     triples = []

@@ -789,6 +789,16 @@ class DatasetGeneratorV2:
                 {"name": "fault", "unit": "-", "range_min": 0, "range_max": 1, "frequency": 0, "type": "alarme"},
                 {"name": "status", "unit": "-", "range_min": 0, "range_max": 1, "frequency": 0, "type": "etat"},
             ],
+            "MainMeter": [
+                {"name": "total_energy", "unit": "kWh", "range_min": 0, "range_max": 100000, "frequency": 900, "type": "mesure"},
+                {"name": "power", "unit": "kW", "range_min": 0, "range_max": 500, "frequency": 60, "type": "mesure"},
+                {"name": "voltage", "unit": "V", "range_min": 220, "range_max": 240, "frequency": 300, "type": "mesure"},
+                {"name": "current", "unit": "A", "range_min": 0, "range_max": 1000, "frequency": 300, "type": "mesure"},
+            ],
+            "SubMeter": [
+                {"name": "energy", "unit": "kWh", "range_min": 0, "range_max": 50000, "frequency": 900, "type": "mesure"},
+                {"name": "power", "unit": "kW", "range_min": 0, "range_max": 200, "frequency": 60, "type": "mesure"},
+            ],
         }
 
         if equip_type in defaults:
