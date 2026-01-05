@@ -37,8 +37,8 @@ from ..dataset.exporter_v2 import (
 
 # Query file paths by scenario
 QUERY_DIRS = {
-    "P1": Path("queries/p1_p2"),
-    "P2": Path("queries/p1_p2"),
+    "P1": Path("queries/p1"),
+    "P2": Path("queries/p2"),
     "M1": Path("queries/m1"),
     "M2": Path("queries/m2/graph"),
     "O1": Path("queries/o1"),

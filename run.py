@@ -1602,9 +1602,10 @@ def execute_query_for_scenario(scenario: str, query: str, dataset_path: Path, re
     params = variants[0] if variants else {}
     
     if scenario in ("P1", "P2"):
-        matches = list(queries_dir.glob(f"p1_p2/{query}_*.sql"))
+        subdir = "p1" if scenario == "P1" else "p2"
+        matches = list(queries_dir.glob(f"{subdir}/{query}_*.sql"))
         if not matches:
-            raise FileNotFoundError(f"Query {query} not found for P1/P2")
+            raise FileNotFoundError(f"Query {query} not found for {scenario}")
         query_text = matches[0].read_text()
         
         # Substitute params
