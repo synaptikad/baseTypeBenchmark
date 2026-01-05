@@ -129,12 +129,21 @@ FEEDS_RULES = {
 }
 
 # SERVES rules by equipment scope
+# scope: building (serves whole building), floors (serves all floors), floor (serves spaces on one floor), space (serves single space)
+# ratio: fraction of spaces/floors served (for floor scope, ratio of spaces per floor)
 SERVES_RULES = {
+    # HVAC
     "AHU": {"scope": "building", "ratio": 0.3},
     "Chiller": {"scope": "building", "ratio": 0.5},
     "Boiler": {"scope": "building", "ratio": 0.5},
     "FCU": {"scope": "floor", "ratio": 0.2},
     "VAV": {"scope": "floor", "ratio": 0.15},
+    "CRAC": {"scope": "space", "ratio": 1.0},  # IT room cooling
+    # Elevator - serves all floors in building (not spaces)
+    "PassengerElevator": {"scope": "floors", "ratio": 1.0},
+    "FreightElevator": {"scope": "floors", "ratio": 1.0},
+    # Parking ventilation - serves parking spaces
+    "ExhaustFan": {"scope": "floor", "ratio": 0.5},  # Parking exhaust
     # Default: scope=space, ratio=1.0
 }
 
@@ -157,12 +166,24 @@ CONTROLS_RULES = {
 
 # MONITORS rules: sensor type -> monitored equipment types
 # Represents sensor monitoring relationships (inverse of hasPoint conceptually)
+# Note: Some sensors monitor equipment, others monitor spaces (handled separately)
 MONITORS_RULES = {
+    # HVAC sensors -> equipment
     "TemperatureSensor": ["FCU", "AHU", "Chiller"],
     "CO2_Sensor": ["AHU", "VAV"],
     "PressureSensor": ["AHU", "Pump"],
     "FlowSensor": ["Pump", "Chiller"],
+    # Parking sensors -> exhaust control
     "CO_Sensor": ["ExhaustFan"],
+}
+
+# MONITORS_SPACE rules: sensor type -> space types they monitor
+# These sensors are placed in spaces and monitor environmental conditions
+MONITORS_SPACE_RULES = {
+    "SmokeDetector": ["office_open", "office_closed", "meeting_small", "meeting_large",
+                      "conference", "corridor", "lobby", "kitchen", "storage"],
+    "CO_Sensor": ["parking"],  # CO monitoring in parking
+    "PeopleCounter": ["office_open", "meeting_large", "conference", "lobby"],
 }
 
 # IS_METERED_BY rules: equipment types that are metered
@@ -171,6 +192,44 @@ METERED_EQUIPMENT = [
     "ElectricalPanel", "TGBT", "UPS", "AHU", "Chiller", "Boiler",
     "LED_Luminaire", "FCU", "CRAC", "PassengerElevator",
 ]
+
+# =============================================================================
+# SUBMETER CONFIGURATION (3-axis metering model)
+# =============================================================================
+
+# Axis 1: USAGE-based submeters (RE2020/BACS compliance)
+# Maps submeter type to equipment domains/types it feeds
+SUBMETER_USAGE_CONFIG = {
+    "SubMeter_HVAC": {
+        "domains": ["HVAC"],
+        "equipment_types": ["AHU", "Chiller", "FCU", "VAV", "Boiler", "CRAC", "ExhaustFan"],
+    },
+    "SubMeter_Lighting": {
+        "domains": ["Lighting"],
+        "equipment_types": ["LED_Luminaire", "Emergency_Lighting", "DALI_Gateway"],
+    },
+    "SubMeter_Plugs": {
+        "domains": ["Electrical", "IT"],
+        "equipment_types": ["RackServer", "NetworkSwitch", "UPS"],
+    },
+    "SubMeter_ECS": {
+        "domains": ["Plumbing"],
+        "equipment_types": ["WaterHeater"],
+    },
+    "SubMeter_Elevator": {
+        "domains": ["Elevator"],
+        "equipment_types": ["PassengerElevator", "FreightElevator"],
+    },
+}
+
+# Axis 2: ZONE-based submeters (Decret Tertiaire compliance)
+# Zones are derived from floor orientation/position
+ZONE_DEFINITIONS = {
+    "small": ["Zone_North", "Zone_South"],
+    "medium": ["Zone_North", "Zone_South", "Zone_East", "Zone_West"],
+    "large": ["Zone_North", "Zone_South", "Zone_East", "Zone_West", "Zone_Core"],
+    "xlarge": ["Zone_North", "Zone_South", "Zone_East", "Zone_West", "Zone_Core", "Zone_Annex"],
+}
 
 
 # =============================================================================
@@ -349,11 +408,27 @@ class DatasetGeneratorV2:
                     floor_idx += 1
 
     def _create_meters(self) -> None:
-        """Create meters and their FEEDS hierarchy."""
-        meter_config = self.profile.get("meters", {"main": 1, "sub_per_main": 5})
+        """Create meters with 3-axis metering model.
 
+        The metering model follows French tertiary building standards:
+
+        Axis 1 - USAGE (RE2020/BACS):
+            SubMeter_HVAC, SubMeter_Lighting, SubMeter_Plugs, SubMeter_ECS, SubMeter_Elevator
+            These feed equipment of their respective domains.
+
+        Axis 2 - ZONE (Decret Tertiaire):
+            SubMeter_Zone_* for each thermal zone (North, South, East, West, Core)
+            Number of zones scales with profile size.
+
+        Axis 3 - TENANT (Commercial):
+            SubMeter_Tenant_* for each tenant for billing purposes.
+            Linked via METERS_TENANT relationship.
+        """
         for b in range(self.profile["buildings"]):
             building_id = f"building_{b+1}"
+
+            # Find technical electrical space for meter location
+            tech_elec_space = self._find_technical_space(building_id, "technical_elec")
 
             # Main meter
             main_id = f"meter_main_{b+1}"
@@ -363,7 +438,8 @@ class DatasetGeneratorV2:
                     "equipment_type": "MainMeter",
                     "name": f"Main Meter B{b+1}",
                     "building_id": building_id,
-                    "domain": "Electrical"
+                    "domain": "Electrical",
+                    "space_id": tech_elec_space,
                 }
             )
             self.nodes.append(main_meter)
@@ -373,21 +449,32 @@ class DatasetGeneratorV2:
             # Create points for main meter
             self._create_meter_points(main_meter)
 
-            # Sub meters
-            sub_count = meter_config.get("sub_per_main", 5)
-            for s in range(sub_count):
-                sub_id = f"meter_sub_{b+1}_{s}"
+            # If technical space exists, add LOCATED_IN edge
+            if tech_elec_space:
+                self.edges.append(Edge(main_id, tech_elec_space, "LOCATED_IN"))
+
+            # =================================================================
+            # Axis 1: USAGE-based SubMeters (RE2020/BACS)
+            # =================================================================
+            for usage_type, config in SUBMETER_USAGE_CONFIG.items():
+                sub_id = f"meter_{usage_type.lower()}_{b+1}"
                 sub_meter = Node(
                     sub_id, "Equipment",
                     {
                         "equipment_type": "SubMeter",
-                        "name": f"Sub Meter B{b+1}-{s}",
+                        "submeter_category": "usage",
+                        "usage_type": usage_type,
+                        "name": f"{usage_type.replace('_', ' ')} B{b+1}",
                         "building_id": building_id,
-                        "domain": "Electrical"
+                        "domain": "Electrical",
+                        "space_id": tech_elec_space,
+                        "feeds_domains": config["domains"],
+                        "feeds_equipment_types": config["equipment_types"],
                     }
                 )
                 self.nodes.append(sub_meter)
                 self.equipments_by_type["SubMeter"].append(sub_meter)
+                self.equipments_by_type[usage_type].append(sub_meter)
                 self.equipments_by_building[building_id].append(sub_meter)
 
                 # FEEDS: main -> sub
@@ -395,6 +482,92 @@ class DatasetGeneratorV2:
 
                 # Create points for sub meter
                 self._create_meter_points(sub_meter)
+
+                # LOCATED_IN edge
+                if tech_elec_space:
+                    self.edges.append(Edge(sub_id, tech_elec_space, "LOCATED_IN"))
+
+            # =================================================================
+            # Axis 2: ZONE-based SubMeters (Decret Tertiaire)
+            # =================================================================
+            zones = ZONE_DEFINITIONS.get(self.profile_name, ["Zone_North", "Zone_South"])
+            for zone_name in zones:
+                sub_id = f"meter_zone_{zone_name.lower()}_{b+1}"
+                sub_meter = Node(
+                    sub_id, "Equipment",
+                    {
+                        "equipment_type": "SubMeter",
+                        "submeter_category": "zone",
+                        "zone_name": zone_name,
+                        "name": f"SubMeter {zone_name.replace('_', ' ')} B{b+1}",
+                        "building_id": building_id,
+                        "domain": "Electrical",
+                        "space_id": tech_elec_space,
+                    }
+                )
+                self.nodes.append(sub_meter)
+                self.equipments_by_type["SubMeter"].append(sub_meter)
+                self.equipments_by_type[f"SubMeter_{zone_name}"].append(sub_meter)
+                self.equipments_by_building[building_id].append(sub_meter)
+
+                # FEEDS: main -> sub
+                self.edges.append(Edge(main_id, sub_id, "FEEDS"))
+
+                # Create points for sub meter
+                self._create_meter_points(sub_meter)
+
+                # LOCATED_IN edge
+                if tech_elec_space:
+                    self.edges.append(Edge(sub_id, tech_elec_space, "LOCATED_IN"))
+
+            # =================================================================
+            # Axis 3: TENANT-based SubMeters (Commercial billing)
+            # =================================================================
+            n_tenants = self.profile.get("tenants", 3)
+            for t in range(n_tenants):
+                tenant_id = f"tenant_{t+1}"
+                sub_id = f"meter_tenant_{b+1}_{t+1}"
+                sub_meter = Node(
+                    sub_id, "Equipment",
+                    {
+                        "equipment_type": "SubMeter",
+                        "submeter_category": "tenant",
+                        "tenant_id": tenant_id,
+                        "name": f"SubMeter Tenant {t+1} B{b+1}",
+                        "building_id": building_id,
+                        "domain": "Electrical",
+                        "space_id": tech_elec_space,
+                    }
+                )
+                self.nodes.append(sub_meter)
+                self.equipments_by_type["SubMeter"].append(sub_meter)
+                self.equipments_by_type["SubMeter_Tenant"].append(sub_meter)
+                self.equipments_by_building[building_id].append(sub_meter)
+
+                # FEEDS: main -> sub
+                self.edges.append(Edge(main_id, sub_id, "FEEDS"))
+
+                # Create points for sub meter
+                self._create_meter_points(sub_meter)
+
+                # LOCATED_IN edge
+                if tech_elec_space:
+                    self.edges.append(Edge(sub_id, tech_elec_space, "LOCATED_IN"))
+
+    def _find_technical_space(self, building_id: str, space_type: str) -> Optional[str]:
+        """Find a technical space in the building for meter location.
+
+        Args:
+            building_id: Building identifier
+            space_type: Type of space to find (e.g., 'technical_elec')
+
+        Returns:
+            Space ID if found, None otherwise
+        """
+        for space in self.spaces_by_building.get(building_id, []):
+            if space.properties.get("space_type") == space_type:
+                return space.id
+        return None
 
     def _create_meter_points(self, meter: Node) -> None:
         """Create points for a meter."""
@@ -655,7 +828,14 @@ class DatasetGeneratorV2:
         return "value"
 
     def _create_feeds_relations(self) -> None:
-        """Create FEEDS relations between equipment."""
+        """Create FEEDS relations between equipment.
+
+        For SubMeters, uses the 3-axis model:
+        - USAGE SubMeters: feed equipment matching their domains/types
+        - ZONE SubMeters: feed spaces in their zone via METERS_ZONE
+        - TENANT SubMeters: linked via METERS_TENANT (created in _create_meters_tenant_relations)
+        """
+        # Standard FEEDS rules (TGBT -> Panel, Chiller -> AHU, etc.)
         for source_type, target_types in FEEDS_RULES.items():
             sources = self.equipments_by_type.get(source_type, [])
 
@@ -675,17 +855,35 @@ class DatasetGeneratorV2:
                         source = bld_sources[i % len(bld_sources)]
                         self.edges.append(Edge(source.id, target.id, "FEEDS"))
 
-        # SubMeter -> Equipment (electrical equipment only)
+        # USAGE SubMeters -> Equipment (based on domain/type matching)
         for building_id, equips in self.equipments_by_building.items():
-            sub_meters = [e for e in equips if e.properties.get("equipment_type") == "SubMeter"]
-            electrical_equips = [e for e in equips
-                                 if e.properties.get("domain") == "Electrical"
-                                 and e.properties.get("equipment_type") not in ("MainMeter", "SubMeter")]
+            # Get usage-based submeters
+            usage_submeters = [
+                e for e in equips
+                if e.properties.get("equipment_type") == "SubMeter"
+                and e.properties.get("submeter_category") == "usage"
+            ]
 
-            if sub_meters and electrical_equips:
-                for i, equip in enumerate(electrical_equips):
-                    sub = sub_meters[i % len(sub_meters)]
-                    self.edges.append(Edge(sub.id, equip.id, "FEEDS"))
+            # Get all non-meter equipment
+            target_equips = [
+                e for e in equips
+                if e.properties.get("equipment_type") not in ("MainMeter", "SubMeter")
+            ]
+
+            for submeter in usage_submeters:
+                feeds_domains = submeter.properties.get("feeds_domains", [])
+                feeds_types = submeter.properties.get("feeds_equipment_types", [])
+
+                # Find equipment matching this submeter's domain or type
+                for equip in target_equips:
+                    equip_domain = equip.properties.get("domain", "")
+                    equip_type = equip.properties.get("equipment_type", "")
+
+                    if equip_domain in feeds_domains or equip_type in feeds_types:
+                        self.edges.append(Edge(submeter.id, equip.id, "FEEDS"))
+
+        # ZONE SubMeters -> Spaces (via METERS_ZONE relationship)
+        self._create_zone_meter_relations()
 
     def _create_serves_relations(self) -> None:
         """Create SERVES relations between equipment and spaces."""
@@ -721,6 +919,19 @@ class DatasetGeneratorV2:
                     n_served = max(1, int(len(bld_spaces) * ratio))
                     for space in bld_spaces[:n_served]:
                         self.edges.append(Edge(equip.id, space.id, "SERVES"))
+
+            elif scope == "floors":
+                # Serves all floors in building (e.g., Elevator)
+                building_id = equip.properties.get("building_id")
+                if building_id:
+                    # Find all floors in this building
+                    bld_floors = [
+                        n for n in self.nodes
+                        if n.type == "Floor" and n.properties.get("building_id") == building_id
+                    ]
+                    n_served = max(1, int(len(bld_floors) * ratio))
+                    for floor in bld_floors[:n_served]:
+                        self.edges.append(Edge(equip.id, floor.id, "SERVES"))
 
     def _create_has_part_relations(self) -> None:
         """Create HAS_PART relations for composite equipment."""
@@ -790,6 +1001,51 @@ class DatasetGeneratorV2:
                         sensor = bld_sensors[i % len(bld_sensors)]
                         self.edges.append(Edge(sensor.id, equip.id, "MONITORS"))
 
+        # Create MONITORS relations for space-monitoring sensors
+        self._create_monitors_space_relations()
+
+    def _create_monitors_space_relations(self) -> None:
+        """Create MONITORS relations between sensors and spaces.
+
+        Sensors like SmokeDetector, CO_Sensor, PeopleCounter monitor spaces
+        rather than equipment. They are LOCATED_IN a space and MONITORS that space.
+
+        Example: SmokeDetector MONITORS Office_101 (fire safety)
+                 CO_Sensor MONITORS Parking_B1 (air quality)
+                 PeopleCounter MONITORS Conference_Room (occupancy)
+        """
+        all_spaces = [n for n in self.nodes if n.type == "Space"]
+
+        for sensor_type, space_types in MONITORS_SPACE_RULES.items():
+            sensors = self.equipments_by_type.get(sensor_type, [])
+
+            if not sensors:
+                continue
+
+            # Find spaces matching the allowed types
+            target_spaces = [
+                s for s in all_spaces
+                if s.properties.get("space_type") in space_types
+            ]
+
+            if not target_spaces:
+                continue
+
+            # Group by building
+            for building_id in self.equipments_by_building:
+                bld_sensors = [s for s in sensors if s.properties.get("building_id") == building_id]
+                bld_spaces = [s for s in target_spaces if s.properties.get("building_id") == building_id]
+
+                if not bld_sensors or not bld_spaces:
+                    continue
+
+                # Each sensor in a space monitors that space
+                for sensor in bld_sensors:
+                    sensor_space_id = sensor.properties.get("space_id")
+                    if sensor_space_id:
+                        # Sensor monitors the space it's located in
+                        self.edges.append(Edge(sensor.id, sensor_space_id, "MONITORS"))
+
     def _create_is_metered_by_relations(self) -> None:
         """Create IS_METERED_BY relations between equipment and sub-meters.
 
@@ -848,6 +1104,64 @@ class DatasetGeneratorV2:
         for i, space in enumerate(occupiable_spaces):
             tenant = tenants[i % n_tenants]
             self.edges.append(Edge(tenant.id, space.id, "OCCUPIES"))
+
+        # Create METERS_TENANT relations after tenants exist
+        self._create_meters_tenant_relations(tenants)
+
+    def _create_zone_meter_relations(self) -> None:
+        """Create METERS_ZONE relations between zone SubMeters and Spaces.
+
+        Distributes spaces across zones based on their position in the building.
+        Uses floor index to simulate North/South/East/West orientation.
+        """
+        zones = ZONE_DEFINITIONS.get(self.profile_name, ["Zone_North", "Zone_South"])
+
+        for building_id in self.spaces_by_building:
+            # Get zone submeters for this building
+            zone_submeters = [
+                e for e in self.equipments_by_building.get(building_id, [])
+                if e.properties.get("equipment_type") == "SubMeter"
+                and e.properties.get("submeter_category") == "zone"
+            ]
+
+            if not zone_submeters:
+                continue
+
+            # Get all spaces in this building
+            spaces = self.spaces_by_building.get(building_id, [])
+
+            # Distribute spaces across zones (round-robin based on space index)
+            for i, space in enumerate(spaces):
+                zone_idx = i % len(zone_submeters)
+                zone_submeter = zone_submeters[zone_idx]
+                self.edges.append(Edge(zone_submeter.id, space.id, "METERS_ZONE"))
+
+    def _create_meters_tenant_relations(self, tenants: List[Node]) -> None:
+        """Create METERS_TENANT relations between tenant SubMeters and Tenants.
+
+        Each tenant SubMeter is linked to its corresponding tenant for billing.
+
+        Args:
+            tenants: List of Tenant nodes
+        """
+        for building_id in self.equipments_by_building:
+            # Get tenant submeters for this building
+            tenant_submeters = [
+                e for e in self.equipments_by_building.get(building_id, [])
+                if e.properties.get("equipment_type") == "SubMeter"
+                and e.properties.get("submeter_category") == "tenant"
+            ]
+
+            for submeter in tenant_submeters:
+                tenant_id = submeter.properties.get("tenant_id")
+                if tenant_id:
+                    # Find the corresponding tenant node
+                    tenant_node = next(
+                        (t for t in tenants if t.id == tenant_id),
+                        None
+                    )
+                    if tenant_node:
+                        self.edges.append(Edge(submeter.id, tenant_node.id, "METERS_TENANT"))
 
 
 # =============================================================================

@@ -1,9 +1,10 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-# Q8: Tenant Energy - Structure query for O2 hybrid
+# Q8: Tenant Energy Consumption (via METERS_TENANT)
+# For O2 hybrid: Returns point IDs, aggregation done in TimescaleDB
 # Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END (for TS query)
-# Returns point IDs for timeseries aggregation in TimescaleDB
+# Pattern: Tenant <- METERS_TENANT <- SubMeter -> HAS_POINT -> Point(energy)
 
 SELECT ?tenant_id ?tenant_name (GROUP_CONCAT(DISTINCT ?point_id; separator=",") AS ?point_ids)
 WHERE {
@@ -13,20 +14,14 @@ WHERE {
   ?tenant btb:id ?tenant_id ;
           btb:name ?tenant_name .
 
-  ?tenant btb:occupies ?space .
-  ?space rdf:type btb:Space .
+  # METERS_TENANT: SubMeter -> Tenant
+  ?meter btb:metersTenant ?tenant .
+  ?meter rdf:type btb:Equipment .
 
-  {
-    ?space btb:serves|btb:contains ?eq .
-  } UNION {
-    ?eq btb:serves|btb:contains ?space .
-  }
-
-  ?eq rdf:type btb:Equipment .
-  ?eq btb:hasPoint ?point .
-
+  # HAS_POINT: SubMeter -> Point
+  ?meter btb:hasPoint ?point .
   ?point rdf:type btb:Point ;
          btb:id ?point_id ;
-         btb:quantity "power" .
+         btb:quantity "energy" .
 }
 GROUP BY ?tenant_id ?tenant_name

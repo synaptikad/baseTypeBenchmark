@@ -486,8 +486,10 @@ def get_query_variants(
                 variant[param] = rng.choice(points) if points else "point_default"
 
             elif param == "space_type":
-                space_types = ["office_open", "office_closed", "meeting_large", "conference"]
-                variant[param] = rng.choice(space_types)
+                # Use patterns for LIKE queries (e.g., Q13)
+                # Patterns match multiple space types: office_%, meeting_%, etc.
+                space_type_patterns = ["office_%", "meeting_%", "conference"]
+                variant[param] = rng.choice(space_type_patterns)
 
             elif param == "date_start":
                 # Calculate available data range

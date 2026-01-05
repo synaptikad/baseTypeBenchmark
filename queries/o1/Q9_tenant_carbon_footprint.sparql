@@ -1,13 +1,14 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-# Q9: Tenant Carbon Footprint - Structure traversal
+# Q9: Tenant Carbon Footprint (via METERS_TENANT)
 # Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END (for TS query)
+# Pattern: Tenant <- METERS_TENANT <- SubMeter -> HAS_POINT -> Point(energy)
+# Returns point IDs for carbon calculation
 
 SELECT ?tenant_id ?tenant_name ?building_id
-       (COUNT(DISTINCT ?space) AS ?space_count)
-       (COUNT(DISTINCT ?eq) AS ?equipment_count)
-       (GROUP_CONCAT(DISTINCT ?point_id; separator=",") AS ?power_point_ids)
+       (COUNT(DISTINCT ?meter) AS ?meter_count)
+       (GROUP_CONCAT(DISTINCT ?point_id; separator=",") AS ?energy_point_ids)
 WHERE {
   # Start from specified tenant
   BIND(<http://basetype.benchmark/$TENANT_ID> AS ?tenant)
@@ -16,20 +17,14 @@ WHERE {
           btb:name ?tenant_name ;
           btb:building_id ?building_id .
 
-  ?tenant btb:occupies ?space .
-  ?space rdf:type btb:Space .
+  # METERS_TENANT: SubMeter -> Tenant
+  ?meter btb:metersTenant ?tenant .
+  ?meter rdf:type btb:Equipment .
 
-  # Bidirectional: Equipment->SERVES->Space OR Space->CONTAINS->Equipment
-  {
-    ?space btb:serves|btb:contains ?eq .
-  } UNION {
-    ?eq btb:serves|btb:contains ?space .
-  }
-  ?eq rdf:type btb:Equipment .
-
-  ?eq btb:hasPoint ?point .
+  # HAS_POINT: SubMeter -> Point
+  ?meter btb:hasPoint ?point .
   ?point rdf:type btb:Point ;
          btb:id ?point_id ;
-         btb:quantity "power" .
+         btb:quantity "energy" .
 }
 GROUP BY ?tenant_id ?tenant_name ?building_id

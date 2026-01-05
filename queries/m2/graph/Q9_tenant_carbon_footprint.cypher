@@ -1,14 +1,15 @@
-// Q9: Tenant Carbon Footprint - Structure traversal
+// Q9: Tenant Carbon Footprint (via METERS_TENANT)
+// For M2 hybrid: This returns point IDs, aggregation done in TimescaleDB
 // Parameters: $TENANT_ID - tenant to analyze, $DATE_START/$DATE_END (for TS query)
-// Returns tenant → space → equipment → point relationships
+// Pattern: Tenant <- METERS_TENANT <- SubMeter -> HAS_POINT -> Point(energy)
+// Complexity: 2 hops + carbon calculation
 
-MATCH (t:Node {id: '$TENANT_ID'})-[:OCCUPIES]->(sp:Node {type: 'Space'})
-      -[:SERVES|CONTAINS]-(eq:Node {type: 'Equipment'})
+MATCH (t:Node {id: '$TENANT_ID', type: 'Tenant'})
+      <-[:METERS_TENANT]-(m:Node {type: 'Equipment'})
       -[:HAS_POINT]->(p:Node {type: 'Point'})
-WHERE p.quantity = 'power'
+WHERE p.quantity = 'energy'
 RETURN t.id AS tenant_id,
        t.name AS tenant_name,
        t.building_id AS building_id,
-       count(DISTINCT sp) AS space_count,
-       count(DISTINCT eq) AS equipment_count,
-       collect(DISTINCT p.id) AS power_point_ids;
+       count(DISTINCT m) AS meter_count,
+       collect(DISTINCT p.id) AS energy_point_ids;
