@@ -18,7 +18,7 @@ import subprocess
 from decimal import Decimal
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 # Ensure src/ is in path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
