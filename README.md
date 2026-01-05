@@ -196,6 +196,41 @@ Les scenarios disponibles sont:
 | M2 | Memgraph + TimescaleDB | Graphe hybride + TimescaleDB |
 | O2 | Oxigraph + TimescaleDB | RDF hybride + TimescaleDB |
 
+### Options CLI pour l'ingestion
+
+L'ingestion des series temporelles utilise `timescaledb-parallel-copy` avec auto-detection du nombre optimal de workers :
+
+```bash
+# Voir la configuration detectee
+python run.py --show-config
+
+# Configuration d'ingestion detectee:
+#   CPUs detectes:     32
+#   Workers:           24 (auto-detecte)
+#   Batch size:        100,000 (auto)
+#   Formule workers: max(4, int(cpu_count * 0.75))
+```
+
+**Override manuel :**
+
+```bash
+# Override workers (24 workers au lieu de l'auto-detect)
+python run.py --workers 24
+
+# Override workers et batch size
+python run.py --workers 24 --batch-size 200000
+
+# Mode CLI direct (sans menu interactif)
+python run.py benchmark --workers 24
+```
+
+**Impact sur serveur 32 vCPUs (OVH B3) :**
+
+| Parametre | Defaut | Auto-detect | Gain estime |
+|-----------|--------|-------------|-------------|
+| Workers | 8 | 24 | -40% temps |
+| Batch size | 50,000 | 100,000 | -15% temps |
+
 ---
 
 ## Profils de donnees

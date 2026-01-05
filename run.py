@@ -14,6 +14,7 @@ import sys
 import json
 import time
 import shutil
+import argparse
 import subprocess
 from decimal import Decimal
 from pathlib import Path
@@ -59,6 +60,120 @@ RESET = "\033[0m"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 VERBOSE = True  # Global verbosity flag
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INGESTION CONFIGURATION (Auto-detect + CLI/Interactive override)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_cpu_count() -> int:
+    """Get CPU count with fallback."""
+    try:
+        return os.cpu_count() or 4
+    except Exception:
+        return 4
+
+
+def get_optimal_workers(cpu_count: Optional[int] = None) -> int:
+    """Calculate optimal parallel-copy workers based on CPU count.
+
+    Formula: max(4, int(cpu_count * 0.75))
+    - Uses 75% of CPUs to leave headroom for OS/DB processes
+    - Minimum of 4 workers for reasonable parallelism
+
+    Examples:
+        4 CPUs  → 4 workers
+        8 CPUs  → 6 workers
+        16 CPUs → 12 workers
+        32 CPUs → 24 workers
+    """
+    if cpu_count is None:
+        cpu_count = get_cpu_count()
+    return max(4, int(cpu_count * 0.75))
+
+
+def get_optimal_batch_size(ram_gb: float = 128) -> int:
+    """Calculate optimal batch size based on available RAM.
+
+    Formula: Higher RAM allows larger batches (less commit overhead).
+    - < 8GB:  50,000 (conservative)
+    - 8-32GB: 100,000 (balanced)
+    - > 32GB: 200,000 (aggressive)
+    """
+    if ram_gb < 8:
+        return 50000
+    elif ram_gb <= 32:
+        return 100000
+    else:
+        return 200000
+
+
+class IngestionConfig:
+    """Configuration for timeseries ingestion performance."""
+
+    def __init__(
+        self,
+        workers: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        auto_detect: bool = True,
+    ):
+        """Initialize ingestion config.
+
+        Args:
+            workers: Number of parallel-copy workers (None = auto-detect)
+            batch_size: Rows per batch (None = auto-detect based on RAM)
+            auto_detect: If True, use auto-detection for None values
+        """
+        self._cpu_count = get_cpu_count()
+
+        if workers is not None:
+            self.workers = workers
+        elif auto_detect:
+            self.workers = get_optimal_workers(self._cpu_count)
+        else:
+            self.workers = int(os.getenv("BTB_TS_PARALLEL_COPY_WORKERS", "8"))
+
+        if batch_size is not None:
+            self.batch_size = batch_size
+        elif auto_detect:
+            # Default to 100k for auto-detect (good balance)
+            self.batch_size = 100000
+        else:
+            self.batch_size = int(os.getenv("BTB_TS_PARALLEL_COPY_BATCH_SIZE", "50000"))
+
+    def __repr__(self) -> str:
+        return f"IngestionConfig(workers={self.workers}, batch_size={self.batch_size})"
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> "IngestionConfig":
+        """Create config from CLI arguments."""
+        return cls(
+            workers=getattr(args, "workers", None),
+            batch_size=getattr(args, "batch_size", None),
+            auto_detect=True,
+        )
+
+    @property
+    def cpu_count(self) -> int:
+        return self._cpu_count
+
+
+# Global ingestion config (set by CLI or interactive menu)
+_ingestion_config: Optional[IngestionConfig] = None
+
+
+def get_ingestion_config() -> IngestionConfig:
+    """Get current ingestion config (creates default if not set)."""
+    global _ingestion_config
+    if _ingestion_config is None:
+        _ingestion_config = IngestionConfig(auto_detect=True)
+    return _ingestion_config
+
+
+def set_ingestion_config(config: IngestionConfig) -> None:
+    """Set global ingestion config."""
+    global _ingestion_config
+    _ingestion_config = config
 
 
 def log(msg: str, level: str = "info"):
@@ -955,7 +1070,46 @@ def workflow_benchmark():
             log(f"Dataset massif ({ds_size_mb/1024:.1f}GB) → RAM: 8, 16, 32, 64 GB", "info")
 
     log(f"Niveaux RAM: {', '.join(format_ram(r) for r in ram_levels)}", "ok")
-    
+
+    # Ingestion performance configuration
+    log_subsection("Configuration ingestion (timeseries)")
+
+    config = get_ingestion_config()
+    print(f"  Configuration actuelle (auto-détectée):\n")
+    print(f"    CPUs détectés: {config.cpu_count}")
+    print(f"    Workers:       {BOLD}{config.workers}{RESET} (parallel-copy)")
+    print(f"    Batch size:    {BOLD}{config.batch_size:,}{RESET} rows/batch")
+    print()
+    print(f"  {DIM}Formule: workers = max(4, cpu_count × 0.75){RESET}")
+    print(f"  {DIM}Override CLI: --workers N --batch-size N{RESET}")
+    print()
+
+    if confirm("Modifier la configuration d'ingestion?", default=False):
+        # Workers
+        workers_input = prompt(
+            f"  Workers (1-{config.cpu_count * 2}, actuel={config.workers})",
+            str(config.workers)
+        )
+        try:
+            new_workers = int(workers_input)
+            if 1 <= new_workers <= config.cpu_count * 2:
+                config.workers = new_workers
+            else:
+                log(f"Valeur hors limites, conserve {config.workers}", "warn")
+        except ValueError:
+            log(f"Valeur invalide, conserve {config.workers}", "warn")
+
+        # Batch size
+        batch_options = ["50000 (conservatif)", "100000 (équilibré)", "200000 (agressif)"]
+        current_batch_idx = 1 if config.batch_size == 50000 else (2 if config.batch_size == 100000 else 3)
+        batch_idx = prompt_choice("  Batch size", batch_options, default=current_batch_idx)
+        config.batch_size = [50000, 100000, 200000][batch_idx - 1]
+
+        set_ingestion_config(config)
+        log(f"Config mise à jour: {config.workers} workers, {config.batch_size:,} batch", "ok")
+    else:
+        log(f"Config conservée: {config.workers} workers, {config.batch_size:,} batch", "ok")
+
     # Workload selection (before queries - workload defines its own queries)
     workload_config = select_workload(repo_root)
 
@@ -986,6 +1140,7 @@ def workflow_benchmark():
     print(f"  Dataset:    {BOLD}{selected_ds['name']}{RESET}")
     print(f"  Scénarios:  {', '.join(scenarios)} ({len(scenarios)})")
     print(f"  RAM:        {', '.join(format_ram(r) for r in ram_levels)} ({len(ram_levels)} niveaux)")
+    print(f"  Ingestion:  {BOLD}{config.workers}{RESET} workers, {BOLD}{config.batch_size:,}{RESET} batch ({config.cpu_count} CPUs détectés)")
 
     if workload_config:
         n_queries = workload_config.execution.iterations
@@ -1425,9 +1580,16 @@ def load_data_for_scenario(scenario: str, dataset_path: Path, ram_gb: int, graph
     from basetype_benchmark.runner.engines.postgres import PostgresEngine
     from basetype_benchmark.runner.engines.memgraph import MemgraphEngine
     from basetype_benchmark.runner.engines.oxigraph import OxigraphEngine
-    
+
     parquet_dir = dataset_path / "parquet"
-    
+
+    # Inject ingestion config into environment for engine methods
+    # Engines read BTB_TS_PARALLEL_COPY_* env vars in load_timeseries_parallel_copy()
+    config = get_ingestion_config()
+    os.environ["BTB_TS_PARALLEL_COPY_WORKERS"] = str(config.workers)
+    os.environ["BTB_TS_PARALLEL_COPY_BATCH_SIZE"] = str(config.batch_size)
+    log(f"  Ingestion config: {config.workers} workers, {config.batch_size:,} batch", "info")
+
     if scenario in ("P1", "P2"):
         engine = PostgresEngine(scenario)
         engine.connect()
@@ -1855,19 +2017,112 @@ def main_menu():
             break
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="BaseType Benchmark - Comparaison des paradigmes de stockage",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples:
+  python run.py                           # Mode interactif (recommandé)
+  python run.py --workers 24              # Override workers (auto-detect batch)
+  python run.py --workers 24 --batch 100000  # Override les deux
+  python run.py benchmark --workers auto  # Benchmark avec auto-detect explicite
+
+Variables d'environnement (fallback si non spécifié):
+  BTB_TS_PARALLEL_COPY_WORKERS    (défaut: auto-detect)
+  BTB_TS_PARALLEL_COPY_BATCH_SIZE (défaut: 100000)
+""",
+    )
+
+    # Ingestion performance options
+    perf_group = parser.add_argument_group("Performance ingestion")
+    perf_group.add_argument(
+        "--workers", "-w",
+        type=str,
+        default=None,
+        metavar="N",
+        help="Nombre de workers parallel-copy (défaut: auto = 75%% CPU). "
+             "Utilisez 'auto' pour forcer l'auto-détection.",
+    )
+    perf_group.add_argument(
+        "--batch-size", "--batch", "-b",
+        type=int,
+        default=None,
+        metavar="N",
+        dest="batch_size",
+        help="Taille de batch parallel-copy (défaut: 100000). "
+             "Valeurs suggérées: 50000 (conservatif), 100000 (équilibré), 200000 (agressif).",
+    )
+    perf_group.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Affiche la configuration d'ingestion détectée et quitte.",
+    )
+
+    # Subcommands (optional, for future CLI mode)
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["benchmark", "generate", "results", "purge"],
+        help="Commande à exécuter (optionnel, sinon mode interactif).",
+    )
+
+    return parser.parse_args()
+
+
 def main():
     """Main entry point."""
-    if len(sys.argv) > 1:
-        arg = sys.argv[1]
-        if arg in ("--help", "-h"):
-            print(__doc__)
-            print("\nPour le mode CLI, utilisez:")
-            print("  python run.py generate <profile>")
-            print("  python run.py benchmark")
-            return
-    
+    args = parse_args()
+
+    # Handle --workers 'auto' string
+    workers = None
+    if args.workers is not None:
+        if args.workers.lower() == "auto":
+            workers = None  # Will trigger auto-detect
+        else:
+            try:
+                workers = int(args.workers)
+            except ValueError:
+                print(f"{RED}Erreur: --workers doit être un nombre ou 'auto'{RESET}")
+                sys.exit(1)
+
+    # Create and set global ingestion config
+    config = IngestionConfig(
+        workers=workers,
+        batch_size=args.batch_size,
+        auto_detect=True,
+    )
+    set_ingestion_config(config)
+
+    # --show-config: display and exit
+    if args.show_config:
+        print(f"\n{BOLD}Configuration d'ingestion détectée:{RESET}\n")
+        print(f"  CPUs détectés:     {config.cpu_count}")
+        print(f"  Workers:           {config.workers} {'(auto-détecté)' if workers is None else '(spécifié)'}")
+        print(f"  Batch size:        {config.batch_size:,} {'(auto)' if args.batch_size is None else '(spécifié)'}")
+        print()
+        print(f"  {DIM}Formule workers: max(4, int(cpu_count * 0.75)){RESET}")
+        print(f"  {DIM}Pour override: --workers N --batch-size N{RESET}")
+        print()
+        return
+
+    # Log config at startup
+    log(f"Ingestion config: {config.workers} workers, {config.batch_size:,} batch", "info")
+
     try:
-        main_menu()
+        # Direct command execution (CLI mode)
+        if args.command == "benchmark":
+            workflow_benchmark()
+        elif args.command == "generate":
+            workflow_generate()
+        elif args.command == "results":
+            workflow_results()
+        elif args.command == "purge":
+            workflow_purge()
+        else:
+            # Interactive menu (default)
+            main_menu()
     except KeyboardInterrupt:
         print(f"\n\n{YELLOW}Interruption utilisateur{RESET}")
         docker_stop_all()
