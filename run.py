@@ -718,28 +718,29 @@ def workflow_generate():
     log_box([
         "Profil recommandé pour ce benchmark:",
         "",
-        f"  {BOLD}large-1w{RESET} (1 semaine, ~1.2M points)",
+        f"  {BOLD}large-1w{RESET} (1 semaine, ~100k points)",
         "",
         "Ce profil offre un bon équilibre entre:",
         "  • Taille suffisante pour stresser les moteurs",
-        "  • Temps de génération raisonnable (~5-10 min)",
-        "  • Taille disque modérée (~14 GB)",
+        "  • Temps de génération raisonnable (~5 min)",
+        "  • Comparable à Campus Archipel Vinci (5 bât, 75k m²)",
         "",
         "Pour un test rapide, utilisez small-2d.",
     ])
-    
+
     print()
-    
+
     # Scale selection
     log_subsection("Échelle du dataset")
     print("  L'échelle détermine le nombre de bâtiments et équipements:\n")
     scales = [
-        "small  - 1 bâtiment, ~50K nœuds (tests rapides)",
-        "medium - 5 bâtiments, ~250K nœuds (validation)",
-        f"{BOLD}large  - 25 bâtiments, ~1.2M nœuds (benchmark complet){RESET}",
+        "small  - 1 bâtiment, ~12k points (tests rapides)",
+        "medium - 3 bâtiments, ~40k points (validation)",
+        f"{BOLD}large  - 5 bâtiments, ~100k points (benchmark complet){RESET}",
+        "xlarge - 9 bâtiments, ~500k points (stress-test)",
     ]
     scale_idx = prompt_choice("Choisir l'échelle", scales, default=3)
-    scale = ["small", "medium", "large"][scale_idx - 1]
+    scale = ["small", "medium", "large", "xlarge"][scale_idx - 1]
     log(f"Échelle sélectionnée: {scale}", "ok")
     
     # Duration selection
