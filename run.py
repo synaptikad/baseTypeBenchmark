@@ -242,7 +242,9 @@ def elapsed_str(seconds: float) -> str:
 
 
 def format_ram(gb: float) -> str:
-    """Format RAM value for display (supports sub-GB values)."""
+    """Format RAM value for display (supports sub-GB values, 0 = no limit)."""
+    if gb == 0:
+        return "MAX"
     if gb < 1:
         return f"{int(gb * 1024)}MB"
     return f"{int(gb)}GB"
@@ -529,8 +531,10 @@ def docker_start(containers: List[str], ram_gb: float, data_dir: Optional[Path] 
     log(f"Démarrage containers: {', '.join(containers)} (limite {format_ram(ram_gb)} RAM)...", "step")
 
     env = os.environ.copy()
-    # Docker memory limit: use MB for sub-GB values
-    if ram_gb < 1:
+    # Docker memory limit: 0 = no limit, <1 = MB, >=1 = GB
+    if ram_gb == 0:
+        env["MEMORY_LIMIT"] = "0"  # No limit
+    elif ram_gb < 1:
         env["MEMORY_LIMIT"] = f"{int(ram_gb * 1024)}m"
     else:
         env["MEMORY_LIMIT"] = f"{int(ram_gb)}g"
@@ -1084,9 +1088,9 @@ def workflow_benchmark():
 
     log(f"Niveaux RAM: {', '.join(format_ram(r) for r in ram_levels)}", "ok")
 
-    # Determine RAM for data loading phase (max system RAM)
-    load_ram_gb = get_system_ram_gb()
-    log(f"RAM chargement: {load_ram_gb}GB (système max, données persistent)", "info")
+    # Determine RAM for data loading phase (0 = no limit = use all available RAM)
+    load_ram_gb = 0  # No Docker memory limit during load
+    log(f"RAM chargement: {format_ram(load_ram_gb)} (pas de limite Docker)", "info")
 
     # Ingestion performance configuration
     log_subsection("Configuration ingestion (timeseries)")
@@ -1252,7 +1256,7 @@ def workflow_benchmark():
     # PHASE 1: Load TimescaleDB ONCE with max RAM (for TS scenarios)
     # ═══════════════════════════════════════════════════════════════════════════════
     if ts_scenarios:
-        log_section(f"CHARGEMENT TIMESCALEDB ({load_ram_gb}GB RAM)")
+        log_section(f"CHARGEMENT TIMESCALEDB (RAM {format_ram(load_ram_gb)})")
 
         # Start TimescaleDB with max RAM for fast parallel-copy
         if not docker_start(["timescaledb"], load_ram_gb, selected_ds["path"], preserve_volumes=False):
