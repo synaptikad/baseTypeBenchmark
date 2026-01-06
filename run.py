@@ -74,6 +74,19 @@ def get_cpu_count() -> int:
         return 4
 
 
+def get_system_ram_gb() -> int:
+    """Get total system RAM in GB.
+
+    Used to determine optimal RAM for data loading phase.
+    Falls back to 16GB if detection fails.
+    """
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total / (1024**3))
+    except Exception:
+        return 16  # Conservative fallback
+
+
 def get_optimal_workers(cpu_count: Optional[int] = None) -> int:
     """Calculate optimal parallel-copy workers based on CPU count.
 
@@ -1071,6 +1084,10 @@ def workflow_benchmark():
 
     log(f"Niveaux RAM: {', '.join(format_ram(r) for r in ram_levels)}", "ok")
 
+    # Determine RAM for data loading phase (max system RAM)
+    load_ram_gb = get_system_ram_gb()
+    log(f"RAM chargement: {load_ram_gb}GB (système max, données persistent)", "info")
+
     # Ingestion performance configuration
     log_subsection("Configuration ingestion (timeseries)")
 
@@ -1223,17 +1240,47 @@ def workflow_benchmark():
     
     total_combinations = len(scenarios) * len(ram_levels)
     combo_idx = 0
-    
-    # Track TimescaleDB state across scenarios
-    timescale_loaded_for_ram = {}  # {ram_gb: True} when timeseries loaded
-    
-    for scenario in scenarios_ordered:
+
+    # Separate TimescaleDB scenarios from standalone M1
+    ts_scenarios = [s for s in scenarios_ordered if s in ("P1", "P2", "M2", "O2")]
+    m1_selected = "M1" in scenarios_ordered
+
+    # Track state
+    timescale_loaded = False  # True once TimescaleDB is loaded (once for all)
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 1: Load TimescaleDB ONCE with max RAM (for TS scenarios)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    if ts_scenarios:
+        log_section(f"CHARGEMENT TIMESCALEDB ({load_ram_gb}GB RAM)")
+
+        # Start TimescaleDB with max RAM for fast parallel-copy
+        if not docker_start(["timescaledb"], load_ram_gb, selected_ds["path"], preserve_volumes=False):
+            log("Échec démarrage TimescaleDB pour chargement", "error")
+        else:
+            # Load timeseries data once (will persist on volume)
+            first_ts_scenario = ts_scenarios[0]  # P1, P2, M2, or O2
+            load_time, load_status = _do_load(first_ts_scenario, selected_ds["path"], load_ram_gb)
+            if load_time is None:
+                log(f"Échec chargement TimescaleDB: {load_status}", "error")
+            else:
+                timescale_loaded = True
+                log(f"TimescaleDB chargé en {elapsed_str(load_time)} (données persistent)", "ok")
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 2: Benchmark TS scenarios (RAM variation, data persists)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    for scenario in ts_scenarios:
+        if not timescale_loaded:
+            log(f"Skip {scenario}: TimescaleDB non chargé", "warn")
+            continue
+
         sc_info = SCENARIOS[scenario]
         all_results[scenario] = {}
-        first_ram_run = True
         prev_ram_avg_latency = None  # For plateau detection
         skip_remaining_ram = False  # Set True if plateau detected
-        
+        first_ram_run = True
+
         for ram_gb in ram_levels:
             ram_str = format_ram(ram_gb)
             # Skip if plateau was detected
@@ -1246,59 +1293,50 @@ def workflow_benchmark():
 
             log_subsection(f"[{combo_idx}/{total_combinations}] {sc_info['color']}{scenario}{RESET} @ {ram_str} RAM")
 
-            # Determine container and loading strategy
-            # - P1/P2: preserve TimescaleDB volumes across RAM levels
-            # - M2/O2: can reuse TimescaleDB if already loaded at this RAM level
-            # - M1: always full reload (standalone in-memory with chunks)
-
-            uses_timescale = scenario in ("P1", "P2", "M2", "O2")
-            timescale_ready = timescale_loaded_for_ram.get(ram_gb, False)
-            can_preserve = uses_timescale and (not first_ram_run or timescale_ready)
-
-            # Start containers with specific RAM
-            if not docker_start(sc_info["containers"], ram_gb, selected_ds["path"], preserve_volumes=can_preserve):
-                log(f"Échec démarrage containers pour {scenario}@{ram_str}", "error")
-                all_results[scenario][ram_gb] = {"status": "container_error", "queries": {}}
-                continue
-
-            # Smart loading strategy
+            # For TS scenarios: adjust RAM via docker_update_memory (data persists on volume)
             load_time = 0
 
-            if scenario in ("P1", "P2"):
-                # PostgreSQL: check if tables actually exist before skipping
-                tables_exist = check_postgres_tables_exist() if not first_ram_run else False
+            if first_ram_run:
+                # First RAM level: start containers fresh
+                if not docker_start(sc_info["containers"], ram_gb, selected_ds["path"], preserve_volumes=True):
+                    log(f"Échec démarrage containers pour {scenario}@{ram_str}", "error")
+                    all_results[scenario][ram_gb] = {"status": "container_error", "queries": {}}
+                    continue
 
-                if not first_ram_run and tables_exist:
-                    log(f"PostgreSQL persistant → skip rechargement", "ok")
-                elif timescale_ready and tables_exist:
-                    log(f"TimescaleDB déjà chargé (RAM {ram_str}) → skip", "ok")
-                else:
-                    if not first_ram_run and not tables_exist:
-                        log(f"Tables manquantes → rechargement nécessaire", "warn")
-                    load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
+                # For hybrid M2/O2: need to load graph (TS already loaded)
+                if scenario in ("M2", "O2"):
+                    log("TimescaleDB déjà chargé → chargement graphe uniquement", "info")
+                    load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb, graph_only=True)
                     if load_time is None:
                         all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
                         continue
-                    timescale_loaded_for_ram[ram_gb] = True
+                # P1/P2: data already loaded, just verify tables exist
+                elif scenario in ("P1", "P2"):
+                    if not check_postgres_tables_exist():
+                        log("Tables manquantes → rechargement nécessaire", "warn")
+                        load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
+                        if load_time is None:
+                            all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
+                            continue
+                    else:
+                        log("TimescaleDB déjà chargé → skip", "ok")
+            else:
+                # Subsequent RAM levels: just update memory limit, data persists
+                log(f"Ajustement RAM → {ram_str} (données persistent)", "info")
+                if not docker_update_memory(sc_info["containers"], ram_gb, clear_cache=True):
+                    log(f"Échec update RAM pour {scenario}@{ram_str}", "error")
+                    all_results[scenario][ram_gb] = {"status": "ram_update_error", "queries": {}}
+                    continue
 
-            elif scenario in ("M2", "O2"):
-                # Hybrid: need to load graph, but TimescaleDB may be ready
-                if timescale_ready:
-                    log(f"TimescaleDB déjà chargé → chargement graphe uniquement", "info")
+                # For hybrid M2/O2: graph is in-memory, must reload after RAM change
+                if scenario in ("M2", "O2"):
+                    graph_container = "memgraph" if scenario == "M2" else "oxigraph"
+                    log(f"Rechargement graphe {graph_container} (in-memory)", "info")
                     load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb, graph_only=True)
-                else:
-                    load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
-                    timescale_loaded_for_ram[ram_gb] = True
-                if load_time is None:
-                    all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
-                    continue
+                    if load_time is None:
+                        all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
+                        continue
 
-            else:  # M1 - standalone with chunks
-                load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
-                if load_time is None:
-                    all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
-                    continue
-            
             first_ram_run = False
 
             # Check for OOM after load (container may have crashed)
@@ -1504,7 +1542,199 @@ def workflow_benchmark():
         # Full cleanup after each scenario completes (or when switching scenarios)
         if scenario in ("P1", "P2"):
             docker_stop_all(preserve_volumes=False)  # Now cleanup volumes
-    
+
+    # Cleanup after all TS scenarios
+    if ts_scenarios:
+        docker_stop_all(preserve_volumes=False)
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PHASE 3: M1 Standalone (in-memory, must reload at each RAM level)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    if m1_selected:
+        log_section("BENCHMARK M1 STANDALONE")
+        scenario = "M1"
+        sc_info = SCENARIOS[scenario]
+        all_results[scenario] = {}
+        prev_ram_avg_latency = None
+        skip_remaining_ram = False
+
+        for ram_gb in ram_levels:
+            ram_str = format_ram(ram_gb)
+
+            if skip_remaining_ram:
+                log(f"Plateau détecté → skip M1@{ram_str}", "info")
+                combo_idx += 1
+                continue
+
+            combo_idx += 1
+            log_subsection(f"[{combo_idx}/{total_combinations}] {sc_info['color']}M1{RESET} @ {ram_str} RAM")
+
+            # M1: start fresh and load at each RAM level (in-memory, no persistence)
+            if not docker_start(sc_info["containers"], ram_gb, selected_ds["path"], preserve_volumes=False):
+                log(f"Échec démarrage M1@{ram_str}", "error")
+                all_results[scenario][ram_gb] = {"status": "container_error", "queries": {}}
+                continue
+
+            load_time, load_status = _do_load(scenario, selected_ds["path"], ram_gb)
+            if load_time is None:
+                all_results[scenario][ram_gb] = {"status": load_status, "queries": {}}
+                continue
+
+            # OOM check
+            oom_detected = False
+            for container in sc_info["containers"]:
+                container_name = f"btb_{container}"
+                check = subprocess.run(
+                    f"docker ps -q --filter 'name={container_name}'",
+                    shell=True, capture_output=True, text=True
+                )
+                if not check.stdout.strip():
+                    log(f"Container {container} mort après load (probable OOM)", "error")
+                    oom_detected = True
+                elif check_oom(container_name):
+                    log(f"OOM détecté sur {container}", "error")
+                    oom_detected = True
+
+            if oom_detected:
+                all_results[scenario][ram_gb] = {"status": "oom", "queries": {}}
+                docker_stop_all()
+                continue
+
+            # Metrics
+            metrics_after_load = {}
+            total_mem_after_load = 0
+            for container in sc_info["containers"]:
+                m = get_container_metrics(container)
+                metrics_after_load[container] = {
+                    "memory_mb": m.memory_mb,
+                    "memory_peak_mb": m.memory_peak_mb,
+                }
+                total_mem_after_load += m.memory_mb
+                reset_ok = m.reset_peak()
+                pct = (m.memory_mb / 1024) / ram_gb * 100
+                color = GREEN if pct < 70 else YELLOW if pct < 90 else RED
+                reset_str = " (peak reset ✓)" if reset_ok else ""
+                log(f"  RAM {container}: {m.memory_mb:.0f}MB ({color}{pct:.0f}%{RESET}){reset_str}", "info")
+
+            # Execute queries
+            scenario_results = {
+                "scenario": scenario,
+                "ram_gb": ram_gb,
+                "load_time_s": load_time,
+                "mem_after_load_mb": metrics_after_load,
+                "mem_after_load_total_mb": total_mem_after_load,
+                "queries": {},
+                "responses": {},
+            }
+
+            print()
+            if workload_config:
+                log(f"Workload: {workload_config.name} ({workload_config.execution.mode.value})", "info")
+                wl_executor = WorkloadExecutor(
+                    config=workload_config,
+                    query_executor=make_query_executor(scenario, selected_ds["path"]),
+                    containers=sc_info["containers"],
+                    all_queries=QUERIES,
+                )
+                wl_result = wl_executor.run()
+                for qm in wl_result.query_metrics:
+                    scenario_results["queries"][qm.query_id] = {
+                        "row_count": qm.row_count,
+                        "latency_ms": qm.latency_ms,
+                        "memory_mb": qm.memory_mb,
+                        "memory_peak_mb": qm.peak_memory_mb,
+                        "status": qm.status,
+                        "error": qm.error,
+                    }
+                scenario_results["workload"] = {
+                    "name": wl_result.workload_name,
+                    "total_queries": wl_result.total_queries,
+                    "duration_s": wl_result.total_duration_s,
+                    "throughput_qps": wl_result.throughput_qps,
+                    "latency_p50_ms": wl_result.latency_stats.p50_ms,
+                    "latency_p95_ms": wl_result.latency_stats.p95_ms,
+                    "peak_memory_mb": wl_result.peak_memory_mb,
+                }
+                log(f"{wl_result.total_queries} queries en {wl_result.total_duration_s:.1f}s "
+                    f"({wl_result.throughput_qps:.1f} q/s, peak:{wl_result.peak_memory_mb:.0f}MB)", "ok")
+            else:
+                for q_idx, query in enumerate(queries, 1):
+                    progress = progress_bar(q_idx, len(queries), width=30, prefix=f"  M1@{ram_str} ")
+                    print(f"\r{progress} {query}...", end="", flush=True)
+                    try:
+                        peak_reset_ok = True
+                        for container in sc_info["containers"]:
+                            m = get_container_metrics(container)
+                            if not m.reset_peak():
+                                peak_reset_ok = False
+                        time.sleep(0.1)
+                        m_before = {c: get_container_metrics(c) for c in sc_info["containers"]}
+                        peak_before = sum(m_before[c].memory_peak_mb for c in sc_info["containers"])
+                        row_count, latency_ms, rows_data = execute_query_for_scenario(
+                            scenario, query, selected_ds["path"], return_rows=True
+                        )
+                        m_after = {c: get_container_metrics(c) for c in sc_info["containers"]}
+                        query_mem_mb = sum(m_after[c].memory_mb for c in sc_info["containers"])
+                        peak_after = sum(m_after[c].memory_peak_mb for c in sc_info["containers"])
+                        if peak_reset_ok:
+                            query_peak_mb = peak_after
+                        else:
+                            peak_delta = peak_after - peak_before
+                            query_peak_mb = query_mem_mb + max(0, peak_delta)
+                        mem_breakdown = {c: {
+                            "memory_mb": m_after[c].memory_mb,
+                            "peak_mb": m_after[c].memory_peak_mb,
+                        } for c in sc_info["containers"]}
+                        scenario_results["queries"][query] = {
+                            "row_count": row_count,
+                            "latency_ms": latency_ms,
+                            "memory_mb": query_mem_mb,
+                            "memory_peak_mb": query_peak_mb,
+                            "memory_by_container": mem_breakdown,
+                            "status": "ok"
+                        }
+                        if rows_data:
+                            scenario_results["responses"][query] = {
+                                "row_count": row_count,
+                                "sample": rows_data[:5] if len(rows_data) > 5 else rows_data,
+                                "hash": hash(str(sorted(str(r) for r in rows_data))) if rows_data else 0,
+                            }
+                    except Exception as e:
+                        scenario_results["queries"][query] = {"error": str(e), "status": "error"}
+                print(f"\r{progress_bar(len(queries), len(queries), width=30, prefix=f'  M1@{ram_str} ')} Terminé")
+
+            # Summary
+            print()
+            for query, data in scenario_results["queries"].items():
+                if data.get("status") == "ok":
+                    peak_str = f", peak:{data.get('memory_peak_mb', 0):.0f}MB" if data.get('memory_peak_mb') else ""
+                    print(f"    {GREEN}✓{RESET} {query}: {data['row_count']} rows, {data['latency_ms']:.1f}ms{peak_str}")
+                else:
+                    print(f"    {RED}✗{RESET} {query}: {data.get('error', 'Unknown error')}")
+
+            all_results[scenario][ram_gb] = scenario_results
+
+            # Save
+            result_file = run_dir / f"M1_{ram_str}.json"
+            result_file.write_text(json.dumps(scenario_results, indent=2, cls=BenchmarkEncoder))
+            log(f"Résultats M1@{ram_str} sauvegardés", "ok")
+
+            # Plateau detection
+            ok_queries = [q for q in scenario_results["queries"].values() if q.get("status") == "ok"]
+            if ok_queries:
+                curr_avg_latency = sum(q["latency_ms"] for q in ok_queries) / len(ok_queries)
+                if prev_ram_avg_latency is not None:
+                    improvement = (prev_ram_avg_latency - curr_avg_latency) / prev_ram_avg_latency
+                    if improvement < 0.10:
+                        log(f"Plateau détecté: {prev_ram_avg_latency:.0f}ms → {curr_avg_latency:.0f}ms ({improvement*100:+.1f}%)", "info")
+                        skip_remaining_ram = True
+                    else:
+                        log(f"Amélioration: {prev_ram_avg_latency:.0f}ms → {curr_avg_latency:.0f}ms ({improvement*100:+.1f}%)", "ok")
+                prev_ram_avg_latency = curr_avg_latency
+
+            docker_stop_all(preserve_volumes=False)
+            print()
+
     # Final summary
     elapsed_total = time.time() - t0_total
     
@@ -2059,6 +2289,15 @@ Variables d'environnement (fallback si non spécifié):
         action="store_true",
         help="Affiche la configuration d'ingestion détectée et quitte.",
     )
+    perf_group.add_argument(
+        "--load-ram",
+        type=int,
+        default=None,
+        metavar="GB",
+        help="RAM (GB) pour la phase de chargement des données. "
+             "Défaut: RAM système max détectée. "
+             "Le chargement utilise cette RAM, puis le benchmark varie la RAM pour les queries.",
+    )
 
     # Subcommands (optional, for future CLI mode)
     parser.add_argument(
@@ -2095,15 +2334,20 @@ def main():
     )
     set_ingestion_config(config)
 
+    # Determine load RAM (for data loading phase)
+    load_ram_gb = args.load_ram if args.load_ram else get_system_ram_gb()
+
     # --show-config: display and exit
     if args.show_config:
         print(f"\n{BOLD}Configuration d'ingestion détectée:{RESET}\n")
         print(f"  CPUs détectés:     {config.cpu_count}")
+        print(f"  RAM système:       {get_system_ram_gb()} GB")
         print(f"  Workers:           {config.workers} {'(auto-détecté)' if workers is None else '(spécifié)'}")
         print(f"  Batch size:        {config.batch_size:,} {'(auto)' if args.batch_size is None else '(spécifié)'}")
+        print(f"  RAM chargement:    {load_ram_gb} GB {'(auto-détecté)' if args.load_ram is None else '(spécifié)'}")
         print()
         print(f"  {DIM}Formule workers: max(4, int(cpu_count * 0.75)){RESET}")
-        print(f"  {DIM}Pour override: --workers N --batch-size N{RESET}")
+        print(f"  {DIM}Pour override: --workers N --batch-size N --load-ram N{RESET}")
         print()
         return
 
