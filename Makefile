@@ -31,6 +31,8 @@ RAM_LEVELS := 128,64,32,16,8
 help:
 	@echo "BaseType Benchmark V3"
 	@echo ""
+	@echo "  make run           - Interactive menu (recommended)"
+	@echo ""
 	@echo "Setup:"
 	@echo "  make init          - Full setup (system + docker + python)"
 	@echo "  make install       - Install Python dependencies only"
@@ -260,6 +262,9 @@ export-medium:
 # =============================================================================
 # UTILITIES
 # =============================================================================
+
+run:
+	@$(VENV)/bin/python run.py
 
 shell:
 	@$(VENV)/bin/python
