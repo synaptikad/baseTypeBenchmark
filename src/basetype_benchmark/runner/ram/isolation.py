@@ -300,9 +300,9 @@ class IsolationManager:
         return True
 
     def _compose_up(self, services: list[str]) -> None:
-        """Start services via docker-compose."""
+        """Start services via docker compose."""
         cmd = [
-            "docker-compose",
+            "docker", "compose",
             "-f", str(self.compose_file),
             "up", "-d",
         ] + services
@@ -314,9 +314,9 @@ class IsolationManager:
             )
 
     def _compose_down(self, services: list[str]) -> None:
-        """Stop services via docker-compose."""
+        """Stop services via docker compose."""
         cmd = [
-            "docker-compose",
+            "docker", "compose",
             "-f", str(self.compose_file),
             "down", "-v", "--remove-orphans",
         ]
