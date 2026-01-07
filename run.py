@@ -14,6 +14,7 @@ import subprocess
 import sys
 import shutil
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -40,7 +41,7 @@ PROJECT_DIR = Path(__file__).parent
 VENV_PYTHON = PROJECT_DIR / ".venv" / "bin" / "python"
 VENV_BTB = PROJECT_DIR / ".venv" / "bin" / "btb-runner"
 CONFIG_DIR = PROJECT_DIR / "config"
-DATA_DIR = Path("/data/benchmark")
+DATA_DIR = Path(os.environ.get("BTB_DATA_DIR", PROJECT_DIR / "data"))
 GENERATED_DIR = DATA_DIR / "generated"
 EXPORT_DIR = DATA_DIR / "exports"
 RESULTS_DIR = DATA_DIR / "results"
