@@ -549,18 +549,58 @@ class RAMGradientExecutor:
     def _get_query_text(self, query_id: str) -> str:
         """Get query text for execution.
 
-        Note: This is a placeholder. Real implementation would load
-        from query files.
+        Loads from queries/{paradigm}/{query_id}.{ext}
+        For hybrid paradigms (M2, O2), loads from queries/{paradigm}/graph/
         """
-        # Placeholder - would load from queries/catalog.yaml
-        return f"-- Query {query_id} placeholder"
+        queries_dir = Path(__file__).parents[4] / "queries"
+
+        # Map paradigm to directory and extension
+        paradigm_lower = self.paradigm.lower()
+        if self.paradigm in ("P1", "P2"):
+            query_file = queries_dir / paradigm_lower / f"{query_id}.sql"
+        elif self.paradigm == "M1":
+            query_file = queries_dir / "m1" / f"{query_id}.cypher"
+        elif self.paradigm == "M2":
+            query_file = queries_dir / "m2" / "graph" / f"{query_id}.cypher"
+        elif self.paradigm == "O2":
+            query_file = queries_dir / "o2" / "graph" / f"{query_id}.sparql"
+        else:
+            raise GradientError(f"Unknown paradigm: {self.paradigm}")
+
+        if not query_file.exists():
+            raise GradientError(f"Query file not found: {query_file}")
+
+        return query_file.read_text(encoding="utf-8")
 
     def _get_default_params(self, query_id: str) -> dict[str, Any]:
-        """Get default parameters for a query."""
-        # Placeholder - would load from golden_answers.yaml
-        return {}
+        """Get default parameters for a query from golden_answers.yaml."""
+        if not hasattr(self, "_golden_answers"):
+            golden_path = Path(__file__).parents[4] / "queries" / "golden_answers.yaml"
+            if golden_path.exists():
+                import yaml
+                with open(golden_path, "r", encoding="utf-8") as f:
+                    self._golden_answers = yaml.safe_load(f)
+            else:
+                self._golden_answers = {}
+
+        # Get query-specific parameters
+        answers = self._golden_answers.get("answers", {})
+        query_data = answers.get(query_id, {})
+        params = query_data.get("parameters", {})
+
+        # Merge with default parameters
+        defaults = self._golden_answers.get("default_parameters", {})
+        merged = {**defaults, **params}
+
+        return merged
 
     def _get_variant_params(self, query_id: str, variant_id: int) -> dict[str, Any]:
-        """Get parameters for a specific variant."""
-        # Placeholder - would generate from seed
-        return {}
+        """Get parameters for a specific variant.
+
+        Variant 0 = default params, variants 1+ add some variation.
+        """
+        params = self._get_default_params(query_id)
+
+        # For now, just use default params for all variants
+        # TODO: implement proper variant generation with seed
+        return params
