@@ -435,14 +435,26 @@ class DatasetGenerator:
     en utilisant les configurations d'équipements de config/equipment/.
     """
 
+    # Mapping durée -> heures
+    DURATION_HOURS = {
+        '2d': 48,
+        '1w': 168,      # 7 * 24
+        '1m': 720,      # 30 * 24
+        '6m': 4320,     # 180 * 24
+        '1y': 8760,     # 365 * 24
+    }
+
     def __init__(self,
                  config_dir: Path,
                  profile: str = 'small',
                  seed: int = None,
-                 reference_date: datetime = None):
+                 reference_date: datetime = None,
+                 duration: str = '2d'):
 
         self.config_dir = Path(config_dir)
         self.profile_name = profile
+        self.duration = duration
+        self.duration_hours = self.DURATION_HOURS.get(duration, 48)
 
         # Charger le profil
         profile_path = self.config_dir / "profiles" / f"{profile}.yaml"
@@ -899,10 +911,7 @@ class DatasetGenerator:
         # PAS d'edges pour cet équipement
 
     def _generate_timeseries(self):
-        """Génère les données timeseries"""
-        # Durée par défaut: 24h
-        duration_hours = 24
-
+        """Génère les données timeseries selon la durée configurée"""
         # Collecter tous les points avec quantity mesurable
         measurable_points = [
             n for n in self.nodes
@@ -910,18 +919,27 @@ class DatasetGenerator:
                ['temperature', 'humidity', 'co2', 'power', 'energy', 'flow', 'pressure']
         ]
 
-        # Limiter pour les gros datasets
-        max_points_ts = min(len(measurable_points), 100)
+        # Limiter pour les gros datasets (scale avec durée)
+        # Plus de points pour durées courtes, moins pour durées longues
+        if self.duration_hours <= 48:
+            max_points_ts = min(len(measurable_points), 100)
+        elif self.duration_hours <= 720:
+            max_points_ts = min(len(measurable_points), 50)
+        else:
+            max_points_ts = min(len(measurable_points), 20)
+
         selected_points = self.rng.sample(measurable_points, max_points_ts)
 
         base_time = self.reference_date
 
+        print(f"Generating timeseries: {len(selected_points)} points × {self.duration_hours}h = {len(selected_points) * self.duration_hours} values")
+
         for point in selected_points:
             quantity = point.properties.get('quantity', 'status')
 
-            for hour in range(duration_hours):
+            for hour in range(self.duration_hours):
                 timestamp = base_time + timedelta(hours=hour)
-                value = self._generate_value(quantity, hour)
+                value = self._generate_value(quantity, hour % 24)  # Cycle journalier
 
                 self.timeseries.append(TimeseriesPoint(
                     point_id=point.id,
@@ -1072,6 +1090,9 @@ def main():
     parser = argparse.ArgumentParser(description='Generate benchmark dataset')
     parser.add_argument('--profile', type=str, default='small',
                         help='Profile name (small, medium, large, xlarge)')
+    parser.add_argument('--duration', type=str, default='2d',
+                        choices=['2d', '1w', '1m', '6m', '1y'],
+                        help='Timeseries duration (2d, 1w, 1m, 6m, 1y)')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for reproducibility')
     parser.add_argument('--config-dir', type=str, default='config',
@@ -1087,12 +1108,13 @@ def main():
     generator = DatasetGenerator(
         config_dir=Path(args.config_dir),
         profile=args.profile,
-        seed=args.seed
+        seed=args.seed,
+        duration=args.duration
     )
     generator.generate()
 
-    # Exporter
-    output_dir = Path(args.output) / args.profile
+    # Exporter vers {output}/{profile}-{duration}/
+    output_dir = Path(args.output) / f"{args.profile}-{args.duration}"
     if args.format == 'parquet':
         generator.export_to_parquet(output_dir)
     else:
@@ -1101,6 +1123,7 @@ def main():
     # Stats
     print(f"\n=== STATISTIQUES ===")
     print(f"Profile: {args.profile}")
+    print(f"Duration: {args.duration} ({generator.duration_hours}h)")
     print(f"Seed: {generator.seed}")
     print(f"Nodes: {len(generator.nodes)}")
     print(f"Edges: {len(generator.edges)}")

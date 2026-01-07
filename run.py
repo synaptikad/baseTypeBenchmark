@@ -162,6 +162,7 @@ def menu_generate():
     python_module(
         "src.basetype_benchmark.dataset.generator",
         "--profile", profile,
+        "--duration", duration,
         "--seed", str(seed),
         "--config-dir", str(CONFIG_DIR),
         "--output", str(GENERATED_DIR),
