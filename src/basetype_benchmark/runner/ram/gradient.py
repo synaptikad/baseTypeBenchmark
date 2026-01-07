@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from rich.console import Console
+
 from ..config import EngineType
 from ..monitoring import (
     MetricsSampler,
@@ -246,6 +248,7 @@ class RAMGradientExecutor:
         n_runs: int = DEFAULT_TIMED_RUNS,
         n_variants: int = DEFAULT_VARIANTS,
         timeout_seconds: float = 300.0,
+        verbose: bool = True,
     ):
         """Initialize gradient executor.
 
@@ -257,6 +260,7 @@ class RAMGradientExecutor:
             n_runs: Timed runs per query variant
             n_variants: Number of parameter variants per query
             timeout_seconds: Query timeout
+            verbose: Show detailed query execution progress
         """
         self.paradigm = paradigm.upper()
         self.isolation = isolation
@@ -265,8 +269,10 @@ class RAMGradientExecutor:
         self.n_runs = n_runs
         self.n_variants = n_variants
         self.timeout = timeout_seconds
+        self.verbose = verbose
 
         self._docker = DockerClient()
+        self._console = Console()
 
     def run_gradient(
         self,
@@ -347,9 +353,16 @@ class RAMGradientExecutor:
                 sampler = MultiContainerSampler(container_ids)
 
             # Run warmup (not counted)
+            if self.verbose:
+                self._console.print(f"      [dim]Warmup ({self.n_warmup} runs)...[/dim]")
             self._run_warmup(queries)
 
             # Run timed queries with sampling
+            if self.verbose:
+                self._console.print(
+                    f"      [dim]Running {len(queries)} queries "
+                    f"({self.n_variants} variants × {self.n_runs} runs)...[/dim]"
+                )
             sampler.start()
             query_stats = self._run_queries(queries, sampler)
             sampling_result = sampler.stop()
@@ -418,9 +431,17 @@ class RAMGradientExecutor:
         """Run all queries with variants and collect stats."""
         runner = self._get_runner()
         stats: dict[str, QueryStats] = {}
+        total_queries = len(queries)
 
-        for query_id in queries:
+        for q_idx, query_id in enumerate(queries, 1):
             query_stats = QueryStats(query_id=query_id)
+            query_start = time.perf_counter()
+
+            if self.verbose:
+                self._console.print(
+                    f"      [dim]{query_id}[/dim] ({q_idx}/{total_queries}) ",
+                    end=""
+                )
 
             for variant_id in range(self.n_variants):
                 params = self._get_variant_params(query_id, variant_id)
@@ -462,6 +483,27 @@ class RAMGradientExecutor:
                     break
 
             stats[query_id] = query_stats
+            query_duration = time.perf_counter() - query_start
+
+            # Print query result
+            if self.verbose:
+                if query_stats.runs:
+                    last_status = query_stats.runs[-1].status
+                    if last_status == RunStatus.OK:
+                        avg_ms = query_stats.avg_ms
+                        self._console.print(
+                            f"[green]OK[/green] "
+                            f"[dim]avg={avg_ms:.1f}ms rows={query_stats.runs[0].result.row_count}[/dim]"
+                        )
+                    elif last_status == RunStatus.OOM:
+                        self._console.print(f"[red]OOM[/red]")
+                    elif last_status == RunStatus.TIMEOUT:
+                        self._console.print(f"[yellow]TIMEOUT[/yellow]")
+                    else:
+                        err = query_stats.runs[-1].result.error_message or "unknown"
+                        self._console.print(f"[red]ERROR: {err[:50]}[/red]")
+                else:
+                    self._console.print(f"[red]NO RUNS[/red]")
 
             # Exit query loop on OOM
             if query_stats.runs and query_stats.runs[-1].status == RunStatus.OOM:
