@@ -309,7 +309,9 @@ def menu_benchmark():
     else:
         # Custom
         output = RESULTS_DIR / f"custom_{timestamp}.json"
-        paradigms = Prompt.ask("Paradigms (comma-separated)", default="P1,M1,M2")
+        paradigms = Prompt.ask("Paradigms (comma-separated, or ALL)", default="ALL")
+        if paradigms.upper() == "ALL":
+            paradigms = ",".join(PARADIGMS)
         ram = Prompt.ask("RAM levels GB (comma-separated)", default="64,32,16,8")
         runs = IntPrompt.ask("Number of runs", default=10)
 
