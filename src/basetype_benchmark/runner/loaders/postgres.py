@@ -100,26 +100,36 @@ class PostgresLoader(BaseLoader):
             return False
 
     def clear_database(self) -> bool:
-        """Vide toutes les tables."""
+        """Vide toutes les tables (ignore if tables don't exist)."""
         try:
             with psycopg.connect(self.config.dsn) as conn:
                 with conn.cursor() as cur:
                     # Desactive les FK temporairement
                     cur.execute("SET session_replication_role = replica")
 
-                    # Truncate timeseries
-                    cur.execute("TRUNCATE TABLE timeseries CASCADE")
+                    # Truncate timeseries (ignore if not exists)
+                    cur.execute(
+                        "TRUNCATE TABLE timeseries CASCADE"
+                        if self._table_exists(cur, "timeseries")
+                        else "SELECT 1"
+                    )
 
-                    # Truncate edges
-                    cur.execute("TRUNCATE TABLE edges CASCADE")
+                    # Truncate edges (ignore if not exists)
+                    cur.execute(
+                        "TRUNCATE TABLE edges CASCADE"
+                        if self._table_exists(cur, "edges")
+                        else "SELECT 1"
+                    )
 
                     if self.paradigm == "P1":
                         # Truncate toutes les tables P1
                         for table in reversed(self.P1_TABLES):
-                            cur.execute(f"TRUNCATE TABLE {table} CASCADE")
+                            if self._table_exists(cur, table):
+                                cur.execute(f"TRUNCATE TABLE {table} CASCADE")
                     else:
                         # P2: une seule table nodes
-                        cur.execute("TRUNCATE TABLE nodes CASCADE")
+                        if self._table_exists(cur, "nodes"):
+                            cur.execute("TRUNCATE TABLE nodes CASCADE")
 
                     # Reactive les FK
                     cur.execute("SET session_replication_role = DEFAULT")
@@ -129,6 +139,15 @@ class PostgresLoader(BaseLoader):
         except Exception as e:
             print(f"Error clearing database: {e}")
             return False
+
+    def _table_exists(self, cur, table_name: str) -> bool:
+        """Check if a table exists in the database."""
+        cur.execute(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = %s)",
+            (table_name,)
+        )
+        return cur.fetchone()[0]
 
     def load_all(
         self,
@@ -150,9 +169,9 @@ class PostgresLoader(BaseLoader):
         result = LoadResult(engine=self.paradigm)
 
         try:
-            # Phase 1: Schema (optionnel, assume deja cree)
+            # Phase 1: Schema (required)
             self._emit_progress(progress_callback, LoadPhase.SCHEMA, 0, 1)
-            # schema_loaded = self._load_schema(data_dir)
+            self._load_schema(data_dir)
             self._emit_progress(progress_callback, LoadPhase.SCHEMA, 1, 1)
 
             # Phase 2: Nodes
@@ -502,6 +521,31 @@ class PostgresLoader(BaseLoader):
         self._emit_progress(callback, LoadPhase.TIMESERIES, total_count, total_count, rate)
 
         return total_count
+
+    # =========================================================================
+    # SCHEMA LOADING
+    # =========================================================================
+
+    def _load_schema(self, data_dir: Path) -> bool:
+        """Load schema SQL file to create tables.
+
+        Looks for schema_p1.sql or schema_p2.sql in data_dir.
+        """
+        schema_file = data_dir / f"schema_{self.paradigm.lower()}.sql"
+        if not schema_file.exists():
+            raise FileNotFoundError(
+                f"Schema file not found: {schema_file}. "
+                f"Run export first to generate schema."
+            )
+
+        with psycopg.connect(self.config.dsn) as conn:
+            with conn.cursor() as cur:
+                # Read and execute schema SQL
+                sql = schema_file.read_text(encoding="utf-8")
+                cur.execute(sql)
+            conn.commit()
+
+        return True
 
     # =========================================================================
     # HELPERS
