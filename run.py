@@ -96,14 +96,12 @@ def show_main_menu() -> str:
     table.add_column("Description", style="dim")
 
     table.add_row("1", "Generate Dataset", "Create synthetic building data")
-    table.add_row("2", "Export Dataset", "Convert to paradigm formats (P1/M1/O2)")
-    table.add_row("3", "Load Data", "Import into databases")
-    table.add_row("4", "Run Benchmark", "Execute benchmark scenarios")
-    table.add_row("5", "RAM Gradient", "Test memory limits")
+    table.add_row("2", "Export Dataset", "Convert to paradigm formats (standalone)")
+    table.add_row("3", "Run Benchmark", "Export → Load → Benchmark (integrated)")
     table.add_row("", "", "")
-    table.add_row("6", "Manage Datasets", "List/delete generated data")
-    table.add_row("7", "View Results", "Browse benchmark results")
-    table.add_row("8", "Docker", "Container management")
+    table.add_row("4", "Manage Datasets", "List/delete generated data")
+    table.add_row("5", "View Results", "Browse benchmark results")
+    table.add_row("6", "Docker", "Container management")
     table.add_row("", "", "")
     table.add_row("v", "Validation", "Query dry-run and matrix")
     table.add_row("i", "System Info", "Check system status")
@@ -112,7 +110,7 @@ def show_main_menu() -> str:
     console.print(table)
     console.print()
 
-    return Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "8", "v", "i", "q"], default="1")
+    return Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "v", "i", "q"], default="1")
 
 
 # =============================================================================
@@ -247,82 +245,22 @@ def menu_export():
 
 
 # =============================================================================
-# 3. LOAD DATA
-# =============================================================================
-
-def menu_load():
-    """Data loading menu."""
-    show_header()
-    console.print("[bold]3. Load Data[/bold]\n")
-
-    # List exported datasets by paradigm
-    console.print("[cyan]Select paradigm:[/cyan]")
-    for i, p in enumerate(PARADIGMS, 1):
-        export_path = EXPORT_DIR / p.lower()
-        count = len(list(export_path.glob("*"))) if export_path.exists() else 0
-        console.print(f"  {i}. {p} ({count} datasets)")
-
-    paradigm_idx = IntPrompt.ask("\nParadigm", default=1)
-    if paradigm_idx < 1 or paradigm_idx > len(PARADIGMS):
-        return
-
-    paradigm = PARADIGMS[paradigm_idx - 1]
-    export_path = EXPORT_DIR / paradigm.lower()
-
-    # List datasets for this paradigm
-    datasets = list(export_path.glob("*")) if export_path.exists() else []
-    if not datasets:
-        console.print(f"[yellow]No exported datasets for {paradigm}. Export one first.[/yellow]")
-        Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-        return
-
-    console.print(f"\n[cyan]Datasets for {paradigm}:[/cyan]")
-    for i, ds in enumerate(datasets, 1):
-        console.print(f"  {i}. {ds.name}")
-
-    ds_idx = IntPrompt.ask("\nSelect dataset", default=1)
-    if ds_idx < 1 or ds_idx > len(datasets):
-        return
-
-    data_dir = datasets[ds_idx - 1]
-
-    # Options
-    clear = Confirm.ask("Clear database before loading?", default=True)
-    workers = IntPrompt.ask("Workers (parallel loading)", default=16)
-
-    # Confirm
-    console.print(f"\n[yellow]Will load {data_dir} into {paradigm}[/yellow]")
-
-    if not Confirm.ask("\nProceed?", default=True):
-        return
-
-    # Run loader
-    args = ["load", paradigm, "-d", str(data_dir), "-w", str(workers)]
-    if clear:
-        args.append("--clear")
-
-    btb(*args)
-
-    Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-
-
-# =============================================================================
-# 4. RUN BENCHMARK
+# 3. RUN BENCHMARK
 # =============================================================================
 
 def menu_benchmark():
     """Benchmark execution menu with disk optimization.
 
-    New workflow: The benchmark now exports/loads/benchmarks each paradigm
-    sequentially, cleaning up exports after each to minimize disk usage.
+    Integrated workflow: Export → Load → Benchmark → Cleanup per paradigm.
+    Includes RAM gradient testing as a scenario option.
     """
     show_header()
-    console.print("[bold]4. Run Benchmark[/bold]\n")
+    console.print("[bold]3. Run Benchmark[/bold]\n")
 
     console.print("[cyan]Benchmark scenarios:[/cyan]")
     console.print("  1. Quick Test (P1+M1, 3 runs, 32-16-8 GB)")
     console.print("  2. Standard (All paradigms, 10 runs, 128-64-32-16-8 GB)")
-    console.print("  3. Memory Focus (M1 only, 10 runs, fine-grained RAM)")
+    console.print("  3. RAM Gradient (single paradigm, fine-grained RAM levels)")
     console.print("  4. Custom")
 
     choice = Prompt.ask("\nScenario", choices=["1", "2", "3", "4"], default="1")
@@ -363,11 +301,11 @@ def menu_benchmark():
         ram = "128,64,32,16,8"
         runs = 10
     elif choice == "3":
-        # Memory focus
-        output = RESULTS_DIR / f"memory_{timestamp}.json"
-        paradigms = "M1"
-        ram = "64,48,32,24,16,12,8"
-        runs = 10
+        # RAM Gradient - single paradigm with fine-grained RAM
+        output = RESULTS_DIR / f"gradient_{timestamp}.json"
+        paradigms = Prompt.ask("Paradigm to test", choices=PARADIGMS, default="M1")
+        ram = Prompt.ask("RAM levels GB (fine-grained)", default="64,48,32,24,16,12,8,4")
+        runs = IntPrompt.ask("Number of runs", default=10)
     else:
         # Custom
         output = RESULTS_DIR / f"custom_{timestamp}.json"
@@ -407,47 +345,13 @@ def menu_benchmark():
 
 
 # =============================================================================
-# 5. RAM GRADIENT
-# =============================================================================
-
-def menu_gradient():
-    """RAM gradient test menu."""
-    show_header()
-    console.print("[bold]5. RAM Gradient Test[/bold]\n")
-
-    paradigm = Prompt.ask("Paradigm", choices=PARADIGMS, default="M1")
-
-    # Find data
-    data_dir = EXPORT_DIR / paradigm.lower()
-    if not data_dir.exists() or not list(data_dir.glob("*")):
-        console.print(f"[yellow]No data for {paradigm}. Export first.[/yellow]")
-        Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-        return
-
-    datasets = list(data_dir.glob("*"))
-    console.print(f"\n[cyan]Datasets for {paradigm}:[/cyan]")
-    for i, ds in enumerate(datasets, 1):
-        console.print(f"  {i}. {ds.name}")
-
-    ds_idx = IntPrompt.ask("Select dataset", default=1)
-    selected_data = datasets[ds_idx - 1] if 1 <= ds_idx <= len(datasets) else datasets[0]
-
-    ram = Prompt.ask("RAM levels GB", default="32,16,8")
-    query = Prompt.ask("Query to test", default="Q1")
-
-    btb("gradient", paradigm, "-d", str(selected_data), "--ram", ram, "-q", query)
-
-    Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-
-
-# =============================================================================
-# 6. MANAGE DATASETS
+# 4. MANAGE DATASETS
 # =============================================================================
 
 def menu_manage_datasets():
     """Dataset management menu."""
     show_header()
-    console.print("[bold]6. Manage Datasets[/bold]\n")
+    console.print("[bold]4. Manage Datasets[/bold]\n")
 
     console.print("[cyan]Options:[/cyan]")
     console.print("  1. List all datasets")
@@ -530,13 +434,13 @@ def menu_manage_datasets():
 
 
 # =============================================================================
-# 7. VIEW RESULTS
+# 5. VIEW RESULTS
 # =============================================================================
 
 def menu_results():
     """View benchmark results."""
     show_header()
-    console.print("[bold]7. View Results[/bold]\n")
+    console.print("[bold]5. View Results[/bold]\n")
 
     if not RESULTS_DIR.exists():
         console.print("[yellow]No results directory.[/yellow]")
@@ -594,13 +498,13 @@ def menu_results():
 
 
 # =============================================================================
-# 8. DOCKER
+# 6. DOCKER
 # =============================================================================
 
 def menu_docker():
     """Docker management."""
     show_header()
-    console.print("[bold]8. Docker Containers[/bold]\n")
+    console.print("[bold]6. Docker Containers[/bold]\n")
 
     console.print("[cyan]Options:[/cyan]")
     console.print("  1. Status")
@@ -770,16 +674,12 @@ def main():
         elif choice == "2":
             menu_export()
         elif choice == "3":
-            menu_load()
-        elif choice == "4":
             menu_benchmark()
-        elif choice == "5":
-            menu_gradient()
-        elif choice == "6":
+        elif choice == "4":
             menu_manage_datasets()
-        elif choice == "7":
+        elif choice == "5":
             menu_results()
-        elif choice == "8":
+        elif choice == "6":
             menu_docker()
         elif choice == "v":
             menu_validation()
