@@ -1,0 +1,25 @@
+# Q18: Calibration Chain
+# Status: DEGRADED pour O2
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?point_id ?point_name ?equipment_id ?last_calibration ?next_calibration
+WHERE {
+    VALUES ?meter_id { "meter_main_1" }
+    VALUES ?ref_date { "2024-06-01"^^xsd:date }
+
+    ?meter btb:id ?meter_id .
+    ?meter btb:feeds+ ?eq .
+    ?eq btb:hasPoint ?point .
+
+    ?point btb:id ?point_id ;
+           btb:name ?point_name ;
+           btb:calibrationNextDate ?next_calibration .
+
+    ?eq btb:id ?equipment_id .
+
+    OPTIONAL { ?point btb:calibrationLastDate ?last_calibration }
+
+    FILTER(?next_calibration < ?ref_date)
+}
+ORDER BY DESC(?ref_date - ?next_calibration) ?point_id

@@ -1,0 +1,100 @@
+# FCU - Fan Coil Unit (Ventilo-convecteur)
+# 14 points
+
+equipment:
+  code: FCU
+  domain: HVAC
+  haystack: fcu
+  brick: Fan_Coil_Unit
+  protocols: [bacnet, modbus, lon]
+
+points:
+  # === MESURES THERMIQUES ===
+  - id: supply_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température air soufflé
+
+  - id: return_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température air repris
+
+  - id: water_temp_in
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau entrée batterie
+
+  # === MESURES AÉRAULIQUES ===
+  - id: fan_speed_fb
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: speed
+    desc: Retour vitesse ventilateur
+
+  - id: valve_pos_fb
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Retour position vanne
+
+  - id: filter_dp
+    type: mesure
+    freq: slow
+    unit: Pa
+    quantity: differential_pressure
+    desc: Delta P filtre
+
+  # === COMMANDES ===
+  - id: fan_speed_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne vitesse ventilateur
+
+  - id: valve_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne vanne eau
+
+  - id: mode_cmd
+    type: cmd
+    freq: event
+    values: [off, heat, cool, auto, fan_only]
+    desc: Consigne mode
+
+  # === ÉTATS ===
+  - id: run_status
+    type: etat
+    freq: event
+    desc: En marche/arrêt
+
+  - id: occupancy
+    type: etat
+    freq: event
+    desc: Occupation (si sonde intégrée)
+
+  # === ALARMES ===
+  - id: filter_alarm
+    type: alarme
+    freq: event
+    desc: Filtre encrassé
+
+  - id: freeze_alarm
+    type: alarme
+    freq: event
+    desc: Risque gel
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut général

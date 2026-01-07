@@ -1,0 +1,32 @@
+# ManualCallPoint - Déclencheur manuel incendie (bris de glace)
+# 3 points
+
+equipment:
+  code: MCP
+  domain: FireSafety
+  haystack: manual call point
+  brick: Manual_Call_Point
+  protocols: [addressable_loop, bacnet, modbus]
+
+points:
+  - id: activated
+    type: alarme
+    freq: event
+    desc: Déclencheur activé (bris de glace)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: status
+    type: etat
+    freq: event
+    values: [normal, activated, fault]
+    desc: État du déclencheur
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut équipement
+    bacnet: "BI:2"
+    modbus: "10002"

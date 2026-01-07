@@ -1,0 +1,201 @@
+# Boiler - Chaudière (gaz ou électrique)
+# 22 points
+
+equipment:
+  code: BLR
+  domain: HVAC
+  haystack: boiler
+  brick: Boiler
+  protocols: [bacnet, modbus, lon]
+
+points:
+  # === TEMPÉRATURES EAU ===
+  - id: hw_supply_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau chaude départ
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: hw_return_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau chaude retour
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: hw_supply_temp_sp
+    type: cmd
+    freq: event
+    unit: "°C"
+    desc: Consigne température départ
+    bacnet: "AV:1"
+    modbus: "40101"
+
+  - id: flue_gas_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température fumées
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  # === BRÛLEUR ===
+  - id: burner_status
+    type: etat
+    freq: event
+    values: [off, pre_purge, ignition, running, post_purge, fault]
+    desc: État brûleur
+    bacnet: "MSV:1"
+    modbus: "40201"
+
+  - id: burner_output
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: modulation
+    desc: Modulation brûleur
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  - id: flame_signal
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: signal
+    desc: Signal flamme
+    bacnet: "AI:5"
+    modbus: "40005"
+
+  # === COMBUSTIBLE (GAZ) ===
+  - id: gas_pressure
+    type: mesure
+    freq: normal
+    unit: mbar
+    quantity: pressure
+    desc: Pression gaz entrée
+    bacnet: "AI:6"
+    modbus: "40006"
+
+  - id: gas_valve_status
+    type: etat
+    freq: event
+    values: [closed, open]
+    desc: État vanne gaz
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  # === PUISSANCE / ÉNERGIE ===
+  - id: power_output
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: thermal_power
+    desc: Puissance thermique fournie
+    bacnet: "AI:7"
+    modbus: "40007"
+
+  - id: power_consumption
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: power
+    desc: Consommation électrique (auxiliaires)
+    bacnet: "AI:8"
+    modbus: "40008"
+
+  - id: gas_consumption
+    type: mesure
+    freq: energy
+    unit: m3
+    quantity: volume
+    desc: Consommation gaz (cumul)
+    bacnet: "AI:9"
+    modbus: "40009"
+
+  - id: thermal_energy
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: thermal_energy
+    desc: Énergie thermique produite (cumul)
+    bacnet: "AI:10"
+    modbus: "40010"
+
+  - id: efficiency
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: efficiency
+    desc: Rendement instantané
+    bacnet: "AV:2"
+    modbus: "40102"
+
+  # === POMPE / DÉBIT ===
+  - id: pump_status
+    type: etat
+    freq: event
+    desc: État pompe primaire
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: hw_flow
+    type: mesure
+    freq: normal
+    unit: m3/h
+    quantity: flow
+    desc: Débit eau chaude
+    bacnet: "AI:11"
+    modbus: "40011"
+
+  # === MODE / COMMANDES ===
+  - id: operating_mode
+    type: etat
+    freq: event
+    values: [off, standby, heating, modulating]
+    desc: Mode de fonctionnement
+    bacnet: "MSV:2"
+    modbus: "40202"
+
+  - id: enable_cmd
+    type: cmd
+    freq: event
+    desc: Commande marche/arrêt
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  - id: run_hours
+    type: mesure
+    freq: slow
+    unit: h
+    quantity: runtime
+    desc: Heures de fonctionnement
+    bacnet: "AI:12"
+    modbus: "40012"
+
+  # === ALARMES ===
+  - id: flame_failure
+    type: alarme
+    freq: event
+    desc: Défaut flamme
+    bacnet: "BI:3"
+    modbus: "10003"
+
+  - id: high_temp_alarm
+    type: alarme
+    freq: event
+    desc: Surchauffe
+    bacnet: "BI:4"
+    modbus: "10004"
+
+  - id: low_pressure_alarm
+    type: alarme
+    freq: event
+    desc: Basse pression eau
+    bacnet: "BI:5"
+    modbus: "10005"

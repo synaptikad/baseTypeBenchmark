@@ -1,0 +1,66 @@
+# IPCamera - Caméra IP de vidéosurveillance
+# 8 points
+
+equipment:
+  code: CAM
+  domain: Security
+  haystack: ip camera
+  brick: IP_Camera
+  protocols: [onvif, rtsp, http_api]
+
+points:
+  # === ÉTAT ===
+  - id: stream_status
+    type: etat
+    freq: event
+    values: [online, offline, streaming, recording]
+    desc: État du flux vidéo
+    onvif: "Media/GetVideoSources"
+
+  - id: recording_status
+    type: etat
+    freq: event
+    values: [idle, recording, playback]
+    desc: État enregistrement
+    onvif: "Recording/GetRecordingStatus"
+
+  - id: motion_detected
+    type: etat
+    freq: event
+    desc: Détection de mouvement
+    onvif: "Analytics/GetMotionDetection"
+
+  # === CONFIGURATION ===
+  - id: ptz_position
+    type: mesure
+    freq: event
+    unit: "°"
+    quantity: position
+    desc: Position PTZ (pan/tilt/zoom)
+    onvif: "PTZ/GetStatus"
+
+  - id: ptz_cmd
+    type: cmd
+    freq: event
+    desc: Commande PTZ
+    onvif: "PTZ/AbsoluteMove"
+
+  - id: ir_mode
+    type: etat
+    freq: event
+    values: [auto, on, off]
+    desc: Mode infrarouge
+    onvif: "Imaging/GetImagingSettings"
+
+  # === ALARMES ===
+  - id: tamper_alarm
+    type: alarme
+    freq: event
+    desc: Alarme sabotage (masquage, déplacement)
+    onvif: "Analytics/GetTamperDetection"
+
+  - id: comm_fault
+    type: alarme
+    freq: event
+    desc: Défaut communication
+    http_api: "/status"

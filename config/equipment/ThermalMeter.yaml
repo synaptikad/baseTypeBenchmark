@@ -1,0 +1,115 @@
+# ThermalMeter - Compteur d'énergie thermique (chaud/froid)
+# 12 points
+
+equipment:
+  code: THM
+  domain: HVAC
+  haystack: thermal-meter
+  brick: Thermal_Energy_Meter
+  protocols: [mbus, modbus, bacnet]
+
+points:
+  # === TEMPÉRATURES ===
+  - id: temp_supply
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température départ (aller)
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: temp_return
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température retour
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: delta_temp
+    type: mesure
+    freq: normal
+    unit: K
+    quantity: temperature_difference
+    desc: Écart température (calculé)
+    bacnet: "AV:1"
+    modbus: "40003"
+
+  # === DÉBIT ===
+  - id: flow_rate
+    type: mesure
+    freq: normal
+    unit: m3/h
+    quantity: flow
+    desc: Débit volumique
+    bacnet: "AI:3"
+    modbus: "40004"
+
+  - id: volume_total
+    type: mesure
+    freq: energy
+    unit: m3
+    quantity: volume
+    desc: Volume total cumulé
+    bacnet: "AI:4"
+    modbus: "40005"
+
+  # === PUISSANCE / ÉNERGIE ===
+  - id: thermal_power
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: thermal_power
+    desc: Puissance thermique instantanée
+    bacnet: "AI:5"
+    modbus: "40007"
+
+  - id: thermal_energy
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: thermal_energy
+    desc: Énergie thermique cumulée
+    bacnet: "AI:6"
+    modbus: "40008"
+
+  # === QUALITÉ ===
+  - id: flow_error
+    type: mesure
+    freq: slow
+    unit: "%"
+    desc: Erreur débitmètre estimée
+    bacnet: "AI:7"
+    modbus: "40010"
+
+  # === ÉTATS / ALARMES ===
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: meter_status
+    type: etat
+    freq: event
+    values: [ok, warning, error]
+    desc: État général compteur
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: sensor_fault
+    type: alarme
+    freq: event
+    desc: Défaut sonde température
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: flow_fault
+    type: alarme
+    freq: event
+    desc: Défaut débitmètre
+    bacnet: "BI:3"
+    modbus: "10003"

@@ -1,0 +1,43 @@
+# Q3: Space Services (incoming relations)
+# Parametre: spaceId - ID de l'espace
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?equipment_id ?equipment_name ?equipment_type ?relation_type
+WHERE {
+    VALUES ?spaceId { "space_1_1" }
+
+    ?space btb:id ?spaceId .
+
+    # Toutes les relations entrantes vers l'espace
+    {
+        ?eq btb:serves ?space .
+        BIND("SERVES" AS ?relation_type)
+    }
+    UNION
+    {
+        ?eq btb:locatedIn ?space .
+        BIND("LOCATED_IN" AS ?relation_type)
+    }
+    UNION
+    {
+        ?eq btb:monitors ?space .
+        BIND("MONITORS" AS ?relation_type)
+    }
+    UNION
+    {
+        ?eq btb:secures ?space .
+        BIND("SECURES" AS ?relation_type)
+    }
+    UNION
+    {
+        ?eq btb:grantsAccess ?space .
+        BIND("GRANTS_ACCESS" AS ?relation_type)
+    }
+
+    ?eq rdf:type btb:Equipment ;
+        btb:id ?equipment_id ;
+        btb:name ?equipment_name ;
+        btb:equipmentType ?equipment_type .
+}
+ORDER BY ?relation_type ?equipment_id

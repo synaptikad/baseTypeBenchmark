@@ -1,0 +1,44 @@
+# Q23: Adjacency Propagation
+# Status: DEGRADED pour O2 (property path avec limite approximative)
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT DISTINCT ?node_id ?node_type ?node_name ?hop_distance
+WHERE {
+    VALUES ?start_id { "space_1_1" }
+    VALUES ?max_hops { 3 }
+
+    ?start btb:id ?start_id .
+
+    # Hop 1
+    {
+        ?start btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?node .
+        BIND(1 AS ?hop_distance)
+    }
+    UNION
+    # Hop 2
+    {
+        ?start btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?mid1 .
+        ?mid1 btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?node .
+        FILTER(?node != ?start)
+        BIND(2 AS ?hop_distance)
+    }
+    UNION
+    # Hop 3
+    {
+        ?start btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?mid1 .
+        ?mid1 btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?mid2 .
+        ?mid2 btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?node .
+        FILTER(?node != ?start && ?node != ?mid1)
+        BIND(3 AS ?hop_distance)
+    }
+
+    FILTER(?hop_distance <= ?max_hops)
+
+    ?node btb:id ?node_id ;
+          btb:name ?node_name .
+
+    OPTIONAL { ?node a btb:Space . BIND("Space" AS ?type1) }
+    OPTIONAL { ?node a btb:Equipment . BIND("Equipment" AS ?type2) }
+    BIND(COALESCE(?type1, ?type2, "Unknown") AS ?node_type)
+}
+ORDER BY ?hop_distance ?node_type ?node_id

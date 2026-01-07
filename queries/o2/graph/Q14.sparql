@@ -1,0 +1,20 @@
+# Q14: Protocol Query (BACnet)
+# Status: DEGRADED pour O2
+# Note: Suppose que protocol est modélisé comme triples dédiés
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?point_id ?point_name ?equipment_id ?object_type ?object_instance
+WHERE {
+    ?point a btb:Point ;
+           btb:id ?point_id ;
+           btb:name ?point_name ;
+           btb:equipmentId ?equipment_id ;
+           btb:protocolType "BACnet" ;
+           btb:protocolDeviceId ?device_id .
+
+    OPTIONAL { ?point btb:protocolObjectType ?object_type }
+    OPTIONAL { ?point btb:protocolObjectInstance ?object_instance }
+
+    FILTER(?device_id = 1234)
+}
+ORDER BY ?equipment_id ?point_id

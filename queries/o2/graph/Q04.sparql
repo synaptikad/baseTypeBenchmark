@@ -1,0 +1,39 @@
+# Q4: Floor Temperature Inventory
+# Parametre: floor_id - ID de l'etage
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?floor_id ?point_id ?point_name ?equipment_id ?equipment_name
+WHERE {
+    VALUES ?floor_id { "floor_1" }
+
+    ?floor btb:id ?floor_id .
+
+    # Equipements lies a l'etage (directement ou via spaces)
+    {
+        # Equipement sur l'etage
+        ?eq btb:floorId ?floor_id .
+    }
+    UNION
+    {
+        # Equipement dans un espace de l'etage
+        ?floor btb:contains ?space .
+        ?eq btb:locatedIn ?space .
+    }
+    UNION
+    {
+        # Equipement qui SERVES un espace de l'etage
+        ?floor btb:contains ?space .
+        ?eq btb:serves ?space .
+    }
+
+    # Points temperature de cet equipement
+    ?eq btb:hasPoint ?point .
+    ?point btb:quantity "temperature" ;
+           btb:id ?point_id ;
+           btb:name ?point_name .
+
+    ?eq btb:id ?equipment_id ;
+        btb:name ?equipment_name .
+}
+ORDER BY ?equipment_id ?point_id

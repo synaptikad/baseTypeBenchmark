@@ -1,0 +1,19 @@
+# Q10: Security Access Analysis
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?space_id ?space_name ?equipment_type (COUNT(?eq) AS ?equipment_count)
+WHERE {
+    ?space a btb:Space ;
+           btb:id ?space_id ;
+           btb:name ?space_name ;
+           btb:buildingId "building_1" .
+
+    ?eq a btb:Equipment ;
+        btb:equipmentType ?equipment_type .
+    ?eq btb:monitors|btb:locatedIn|btb:secures ?space .
+
+    FILTER(?equipment_type IN ("BadgeReader", "IPCamera", "DoorContact", "PIRDetector"))
+}
+GROUP BY ?space_id ?space_name ?equipment_type
+ORDER BY ?space_id ?equipment_type

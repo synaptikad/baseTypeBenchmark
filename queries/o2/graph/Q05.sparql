@@ -1,0 +1,19 @@
+# Q5: Orphans
+# Equipements sans relations structurelles
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?id ?type ?name
+WHERE {
+    ?eq rdf:type btb:Equipment ;
+        btb:id ?id ;
+        btb:name ?name ;
+        btb:equipmentType ?type .
+
+    # Pas de relations structurelles sortantes
+    FILTER NOT EXISTS { ?eq btb:feeds|btb:serves|btb:locatedIn|btb:hasPoint|btb:monitors|btb:memberOf|btb:coveredBy ?any }
+
+    # Pas de relations structurelles entrantes
+    FILTER NOT EXISTS { ?any btb:feeds|btb:serves|btb:contains|btb:monitors ?eq }
+}
+ORDER BY ?type ?id

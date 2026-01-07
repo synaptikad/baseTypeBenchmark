@@ -1,0 +1,10 @@
+# Q7: Drift Top-20 - Extraction point_ids
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?point_id
+WHERE {
+    ?point a btb:Point ;
+           btb:id ?point_id ;
+           btb:buildingId ?buildingId .
+    FILTER(?buildingId = "building_1")
+}

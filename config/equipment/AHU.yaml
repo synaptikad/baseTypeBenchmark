@@ -1,0 +1,374 @@
+# AHU - Air Handling Unit (CTA double flux avec récupération)
+# 52 points
+
+equipment:
+  code: AHU
+  domain: HVAC
+  haystack: ahu
+  brick: Air_Handling_Unit
+  protocols: [bacnet, modbus, lon]
+
+points:
+  # ============================================
+  # SECTION 1 : TEMPÉRATURES (8 points)
+  # ============================================
+  - id: outdoor_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température air neuf
+
+  - id: return_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température air repris
+
+  - id: mixed_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température mélange (après récup)
+
+  - id: supply_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température soufflage (après batteries)
+
+  - id: exhaust_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température rejet
+
+  - id: preheat_leaving_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température sortie préchauffage
+
+  - id: cooling_leaving_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température sortie batterie froide
+
+  - id: supply_air_temp_sp
+    type: cmd
+    freq: event
+    unit: "°C"
+    desc: Consigne température soufflage
+
+  # ============================================
+  # SECTION 2 : HUMIDITÉ (4 points)
+  # ============================================
+  - id: outdoor_air_rh
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: humidity
+    desc: Humidité relative air neuf
+
+  - id: return_air_rh
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: humidity
+    desc: Humidité relative air repris
+
+  - id: supply_air_rh
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: humidity
+    desc: Humidité relative soufflage
+
+  - id: supply_air_rh_sp
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne humidité soufflage
+
+  # ============================================
+  # SECTION 3 : QUALITÉ D'AIR (3 points)
+  # ============================================
+  - id: return_co2
+    type: mesure
+    freq: normal
+    unit: ppm
+    quantity: co2
+    desc: CO2 reprise
+
+  - id: return_voc
+    type: mesure
+    freq: slow
+    unit: ppb
+    quantity: voc
+    desc: COV reprise
+
+  - id: co2_sp
+    type: cmd
+    freq: event
+    unit: ppm
+    desc: Consigne CO2
+
+  # ============================================
+  # SECTION 4 : VENTILATION (8 points)
+  # ============================================
+  - id: supply_fan_speed
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: speed
+    desc: Vitesse ventilateur soufflage
+
+  - id: supply_fan_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne ventilateur soufflage
+
+  - id: return_fan_speed
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: speed
+    desc: Vitesse ventilateur reprise
+
+  - id: return_fan_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne ventilateur reprise
+
+  - id: supply_duct_pressure
+    type: mesure
+    freq: normal
+    unit: Pa
+    quantity: pressure
+    desc: Pression gaine soufflage
+
+  - id: duct_pressure_sp
+    type: cmd
+    freq: event
+    unit: Pa
+    desc: Consigne pression gaine
+
+  - id: supply_airflow
+    type: mesure
+    freq: normal
+    unit: m3/h
+    quantity: flow
+    desc: Débit soufflage
+
+  - id: return_airflow
+    type: mesure
+    freq: normal
+    unit: m3/h
+    quantity: flow
+    desc: Débit reprise
+
+  # ============================================
+  # SECTION 5 : RÉCUPÉRATION DE CHALEUR (5 points)
+  # ============================================
+  - id: heat_recovery_efficiency
+    type: mesure
+    freq: slow
+    unit: "%"
+    quantity: efficiency
+    desc: Efficacité récupérateur
+
+  - id: heat_recovery_wheel_speed
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: speed
+    desc: Vitesse roue (si roue)
+
+  - id: heat_recovery_bypass_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position bypass récupérateur
+
+  - id: heat_recovery_bypass_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande bypass
+
+  - id: heat_recovery_status
+    type: etat
+    freq: event
+    values: [off, active, bypass, frost_protection]
+    desc: État récupérateur
+
+  # ============================================
+  # SECTION 6 : VOLETS / DAMPERS (4 points)
+  # ============================================
+  - id: outdoor_damper_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position volet air neuf
+
+  - id: outdoor_damper_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande volet air neuf
+
+  - id: exhaust_damper_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position volet rejet
+
+  - id: recirculation_damper_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position volet recirculation
+
+  # ============================================
+  # SECTION 7 : BATTERIES CHAUDES/FROIDES (6 points)
+  # ============================================
+  - id: preheat_valve_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position vanne préchauffage
+
+  - id: preheat_valve_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande vanne préchauffage
+
+  - id: heating_valve_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position vanne chaude (post)
+
+  - id: heating_valve_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande vanne chaude
+
+  - id: cooling_valve_pos
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: position
+    desc: Position vanne froide
+
+  - id: cooling_valve_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande vanne froide
+
+  # ============================================
+  # SECTION 8 : HUMIDIFICATEUR (2 points)
+  # ============================================
+  - id: humidifier_output
+    type: mesure
+    freq: fast
+    unit: "%"
+    desc: Sortie humidificateur
+
+  - id: humidifier_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Commande humidificateur
+
+  # ============================================
+  # SECTION 9 : FILTRATION (2 points)
+  # ============================================
+  - id: filter_dp_supply
+    type: mesure
+    freq: slow
+    unit: Pa
+    quantity: differential_pressure
+    desc: Delta P filtre soufflage
+
+  - id: filter_dp_return
+    type: mesure
+    freq: slow
+    unit: Pa
+    quantity: differential_pressure
+    desc: Delta P filtre reprise
+
+  # ============================================
+  # SECTION 10 : ÉTATS / MODES (4 points)
+  # ============================================
+  - id: run_status
+    type: etat
+    freq: event
+    desc: En marche
+
+  - id: operating_mode
+    type: etat
+    freq: event
+    values: [off, heating, cooling, economizer, night_purge]
+    desc: Mode actif
+
+  - id: schedule_status
+    type: etat
+    freq: event
+    desc: En/hors horaire
+
+  - id: economizer_status
+    type: etat
+    freq: event
+    desc: Free-cooling actif
+
+  # ============================================
+  # SECTION 11 : ALARMES (6 points)
+  # ============================================
+  - id: freeze_alarm
+    type: alarme
+    freq: event
+    desc: Risque gel (thermostat antigel)
+
+  - id: supply_fan_fault
+    type: alarme
+    freq: event
+    desc: Défaut ventilateur soufflage
+
+  - id: return_fan_fault
+    type: alarme
+    freq: event
+    desc: Défaut ventilateur reprise
+
+  - id: filter_alarm
+    type: alarme
+    freq: event
+    desc: Filtre encrassé
+
+  - id: smoke_alarm
+    type: alarme
+    freq: event
+    desc: Détection fumée gaine
+
+  - id: general_fault
+    type: alarme
+    freq: event
+    desc: Défaut général

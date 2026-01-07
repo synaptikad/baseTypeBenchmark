@@ -1,0 +1,69 @@
+# SpeedGate - Portillon rapide contrôle d'accès
+# 8 points
+
+equipment:
+  code: SPG
+  domain: Security
+  haystack: speed gate
+  brick: Speed_Gate
+  protocols: [bacnet, modbus, osdp, wiegand]
+
+points:
+  - id: gate_status
+    type: etat
+    freq: event
+    values: [closed, open, moving, fault]
+    desc: État portillon
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: direction
+    type: etat
+    freq: event
+    values: [entry, exit, bidirectional, locked]
+    desc: Direction autorisée
+    bacnet: "MSV:2"
+    modbus: "40102"
+
+  - id: badge_read
+    type: etat
+    freq: event
+    desc: Badge présenté (déclenche event)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: passage_count
+    type: mesure
+    freq: energy
+    unit: "-"
+    desc: Compteur passages (cumul)
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: open_cmd
+    type: cmd
+    freq: event
+    desc: Commande ouverture
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  - id: tamper
+    type: alarme
+    freq: event
+    desc: Tentative d'intrusion/forçage
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut équipement
+    bacnet: "BI:3"
+    modbus: "10003"
+
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:4"
+    modbus: "10004"

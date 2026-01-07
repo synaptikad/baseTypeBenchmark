@@ -1,0 +1,34 @@
+# TemperatureSensor - Capteur de température standalone
+# 3 points
+
+equipment:
+  code: TMP
+  domain: BMS
+  haystack: temp sensor
+  brick: Temperature_Sensor
+  protocols: [bacnet, modbus, knx, lora]
+
+points:
+  - id: temp_value
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Valeur température mesurée
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: sensor_status
+    type: etat
+    freq: event
+    values: [ok, warning, error]
+    desc: État capteur
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut capteur
+    bacnet: "BI:1"
+    modbus: "10001"

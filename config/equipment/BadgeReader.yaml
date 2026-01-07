@@ -1,0 +1,87 @@
+# BadgeReader - Lecteur de badge contrôle d'accès
+# 10 points
+
+equipment:
+  code: BDG
+  domain: Security
+  haystack: badge reader
+  brick: Badge_Reader
+  protocols: [osdp, wiegand, bacnet]
+
+points:
+  # === ÉTAT ===
+  - id: reader_status
+    type: etat
+    freq: event
+    values: [online, offline, tamper, fault]
+    desc: État lecteur
+    osdp: "CMD_LSTAT"
+    bacnet: "MSV:1"
+
+  - id: door_status
+    type: etat
+    freq: event
+    values: [closed, open, forced, held_open]
+    desc: État porte associée
+    osdp: "CMD_ISTAT"
+    bacnet: "MSV:2"
+
+  - id: lock_status
+    type: etat
+    freq: event
+    values: [locked, unlocked]
+    desc: État verrouillage
+    osdp: "CMD_OSTAT"
+    bacnet: "BI:1"
+
+  # === ÉVÉNEMENTS ===
+  - id: badge_presented
+    type: etat
+    freq: event
+    desc: Badge présenté (trigger événement)
+    osdp: "CMD_RAW"
+    wiegand: "DATA0/DATA1"
+
+  - id: access_granted
+    type: etat
+    freq: event
+    desc: Accès autorisé
+    osdp: "REPLY_ACK"
+    bacnet: "BI:2"
+
+  - id: access_denied
+    type: etat
+    freq: event
+    desc: Accès refusé
+    osdp: "REPLY_NAK"
+    bacnet: "BI:3"
+
+  # === COMMANDES ===
+  - id: unlock_cmd
+    type: cmd
+    freq: event
+    desc: Commande déverrouillage
+    osdp: "CMD_OUT"
+    bacnet: "BO:1"
+
+  - id: led_cmd
+    type: cmd
+    freq: event
+    desc: Commande LED (rouge/vert/orange)
+    osdp: "CMD_LED"
+    bacnet: "AO:1"
+
+  # === ALARMES ===
+  - id: tamper_alarm
+    type: alarme
+    freq: event
+    desc: Alarme sabotage
+    osdp: "CMD_LSTAT:tamper"
+    bacnet: "BI:4"
+
+  - id: forced_door_alarm
+    type: alarme
+    freq: event
+    desc: Alarme porte forcée
+    osdp: "CMD_ISTAT:forced"
+    bacnet: "BI:5"

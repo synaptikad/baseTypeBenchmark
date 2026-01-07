@@ -1,0 +1,98 @@
+# Transformer_HT_BT - Transformateur haute tension / basse tension
+# 10 points - Optionnel (grands bâtiments avec poste HT)
+
+equipment:
+  code: TRF
+  domain: Electrical
+  haystack: transformer
+  brick: Transformer
+  protocols: [modbus, iec61850, bacnet]
+
+points:
+  # === MESURES ÉLECTRIQUES ===
+  - id: voltage_primary
+    type: mesure
+    freq: normal
+    unit: kV
+    quantity: voltage
+    desc: Tension primaire (HT)
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: voltage_secondary
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension secondaire (BT)
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: load_pct
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: load
+    desc: Taux de charge
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: power_output
+    type: mesure
+    freq: fast
+    unit: kVA
+    quantity: apparent_power
+    desc: Puissance apparente sortie
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  # === MESURES THERMIQUES ===
+  - id: oil_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température huile
+    bacnet: "AI:5"
+    modbus: "40005"
+
+  - id: winding_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température enroulement
+    bacnet: "AI:6"
+    modbus: "40006"
+
+  - id: oil_level
+    type: mesure
+    freq: slow
+    unit: "%"
+    quantity: level
+    desc: Niveau huile
+    bacnet: "AI:7"
+    modbus: "40007"
+
+  # === ÉTATS / ALARMES ===
+  - id: status
+    type: etat
+    freq: event
+    values: [normal, warning, fault]
+    desc: État transformateur
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: overtemp_alarm
+    type: alarme
+    freq: event
+    desc: Alarme surchauffe
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut général (Buchholz, etc.)
+    bacnet: "BI:2"
+    modbus: "10002"

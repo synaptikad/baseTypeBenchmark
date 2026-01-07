@@ -1,0 +1,175 @@
+# CRAC - Computer Room Air Conditioner
+# 20 points - Climatisation salle serveur
+
+equipment:
+  code: CRAC
+  domain: HVAC
+  haystack: crac
+  brick: Computer_Room_Air_Conditioner
+  protocols: [bacnet, modbus, snmp]
+
+points:
+  # === MESURES THERMIQUES ===
+  - id: supply_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température air soufflé
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: return_air_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température air repris
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: supply_air_temp_sp
+    type: cmd
+    freq: event
+    unit: "°C"
+    desc: Consigne température soufflage
+    bacnet: "AV:1"
+    modbus: "40101"
+
+  # === HUMIDITÉ ===
+  - id: return_humidity
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: humidity
+    desc: Humidité relative reprise
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: humidity_sp
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne humidité
+    bacnet: "AV:2"
+    modbus: "40102"
+
+  # === VENTILATION ===
+  - id: fan_speed_fb
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: speed
+    desc: Retour vitesse ventilateur
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  - id: fan_speed_cmd
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Consigne vitesse ventilateur
+    bacnet: "AO:1"
+    modbus: "40201"
+
+  - id: filter_dp
+    type: mesure
+    freq: slow
+    unit: Pa
+    quantity: differential_pressure
+    desc: Delta P filtre
+    bacnet: "AI:5"
+    modbus: "40005"
+
+  # === REFROIDISSEMENT ===
+  - id: compressor_status
+    type: etat
+    freq: event
+    desc: État compresseur (on/off)
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: compressor_stage
+    type: mesure
+    freq: fast
+    unit: "-"
+    desc: Étage compresseur actif (1-4)
+    bacnet: "AI:6"
+    modbus: "40006"
+
+  - id: cooling_output
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: capacity
+    desc: Sortie refroidissement
+    bacnet: "AI:7"
+    modbus: "40007"
+
+  - id: condenser_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température condenseur
+    bacnet: "AI:8"
+    modbus: "40008"
+
+  # === ÉTATS ===
+  - id: run_status
+    type: etat
+    freq: event
+    desc: En marche/arrêt
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: operating_mode
+    type: etat
+    freq: event
+    values: [off, cooling, dehumidify, heating, economizer]
+    desc: Mode opératoire
+    bacnet: "MSV:1"
+    modbus: "40301"
+
+  - id: economizer_active
+    type: etat
+    freq: event
+    desc: Free-cooling actif
+    bacnet: "BI:3"
+    modbus: "10003"
+
+  # === ALARMES ===
+  - id: high_temp_alarm
+    type: alarme
+    freq: event
+    desc: Température haute
+    bacnet: "BI:4"
+    modbus: "10004"
+
+  - id: low_temp_alarm
+    type: alarme
+    freq: event
+    desc: Température basse
+    bacnet: "BI:5"
+    modbus: "10005"
+
+  - id: filter_alarm
+    type: alarme
+    freq: event
+    desc: Filtre encrassé
+    bacnet: "BI:6"
+    modbus: "10006"
+
+  - id: compressor_fault
+    type: alarme
+    freq: event
+    desc: Défaut compresseur
+    bacnet: "BI:7"
+    modbus: "10007"
+
+  - id: general_fault
+    type: alarme
+    freq: event
+    desc: Défaut général
+    bacnet: "BI:8"
+    modbus: "10008"

@@ -1,0 +1,166 @@
+# UPS - Onduleur / Alimentation Sans Interruption
+# 18 points
+
+equipment:
+  code: UPS
+  domain: Electrical
+  haystack: ups
+  brick: Uninterruptible_Power_Supply
+  protocols: [snmp, modbus, bacnet]
+
+points:
+  # === ENTRÉE (INPUT) ===
+  - id: input_voltage
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension entrée
+    snmp: "1.3.6.1.2.1.33.1.3.3.1.3"  # upsInputVoltage
+    modbus: "40001"
+
+  - id: input_frequency
+    type: mesure
+    freq: normal
+    unit: Hz
+    quantity: frequency
+    desc: Fréquence entrée
+    snmp: "1.3.6.1.2.1.33.1.3.3.1.2"
+    modbus: "40002"
+
+  - id: input_current
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    desc: Courant entrée
+    snmp: "1.3.6.1.2.1.33.1.3.3.1.4"
+    modbus: "40003"
+
+  # === SORTIE (OUTPUT) ===
+  - id: output_voltage
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension sortie
+    snmp: "1.3.6.1.2.1.33.1.4.4.1.2"  # upsOutputVoltage
+    modbus: "40010"
+
+  - id: output_current
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    desc: Courant sortie
+    snmp: "1.3.6.1.2.1.33.1.4.4.1.3"
+    modbus: "40011"
+
+  - id: output_power
+    type: mesure
+    freq: fast
+    unit: W
+    quantity: power
+    desc: Puissance sortie
+    snmp: "1.3.6.1.2.1.33.1.4.4.1.4"
+    modbus: "40012"
+
+  - id: output_load
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: utilization
+    desc: Charge sortie (%)
+    snmp: "1.3.6.1.2.1.33.1.4.4.1.5"  # upsOutputPercentLoad
+    modbus: "40013"
+
+  # === BATTERIE ===
+  - id: battery_status
+    type: etat
+    freq: event
+    values: [unknown, normal, low, depleted, discharging, charging, floating]
+    desc: État batterie
+    snmp: "1.3.6.1.2.1.33.1.2.1"  # upsBatteryStatus
+    modbus: "40101"
+
+  - id: battery_charge
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: level
+    desc: Niveau charge batterie
+    snmp: "1.3.6.1.2.1.33.1.2.4"  # upsEstimatedChargeRemaining
+    modbus: "40020"
+
+  - id: battery_runtime
+    type: mesure
+    freq: normal
+    unit: min
+    quantity: duration
+    desc: Autonomie restante
+    snmp: "1.3.6.1.2.1.33.1.2.3"  # upsEstimatedMinutesRemaining
+    modbus: "40021"
+
+  - id: battery_voltage
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension batterie
+    snmp: "1.3.6.1.2.1.33.1.2.5"
+    modbus: "40022"
+
+  - id: battery_temperature
+    type: mesure
+    freq: slow
+    unit: "°C"
+    quantity: temperature
+    desc: Température batterie
+    snmp: "1.3.6.1.2.1.33.1.2.7"
+    modbus: "40023"
+
+  # === MODE OPÉRATOIRE ===
+  - id: operating_mode
+    type: etat
+    freq: event
+    values: [normal, battery, bypass, eco, maintenance]
+    desc: Mode de fonctionnement
+    snmp: "1.3.6.1.2.1.33.1.4.1"  # upsOutputSource
+    modbus: "40102"
+
+  # === COMMANDES ===
+  - id: test_cmd
+    type: cmd
+    freq: event
+    desc: Lancer test batterie
+    snmp: "1.3.6.1.2.1.33.1.7.1"  # upsTestId
+    modbus: "00001"
+
+  - id: shutdown_cmd
+    type: cmd
+    freq: event
+    desc: Arrêt programmé
+    snmp: "1.3.6.1.2.1.33.1.8.1"
+    modbus: "00002"
+
+  # === ALARMES ===
+  - id: on_battery_alarm
+    type: alarme
+    freq: event
+    desc: Fonctionnement sur batterie
+    snmp: "1.3.6.1.2.1.33.1.6.3.2"
+    modbus: "10001"
+
+  - id: low_battery_alarm
+    type: alarme
+    freq: event
+    desc: Batterie faible
+    snmp: "1.3.6.1.2.1.33.1.6.3.3"
+    modbus: "10002"
+
+  - id: overload_alarm
+    type: alarme
+    freq: event
+    desc: Surcharge
+    snmp: "1.3.6.1.2.1.33.1.6.3.6"
+    modbus: "10003"

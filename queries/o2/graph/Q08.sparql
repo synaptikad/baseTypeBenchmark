@@ -1,0 +1,12 @@
+# Q8: Tenant Energy - Extraction point_ids
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?point_id (COUNT(DISTINCT ?meter) AS ?meter_count)
+WHERE {
+    ?tenant a btb:Tenant ; btb:id "tenant_1" .
+    ?meter btb:metersTenant ?tenant ;
+           btb:hasPoint ?point .
+    ?point btb:id ?point_id ;
+           btb:quantity "energy" .
+}
+GROUP BY ?point_id

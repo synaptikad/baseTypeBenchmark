@@ -1,0 +1,119 @@
+# NetworkSwitch - Commutateur réseau manageable
+# 14 points
+
+equipment:
+  code: NSW
+  domain: IT
+  haystack: network switch
+  brick: Network_Switch
+  protocols: [snmp, http_api, ssh]
+
+points:
+  # === ÉTAT GÉNÉRAL ===
+  - id: system_uptime
+    type: mesure
+    freq: slow
+    unit: s
+    quantity: duration
+    desc: Durée depuis dernier redémarrage
+    snmp: "1.3.6.1.2.1.1.3.0"  # sysUpTime
+
+  - id: cpu_usage
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: utilization
+    desc: Utilisation CPU
+    snmp: "1.3.6.1.4.1.9.9.109.1.1.1.1.3"  # Cisco specific
+
+  - id: memory_usage
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: utilization
+    desc: Utilisation mémoire
+    snmp: "1.3.6.1.4.1.9.9.48.1.1.1.5"
+
+  - id: temperature
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température interne
+    snmp: "1.3.6.1.4.1.9.9.13.1.3.1.3"
+
+  # === PORTS ===
+  - id: port_count
+    type: mesure
+    freq: slow
+    unit: "-"
+    desc: Nombre de ports
+    snmp: "1.3.6.1.2.1.2.1.0"  # ifNumber
+
+  - id: ports_up
+    type: mesure
+    freq: normal
+    unit: "-"
+    desc: Nombre de ports actifs
+    snmp: "1.3.6.1.2.1.2.2.1.8"  # ifOperStatus
+
+  - id: total_bandwidth_in
+    type: mesure
+    freq: fast
+    unit: Mbps
+    quantity: bandwidth
+    desc: Bande passante entrante totale
+    snmp: "1.3.6.1.2.1.31.1.1.1.6"  # ifHCInOctets
+
+  - id: total_bandwidth_out
+    type: mesure
+    freq: fast
+    unit: Mbps
+    quantity: bandwidth
+    desc: Bande passante sortante totale
+    snmp: "1.3.6.1.2.1.31.1.1.1.10"  # ifHCOutOctets
+
+  # === POE (si supporté) ===
+  - id: poe_power_consumed
+    type: mesure
+    freq: normal
+    unit: W
+    quantity: power
+    desc: Puissance PoE consommée
+    snmp: "1.3.6.1.2.1.105.1.3.1.1.4"  # pethMainPsePower
+
+  - id: poe_power_available
+    type: mesure
+    freq: slow
+    unit: W
+    quantity: power
+    desc: Puissance PoE disponible
+    snmp: "1.3.6.1.2.1.105.1.3.1.1.2"
+
+  # === ÉTATS ===
+  - id: operational_status
+    type: etat
+    freq: event
+    values: [up, down, testing, unknown]
+    desc: État opérationnel
+    snmp: "1.3.6.1.2.1.2.2.1.8"
+
+  - id: spanning_tree_status
+    type: etat
+    freq: event
+    values: [forwarding, blocking, listening, learning, disabled]
+    desc: État Spanning Tree
+    snmp: "1.3.6.1.2.1.17.2.15.1.3"
+
+  # === ALARMES ===
+  - id: port_fault
+    type: alarme
+    freq: event
+    desc: Défaut port (err-disabled, etc.)
+    snmp: "1.3.6.1.2.1.2.2.1.8"
+
+  - id: fan_fault
+    type: alarme
+    freq: event
+    desc: Défaut ventilateur
+    snmp: "1.3.6.1.4.1.9.9.13.1.4.1.3"

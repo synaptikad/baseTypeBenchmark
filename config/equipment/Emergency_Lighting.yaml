@@ -1,0 +1,41 @@
+# Emergency_Lighting - Bloc autonome d'éclairage de sécurité (BAES)
+# 4 points
+
+equipment:
+  code: EML
+  domain: Lighting
+  haystack: emergency lighting
+  brick: Emergency_Lighting
+  protocols: [dali, bacnet, modbus]
+
+points:
+  - id: status
+    type: etat
+    freq: event
+    values: [normal, emergency, test, fault]
+    desc: État fonctionnement
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: battery_status
+    type: etat
+    freq: event
+    values: [ok, low, charging, fault]
+    desc: État batterie
+    bacnet: "MSV:2"
+    modbus: "40102"
+
+  - id: test_result
+    type: etat
+    freq: event
+    values: [pass, fail, pending, not_tested]
+    desc: Résultat dernier test autonomie
+    bacnet: "MSV:3"
+    modbus: "40103"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut bloc (lampe ou batterie)
+    bacnet: "BI:1"
+    modbus: "10001"

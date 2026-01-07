@@ -1,0 +1,21 @@
+# Q22: Equipment Siblings
+# Status: NATIVE pour O2 (double pattern SPARQL)
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?sibling_id ?sibling_name ?sibling_type ?parent_id ?parent_name
+WHERE {
+    VALUES ?equipment_id { "vav_1" }
+
+    ?target btb:id ?equipment_id .
+    ?parent btb:feeds ?target ;
+            btb:feeds ?sibling ;
+            btb:id ?parent_id ;
+            btb:name ?parent_name .
+
+    ?sibling btb:id ?sibling_id ;
+             btb:name ?sibling_name ;
+             btb:equipmentType ?sibling_type .
+
+    FILTER(?sibling_id != ?equipment_id)
+}
+ORDER BY ?parent_id ?sibling_id

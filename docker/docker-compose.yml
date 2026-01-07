@@ -1,0 +1,59 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg16
+    container_name: btb_timescaledb
+    env_file: .env
+    ports:
+      - "5432:5432"
+    command:
+      - postgres
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "checkpoint_timeout=30min"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ${BTB_DATA_DIR:-.}:/data:ro  # Mount data directory for fast server-side COPY
+    mem_limit: ${MEMORY_LIMIT:-8g}
+    memswap_limit: ${MEMORY_LIMIT:-8g}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  memgraph:
+    image: memgraph/memgraph:latest
+    container_name: btb_memgraph
+    ports:
+      - "7688:7687"
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    mem_limit: ${MEMORY_LIMIT:-8g}
+    memswap_limit: ${MEMORY_LIMIT:-8g}
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/7687'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  oxigraph:
+    image: oxigraph/oxigraph:latest
+    container_name: btb_oxigraph
+    ports:
+      - "7878:7878"
+    volumes:
+      - oxigraph_data:/data
+    mem_limit: ${MEMORY_LIMIT:-8g}
+    memswap_limit: ${MEMORY_LIMIT:-8g}
+    healthcheck:
+      disable: true
+
+volumes:
+  timescaledb_data:
+  memgraph_data:
+  oxigraph_data:

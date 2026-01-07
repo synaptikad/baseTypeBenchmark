@@ -1,0 +1,17 @@
+# Q1: Energy Chain (downstream FEEDS)
+# Parametre: meterId - ID du compteur source
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+SELECT ?id ?type ?name
+WHERE {
+    VALUES ?meterId { "meter_main_1" }
+
+    ?source btb:id ?meterId .
+    ?source btb:feeds+ ?target .
+
+    ?target btb:id ?id ;
+            btb:equipmentType ?type ;
+            btb:name ?name .
+}
+ORDER BY ?id

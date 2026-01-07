@@ -1,0 +1,95 @@
+# EVChargerLevel2 - Borne de recharge véhicule électrique
+# 10 points
+
+equipment:
+  code: EVC
+  domain: Parking
+  haystack: ev charger level2
+  brick: EV_Charger
+  protocols: [ocpp, modbus, bacnet]
+
+points:
+  # === MESURES ÉLECTRIQUES ===
+  - id: power
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: power
+    desc: Puissance délivrée
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: energy_session
+    type: mesure
+    freq: normal
+    unit: kWh
+    quantity: energy
+    desc: Énergie session en cours
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: energy_total
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie totale cumulée
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: current
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    desc: Courant
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  # === ÉTATS ===
+  - id: status
+    type: etat
+    freq: event
+    values: [available, charging, finishing, faulted, unavailable]
+    desc: État borne
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: connector_status
+    type: etat
+    freq: event
+    values: [available, occupied, reserved]
+    desc: État connecteur
+    bacnet: "MSV:2"
+    modbus: "40102"
+
+  # === COMMANDES ===
+  - id: start_cmd
+    type: cmd
+    freq: event
+    desc: Démarrer charge
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  - id: stop_cmd
+    type: cmd
+    freq: event
+    desc: Arrêter charge
+    bacnet: "BO:2"
+    modbus: "00002"
+
+  - id: max_current_cmd
+    type: cmd
+    freq: event
+    unit: A
+    desc: Limitation courant
+    bacnet: "AO:1"
+    modbus: "40201"
+
+  # === ALARMES ===
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut borne
+    bacnet: "BI:1"
+    modbus: "10001"

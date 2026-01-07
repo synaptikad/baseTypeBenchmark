@@ -1,0 +1,979 @@
+# Catalog des 23 Queries - Benchmark BaseType V3
+# Source de vérité pour les intentions de requêtes
+# Généré par AGENT-B
+
+version: "3.0"
+generated: "2025-01-06"
+
+# ===========================================================================
+# CATEGORIES
+# ===========================================================================
+categories:
+  graph_only:
+    description: "Traversées structurelles pures"
+    queries: [Q1, Q2, Q3, Q4, Q5]
+  timeseries_pure:
+    description: "Agrégations temporelles directes"
+    queries: [Q6]
+  hybrid:
+    description: "Sélection graph + agrégation timeseries"
+    queries: [Q7, Q8, Q9, Q10, Q11, Q12, Q13]
+  jsonb_specific:
+    description: "Requêtes exploitant les propriétés JSONB (P2=NATIVE)"
+    queries: [Q14, Q15, Q16, Q17, Q18, Q19]
+  graph_native:
+    description: "Algorithmes graphe natifs (M1/M2=NATIVE)"
+    queries: [Q20, Q21, Q22, Q23]
+
+# ===========================================================================
+# QUERIES
+# ===========================================================================
+queries:
+
+  # -------------------------------------------------------------------------
+  # GRAPH-ONLY (Q1-Q5)
+  # -------------------------------------------------------------------------
+
+  Q1:
+    name: "Energy Chain"
+    category: graph_only
+    intention: |
+      Depuis un compteur principal (MainMeter), trouver tous les équipements
+      alimentés en suivant la chaîne FEEDS, jusqu'à une profondeur max de 10.
+    use_case: "Analyse d'impact en cas de coupure électrique"
+    parameters:
+      - name: METER_ID
+        type: string
+        description: "ID d'un MainMeter existant"
+        format:
+          sql: "$1"
+          cypher: "$meter_id"
+          sparql: "?meterId"
+        example: "meter_main_1"
+    relations: [FEEDS]
+    max_depth: 10
+    direction: downstream
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID équipement"}
+        - {name: type, type: string, description: "Type de nœud"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: depth, type: integer, description: "Profondeur dans la chaîne"}
+      order_by: [depth, id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "CTE récursif"}
+      P2: {status: NATIVE, note: "CTE récursif"}
+      M1: {status: NATIVE, note: "Pattern FEEDS*1..10"}
+      M2: {status: NATIVE, note: "Pattern FEEDS*1..10"}
+      O2: {status: NATIVE, note: "Property path btb:feeds+"}
+
+  Q2:
+    name: "Functional Impact"
+    category: graph_only
+    intention: |
+      Depuis un équipement en panne, remonter la chaîne pour trouver les
+      équipements parents affectés via FEEDS, SERVES, CONTAINS (traversée inverse).
+    use_case: "Diagnostic de panne, analyse de dépendances"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID d'un équipement existant"
+        format:
+          sql: "$1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "equip_ahu_1"
+    relations: [FEEDS, SERVES, CONTAINS]
+    max_depth: 10
+    direction: upstream
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID équipement parent"}
+        - {name: type, type: string, description: "Type de nœud"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: relation_type, type: string, description: "Type de relation"}
+        - {name: depth, type: integer, description: "Profondeur dans la chaîne"}
+      order_by: [depth, id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "CTE récursif avec UNION sur relations"}
+      P2: {status: NATIVE, note: "CTE récursif avec UNION sur relations"}
+      M1: {status: NATIVE, note: "Pattern [:FEEDS|SERVES|CONTAINS*]"}
+      M2: {status: NATIVE, note: "Pattern [:FEEDS|SERVES|CONTAINS*]"}
+      O2: {status: NATIVE, note: "Property path avec alternatives"}
+
+  Q3:
+    name: "Space Services"
+    category: graph_only
+    intention: |
+      Pour un espace donné, lister tous les équipements qui le desservent,
+      le contiennent, ou le surveillent.
+    use_case: "Inventaire équipements d'une salle de réunion"
+    parameters:
+      - name: SPACE_ID
+        type: string
+        description: "ID d'un espace existant"
+        format:
+          sql: "$1"
+          cypher: "$space_id"
+          sparql: "?spaceId"
+        example: "space_meeting_101"
+    relations: [SERVES, CONTAINS, LOCATED_IN, MONITORS]
+    direction: incoming
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: equipment_name, type: string, description: "Nom équipement"}
+        - {name: equipment_type, type: string, description: "Type équipement"}
+        - {name: relation_type, type: string, description: "Type de relation"}
+      order_by: [relation_type, equipment_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "JOIN sur edges avec filtre rel_type"}
+      P2: {status: NATIVE, note: "JOIN sur edges avec filtre rel_type"}
+      M1: {status: NATIVE, note: "Pattern multi-relations"}
+      M2: {status: NATIVE, note: "Pattern multi-relations"}
+      O2: {status: NATIVE, note: "UNION de patterns SPARQL"}
+
+  Q4:
+    name: "Floor Temperature Inventory"
+    category: graph_only
+    intention: |
+      Pour un étage, lister tous les points de mesure de température avec
+      leur équipement parent.
+    use_case: "Vérification couverture capteurs pour confort thermique"
+    parameters:
+      - name: FLOOR_ID
+        type: string
+        description: "ID d'un étage existant"
+        format:
+          sql: "$1"
+          cypher: "$floor_id"
+          sparql: "?floorId"
+        example: "floor_b1_02"
+    relations: [CONTAINS, SERVES, HAS_POINT]
+    filters:
+      - property: quantity
+        value: "temperature"
+    result_schema:
+      columns:
+        - {name: floor_id, type: string, description: "ID étage"}
+        - {name: point_id, type: string, description: "ID point de mesure"}
+        - {name: point_name, type: string, description: "Nom point"}
+        - {name: equipment_id, type: string, description: "ID équipement parent"}
+        - {name: equipment_name, type: string, description: "Nom équipement"}
+      order_by: [equipment_id, point_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "Multi-JOIN avec filtre quantity"}
+      P2: {status: NATIVE, note: "Multi-JOIN avec filtre quantity"}
+      M1: {status: NATIVE, note: "Pattern traversée + WHERE"}
+      M2: {status: NATIVE, note: "Pattern traversée + WHERE"}
+      O2: {status: NATIVE, note: "Property path + FILTER"}
+
+  Q5:
+    name: "Orphans"
+    category: graph_only
+    intention: |
+      Trouver les équipements sans aucune relation (pas de FEEDS, SERVES,
+      CONTAINS, LOCATED_IN, etc.).
+    use_case: "Audit qualité données, détection erreurs d'import"
+    parameters: []
+    relations: []
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID équipement orphelin"}
+        - {name: type, type: string, description: "Type équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+      order_by: [type, id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "LEFT JOIN edges IS NULL"}
+      P2: {status: NATIVE, note: "LEFT JOIN edges IS NULL"}
+      M1: {status: NATIVE, note: "MATCH (e:Equipment) WHERE NOT (e)--()"}
+      M2: {status: NATIVE, note: "MATCH (e:Equipment) WHERE NOT (e)--()"}
+      O2: {status: NATIVE, note: "FILTER NOT EXISTS"}
+
+  # -------------------------------------------------------------------------
+  # TIMESERIES PURE (Q6)
+  # -------------------------------------------------------------------------
+
+  Q6:
+    name: "Hourly Aggregation"
+    category: timeseries_pure
+    intention: |
+      Pour un point donné, calculer les agrégats horaires (avg, min, max)
+      sur une période.
+    use_case: "Courbe de charge, analyse consommation"
+    parameters:
+      - name: POINT_ID
+        type: string
+        description: "ID d'un point de mesure"
+        format:
+          sql: "$1"
+          cypher: "$point_id"
+          sparql: "?pointId"
+        example: "point_temp_101"
+      - name: DATE_START
+        type: timestamp
+        description: "Début de période"
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+          sparql: "?dateStart"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        description: "Fin de période"
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+          sparql: "?dateEnd"
+        example: "2024-01-31T23:59:59Z"
+    result_schema:
+      columns:
+        - {name: hour_bucket, type: timestamp, description: "Bucket horaire"}
+        - {name: avg_value, type: float, description: "Moyenne"}
+        - {name: min_value, type: float, description: "Minimum"}
+        - {name: max_value, type: float, description: "Maximum"}
+        - {name: sample_count, type: integer, description: "Nombre d'échantillons"}
+      order_by: [hour_bucket]
+    paradigm_status:
+      P1: {status: NATIVE, note: "time_bucket + agrégats TimescaleDB"}
+      P2: {status: NATIVE, note: "time_bucket + agrégats TimescaleDB"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M2: {status: NATIVE, note: "TimescaleDB via extension"}
+      O2: {status: DEGRADED, note: "Agrégation SPARQL limitée"}
+
+  # -------------------------------------------------------------------------
+  # HYBRID (Q7-Q13)
+  # -------------------------------------------------------------------------
+
+  Q7:
+    name: "Drift Top-20"
+    category: hybrid
+    intention: |
+      Trouver les 20 points avec la plus grande variance sur une période.
+    use_case: "Détection anomalies, maintenance prédictive"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID d'un bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+          sparql: "?buildingId"
+        example: "building_hq_1"
+      - name: DATE_START
+        type: timestamp
+        description: "Début de période"
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+          sparql: "?dateStart"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        description: "Fin de période"
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+          sparql: "?dateEnd"
+        example: "2024-01-31T23:59:59Z"
+    result_schema:
+      columns:
+        - {name: point_id, type: string, description: "ID point"}
+        - {name: point_name, type: string, description: "Nom point"}
+        - {name: variance, type: float, description: "Variance calculée"}
+        - {name: avg_value, type: float, description: "Moyenne"}
+        - {name: sample_count, type: integer, description: "Nombre d'échantillons"}
+      order_by: [variance DESC]
+      limit: 20
+    paradigm_status:
+      P1: {status: NATIVE, note: "JOIN nodes + TimescaleDB variance"}
+      P2: {status: NATIVE, note: "JOIN nodes + TimescaleDB variance"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M2: {status: NATIVE, note: "Cypher + TimescaleDB"}
+      O2: {status: DEGRADED, note: "SPARQL agrégation limitée"}
+
+  Q8:
+    name: "Tenant Energy"
+    category: hybrid
+    intention: |
+      Calculer la consommation totale d'un locataire via ses sous-compteurs.
+    use_case: "Facturation énergie, reporting RE2020"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID d'un locataire"
+        format:
+          sql: "$1"
+          cypher: "$tenant_id"
+          sparql: "?tenantId"
+        example: "tenant_acme_corp"
+      - name: DATE_START
+        type: timestamp
+        description: "Début de période"
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+          sparql: "?dateStart"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        description: "Fin de période"
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+          sparql: "?dateEnd"
+        example: "2024-01-31T23:59:59Z"
+    relations: [METERS_TENANT, HAS_POINT]
+    filters:
+      - property: quantity
+        value: "energy"
+    result_schema:
+      columns:
+        - {name: tenant_id, type: string, description: "ID locataire"}
+        - {name: total_energy_kwh, type: float, description: "Énergie totale kWh"}
+        - {name: meter_count, type: integer, description: "Nombre de compteurs"}
+        - {name: point_count, type: integer, description: "Nombre de points"}
+      order_by: []
+    paradigm_status:
+      P1: {status: NATIVE, note: "Graph JOIN + SUM timeseries"}
+      P2: {status: NATIVE, note: "Graph JOIN + SUM timeseries"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M2: {status: NATIVE, note: "Cypher traversée + TimescaleDB"}
+      O2: {status: DEGRADED, note: "SPARQL + agrégation externe"}
+
+  Q9:
+    name: "Tenant Carbon Footprint"
+    category: hybrid
+    intention: |
+      Calculer l'empreinte carbone d'un locataire (énergie × facteur CO2).
+    use_case: "Reporting RSE, conformité réglementaire"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID d'un locataire"
+        format:
+          sql: "$1"
+          cypher: "$tenant_id"
+          sparql: "?tenantId"
+        example: "tenant_acme_corp"
+      - name: DATE_START
+        type: timestamp
+        description: "Début de période"
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+          sparql: "?dateStart"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        description: "Fin de période"
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+          sparql: "?dateEnd"
+        example: "2024-01-31T23:59:59Z"
+      - name: CO2_FACTOR
+        type: float
+        description: "Facteur de conversion kgCO2/kWh"
+        format:
+          sql: "$4"
+          cypher: "$co2_factor"
+          sparql: "?co2Factor"
+        example: 0.0569
+        default: 0.0569
+    relations: [METERS_TENANT, HAS_POINT]
+    filters:
+      - property: quantity
+        value: "energy"
+    result_schema:
+      columns:
+        - {name: tenant_id, type: string, description: "ID locataire"}
+        - {name: total_energy_kwh, type: float, description: "Énergie totale kWh"}
+        - {name: carbon_kg_co2, type: float, description: "Empreinte carbone kgCO2"}
+      order_by: []
+    paradigm_status:
+      P1: {status: NATIVE, note: "Extension Q8 avec multiplication"}
+      P2: {status: NATIVE, note: "Extension Q8 avec multiplication"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M2: {status: NATIVE, note: "Cypher + TimescaleDB + calcul"}
+      O2: {status: DEGRADED, note: "SPARQL + calcul externe"}
+
+  Q10:
+    name: "Security Access Analysis"
+    category: hybrid
+    intention: |
+      Pour un bâtiment, lister les équipements de sécurité (badges, caméras)
+      par espace avec leur couverture.
+    use_case: "Audit sécurité, plan d'évacuation"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID d'un bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+          sparql: "?buildingId"
+        example: "building_hq_1"
+    relations: [MONITORS, LOCATED_IN, CONTAINS]
+    filters:
+      - property: equipment_type
+        values: ["BadgeReader", "IPCamera", "DoorContact", "PIRDetector"]
+    result_schema:
+      columns:
+        - {name: space_id, type: string, description: "ID espace"}
+        - {name: space_name, type: string, description: "Nom espace"}
+        - {name: equipment_type, type: string, description: "Type équipement sécurité"}
+        - {name: equipment_count, type: integer, description: "Nombre d'équipements"}
+      order_by: [space_id, equipment_type]
+    paradigm_status:
+      P1: {status: NATIVE, note: "JOIN + GROUP BY"}
+      P2: {status: NATIVE, note: "JOIN + GROUP BY"}
+      M1: {status: NATIVE, note: "Pattern + count()"}
+      M2: {status: NATIVE, note: "Pattern + count()"}
+      O2: {status: NATIVE, note: "SPARQL GROUP BY + COUNT"}
+
+  Q11:
+    name: "IT Infrastructure Impact"
+    category: hybrid
+    intention: |
+      Trouver les serveurs dépendant d'une alimentation spécifique (UPS, circuit).
+    use_case: "Planification maintenance, analyse risque"
+    parameters:
+      - name: UPS_ID
+        type: string
+        description: "ID d'un UPS ou circuit électrique"
+        format:
+          sql: "$1"
+          cypher: "$ups_id"
+          sparql: "?upsId"
+        example: "equip_ups_dc_1"
+    relations: [FEEDS]
+    filters:
+      - property: equipment_type
+        values: ["RackServer", "NetworkSwitch", "StorageArray"]
+    max_depth: 5
+    direction: downstream
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement IT"}
+        - {name: equipment_name, type: string, description: "Nom équipement"}
+        - {name: equipment_type, type: string, description: "Type équipement"}
+        - {name: depth, type: integer, description: "Distance depuis UPS"}
+      order_by: [depth, equipment_type, equipment_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "CTE récursif + filtre type"}
+      P2: {status: NATIVE, note: "CTE récursif + filtre type"}
+      M1: {status: NATIVE, note: "Pattern FEEDS* + WHERE"}
+      M2: {status: NATIVE, note: "Pattern FEEDS* + WHERE"}
+      O2: {status: NATIVE, note: "Property path + FILTER"}
+
+  Q12:
+    name: "Full Building Analytics"
+    category: hybrid
+    intention: |
+      Agrégation multi-domaine pour un bâtiment (énergie totale, confort moyen,
+      occupation).
+    use_case: "Dashboard direction, reporting mensuel"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID d'un bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+          sparql: "?buildingId"
+        example: "building_hq_1"
+      - name: DATE_START
+        type: timestamp
+        description: "Début de période"
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+          sparql: "?dateStart"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        description: "Fin de période"
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+          sparql: "?dateEnd"
+        example: "2024-01-31T23:59:59Z"
+    relations: [CONTAINS, HAS_POINT]
+    filters:
+      - property: quantity
+        values: ["energy", "temperature", "occupancy"]
+    result_schema:
+      columns:
+        - {name: building_id, type: string, description: "ID bâtiment"}
+        - {name: total_energy_kwh, type: float, description: "Énergie totale kWh"}
+        - {name: avg_temperature_c, type: float, description: "Température moyenne °C"}
+        - {name: total_occupancy, type: integer, description: "Occupation cumulée"}
+      order_by: []
+    paradigm_status:
+      P1: {status: NATIVE, note: "Multi-JOIN + agrégats par quantity"}
+      P2: {status: NATIVE, note: "Multi-JOIN + agrégats par quantity"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M2: {status: NATIVE, note: "Cypher + TimescaleDB multi-agrégats"}
+      O2: {status: DEGRADED, note: "SPARQL + agrégation externe"}
+
+  Q13:
+    name: "Office Hours Comfort"
+    category: hybrid
+    intention: |
+      Analyser le confort (température, CO2) dans les bureaux pendant les
+      heures de travail (8h-18h, lun-ven).
+    use_case: "Conformité bien-être au travail, optimisation CVC"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID d'un bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+          sparql: "?buildingId"
+        example: "building_hq_1"
+      - name: DATE_START
+        type: timestamp
+        description: "Début de période"
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+          sparql: "?dateStart"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        description: "Fin de période"
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+          sparql: "?dateEnd"
+        example: "2024-01-31T23:59:59Z"
+    relations: [CONTAINS, SERVES, HAS_POINT]
+    filters:
+      - property: space_type
+        pattern: "office%"
+      - property: quantity
+        values: ["temperature", "co2"]
+    time_filters:
+      hours: [8, 18]
+      days: [1, 5]  # Monday to Friday
+    result_schema:
+      columns:
+        - {name: space_id, type: string, description: "ID espace bureau"}
+        - {name: space_name, type: string, description: "Nom espace"}
+        - {name: avg_temp_c, type: float, description: "Température moyenne °C"}
+        - {name: avg_co2_ppm, type: float, description: "CO2 moyen ppm"}
+        - {name: hours_out_of_range, type: integer, description: "Heures hors plage"}
+      order_by: [hours_out_of_range DESC, space_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "JOIN + EXTRACT(hour/dow) + agrégats"}
+      P2: {status: NATIVE, note: "JOIN + EXTRACT(hour/dow) + agrégats"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M2: {status: NATIVE, note: "Cypher + TimescaleDB filtres temporels"}
+      O2: {status: DEGRADED, note: "SPARQL filtres temporels limités"}
+
+  # -------------------------------------------------------------------------
+  # JSONB-SPECIFIC (Q14-Q19)
+  # -------------------------------------------------------------------------
+
+  Q14:
+    name: "Protocol Query"
+    category: jsonb_specific
+    intention: |
+      Trouver tous les points communiquant avec un device BACnet spécifique.
+    use_case: "Diagnostic réseau BACnet, remplacement contrôleur, migration"
+    parameters:
+      - name: DEVICE_ID
+        type: integer
+        description: "ID du device BACnet"
+        format:
+          sql: "$1"
+          cypher: "$device_id"
+          sparql: "?deviceId"
+        example: 1234
+    jsonb_path: "data->'protocol'->>'device_id'"
+    filters:
+      - property: protocol.type
+        value: "BACnet"
+    result_schema:
+      columns:
+        - {name: point_id, type: string, description: "ID point"}
+        - {name: point_name, type: string, description: "Nom point"}
+        - {name: equipment_id, type: string, description: "ID équipement parent"}
+        - {name: object_type, type: string, description: "Type objet BACnet"}
+        - {name: object_instance, type: integer, description: "Instance objet BACnet"}
+      order_by: [equipment_id, point_id]
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne protocol"}
+      P2: {status: NATIVE, note: "Index GIN sur data->'protocol'"}
+      M1: {status: DEGRADED, note: "Si exporté comme propriété"}
+      M2: {status: DEGRADED, note: "Si exporté comme propriété"}
+      O2: {status: DEGRADED, note: "Triples multiples requis"}
+
+  Q15:
+    name: "Warranty Expiry"
+    category: jsonb_specific
+    intention: |
+      Trouver les équipements dont la garantie expire dans les N prochains jours.
+    use_case: "Planification renouvellement contrats, budget maintenance"
+    parameters:
+      - name: DAYS_AHEAD
+        type: integer
+        description: "Nombre de jours avant expiration"
+        format:
+          sql: "$1"
+          cypher: "$days_ahead"
+          sparql: "?daysAhead"
+        example: 90
+        default: 90
+    jsonb_path: "data->'metadata'->>'warranty_end'"
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: equipment_type, type: string, description: "Type équipement"}
+        - {name: warranty_end, type: date, description: "Date fin garantie"}
+        - {name: days_remaining, type: integer, description: "Jours restants"}
+      order_by: [days_remaining, equipment_id]
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne warranty"}
+      P2: {status: NATIVE, note: "Opérateur ? + cast date"}
+      M1: {status: DEGRADED, note: "Si exporté comme propriété"}
+      M2: {status: DEGRADED, note: "Si exporté comme propriété"}
+      O2: {status: DEGRADED, note: "Triple warranty_end requis"}
+
+  Q16:
+    name: "Semantic Tag Search"
+    category: jsonb_specific
+    intention: |
+      Trouver les équipements correspondant à des tags Brick/Haystack.
+    use_case: "Interopérabilité ontologies, recherche sémantique"
+    parameters:
+      - name: TAG_PATTERN
+        type: string
+        description: "Pattern regex pour filtrer les tags"
+        format:
+          sql: "$1"
+          cypher: "$tag_pattern"
+          sparql: "?tagPattern"
+        example: "^brick:"
+    jsonb_path: "data->'tags'"
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: matching_tags, type: array, description: "Tags correspondants"}
+      order_by: [equipment_id]
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne tags array"}
+      P2: {status: NATIVE, note: "jsonb_array_elements_text + regex"}
+      M1: {status: DEGRADED, note: "Regex sur string si exporté"}
+      M2: {status: DEGRADED, note: "Regex sur string si exporté"}
+      O2: {status: NATIVE, note: "Triples RDF naturels pour tags"}
+
+  Q17:
+    name: "Capability Filter"
+    category: jsonb_specific
+    intention: |
+      Trouver les équipements HVAC ayant une capacité spécifique
+      (humidity_control, variable_speed, etc.).
+    use_case: "Audit technique, planification upgrade"
+    parameters:
+      - name: CAPABILITY
+        type: string
+        description: "Capacité recherchée"
+        format:
+          sql: "$1"
+          cypher: "$capability"
+          sparql: "?capability"
+        example: "humidity_control"
+    jsonb_path: "data->'capabilities'"
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: equipment_type, type: string, description: "Type équipement"}
+        - {name: all_capabilities, type: array, description: "Toutes les capacités"}
+      order_by: [equipment_type, equipment_id]
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne array capabilities"}
+      P2: {status: NATIVE, note: "Opérateur @> containment + GIN index"}
+      M1: {status: DEGRADED, note: "Si capabilities exporté comme liste"}
+      M2: {status: DEGRADED, note: "Si capabilities exporté comme liste"}
+      O2: {status: DEGRADED, note: "Triples multiples requis"}
+
+  Q18:
+    name: "Calibration Chain"
+    category: jsonb_specific
+    intention: |
+      Dans la chaîne énergétique, trouver les points dont la calibration
+      est échue.
+    use_case: "Planification métrologie, conformité"
+    parameters:
+      - name: METER_ID
+        type: string
+        description: "ID d'un compteur principal"
+        format:
+          sql: "$1"
+          cypher: "$meter_id"
+          sparql: "?meterId"
+        example: "meter_main_1"
+    relations: [FEEDS, HAS_POINT]
+    jsonb_path: "data->'calibration'->>'next_date'"
+    max_depth: 10
+    result_schema:
+      columns:
+        - {name: point_id, type: string, description: "ID point"}
+        - {name: point_name, type: string, description: "Nom point"}
+        - {name: equipment_id, type: string, description: "ID équipement parent"}
+        - {name: last_calibration, type: date, description: "Dernière calibration"}
+        - {name: next_calibration, type: date, description: "Prochaine calibration"}
+        - {name: days_overdue, type: integer, description: "Jours de retard"}
+      order_by: [days_overdue DESC, point_id]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "Pas de colonne calibration"}
+      P2: {status: NATIVE, note: "CTE récursive + filtre calibration JSON"}
+      M1: {status: DEGRADED, note: "Pattern + WHERE si exporté"}
+      M2: {status: DEGRADED, note: "Pattern + WHERE si exporté"}
+      O2: {status: DEGRADED, note: "Property path + FILTER"}
+
+  Q19:
+    name: "Equipment Digital Twin"
+    category: jsonb_specific
+    intention: |
+      Construire un document JSON complet d'un équipement avec ses points,
+      stats live, et metadata.
+    use_case: "API Digital Twin, export configuration, dashboard"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID d'un équipement"
+        format:
+          sql: "$1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "equip_ahu_1"
+    relations: [HAS_POINT]
+    result_schema:
+      columns:
+        - {name: digital_twin, type: json, description: "Document JSON complet"}
+      structure:
+        id: string
+        name: string
+        type: string
+        metadata: object
+        capabilities: array
+        protocol: object
+        points:
+          - id: string
+            name: string
+            quantity: string
+            unit: string
+            current_value: float
+            last_update: timestamp
+            stats:
+              avg_24h: float
+              min_24h: float
+              max_24h: float
+    paradigm_status:
+      P1: {status: VERY_DEGRADED, note: "Multi-JOIN + reconstruction JSON"}
+      P2: {status: NATIVE, note: "jsonb_build_object + jsonb_agg + LATERAL"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB pour stats live"}
+      M2: {status: DEGRADED, note: "Orchestration applicative requise"}
+      O2: {status: DEGRADED, note: "CONSTRUCT SPARQL + orchestration"}
+
+  # -------------------------------------------------------------------------
+  # GRAPH-NATIVE (Q20-Q23)
+  # -------------------------------------------------------------------------
+
+  Q20:
+    name: "Shortest HVAC Path"
+    category: graph_native
+    intention: |
+      Trouver le chemin le plus court entre un équipement HVAC source
+      et un espace cible.
+    use_case: "Diagnostic flux d'air, identification du trajet de distribution"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID équipement HVAC source"
+        format:
+          sql: "$1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "equip_ahu_1"
+      - name: SPACE_ID
+        type: string
+        description: "ID espace cible"
+        format:
+          sql: "$2"
+          cypher: "$space_id"
+          sparql: "?spaceId"
+        example: "space_office_201"
+    relations: [FEEDS, SERVES]
+    result_schema:
+      columns:
+        - {name: path_index, type: integer, description: "Position dans le chemin"}
+        - {name: node_id, type: string, description: "ID nœud"}
+        - {name: node_type, type: string, description: "Type nœud"}
+        - {name: node_name, type: string, description: "Nom nœud"}
+      order_by: [path_index]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "CTE récursif explore tout avant filtrage"}
+      P2: {status: DEGRADED, note: "CTE récursif explore tout avant filtrage"}
+      M1: {status: NATIVE, note: "shortestPath() natif Cypher"}
+      M2: {status: NATIVE, note: "shortestPath() natif Cypher"}
+      O2: {status: DEGRADED, note: "Property path SPARQL limité"}
+
+  Q21:
+    name: "Electrical Resilience"
+    category: graph_native
+    intention: |
+      Pour un équipement critique, identifier tous les chemins d'alimentation
+      et les points de défaillance unique (SPOF).
+    use_case: "Analyse risque datacenter, planification redondance, audit sécurité électrique"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID équipement critique"
+        format:
+          sql: "$1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "equip_server_critical_1"
+      - name: SOURCE_TYPE
+        type: string
+        description: "Type de source d'alimentation"
+        format:
+          sql: "$2"
+          cypher: "$source_type"
+          sparql: "?sourceType"
+        example: "MainMeter"
+        values: ["MainMeter", "UPS"]
+    relations: [FEEDS]
+    direction: upstream
+    result_schema:
+      columns:
+        - {name: path_id, type: integer, description: "ID du chemin"}
+        - {name: path_nodes, type: array, description: "Nœuds du chemin"}
+        - {name: path_length, type: integer, description: "Longueur du chemin"}
+        - {name: is_spof, type: boolean, description: "Nœud SPOF identifié"}
+        - {name: spof_node_id, type: string, description: "ID nœud SPOF si applicable"}
+      order_by: [path_length, path_id]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "CTE récursif exhaustif - explosion combinatoire"}
+      P2: {status: DEGRADED, note: "CTE récursif exhaustif - explosion combinatoire"}
+      M1: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
+      M2: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
+      O2: {status: IMPOSSIBLE, note: "Non supporté efficacement"}
+
+  Q22:
+    name: "Equipment Siblings"
+    category: graph_native
+    intention: |
+      Trouver les équipements "frères" (alimentés par le même parent FEEDS)
+      d'un équipement donné.
+    use_case: "Identification des équipements impactés par la même source, groupement logique"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID d'un équipement"
+        format:
+          sql: "$1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "equip_vav_101"
+    relations: [FEEDS]
+    result_schema:
+      columns:
+        - {name: sibling_id, type: string, description: "ID équipement frère"}
+        - {name: sibling_name, type: string, description: "Nom équipement frère"}
+        - {name: sibling_type, type: string, description: "Type équipement frère"}
+        - {name: parent_id, type: string, description: "ID équipement parent commun"}
+        - {name: parent_name, type: string, description: "Nom équipement parent"}
+      order_by: [parent_id, sibling_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "Self-JOIN sur edges fonctionnel"}
+      P2: {status: NATIVE, note: "Self-JOIN sur edges fonctionnel"}
+      M1: {status: NATIVE, note: "Pattern (a)<-[:FEEDS]-(p)-[:FEEDS]->(b)"}
+      M2: {status: NATIVE, note: "Pattern (a)<-[:FEEDS]-(p)-[:FEEDS]->(b)"}
+      O2: {status: NATIVE, note: "Double pattern SPARQL"}
+
+  Q23:
+    name: "Adjacency Propagation"
+    category: graph_native
+    intention: |
+      Depuis un espace source (ex: incendie), trouver tous les espaces
+      adjacents et équipements impactés en N hops.
+    use_case: "Simulation évacuation, propagation alarme incendie, analyse zone d'influence"
+    parameters:
+      - name: SPACE_ID
+        type: string
+        description: "ID espace source"
+        format:
+          sql: "$1"
+          cypher: "$space_id"
+          sparql: "?spaceId"
+        example: "space_lobby_1"
+      - name: MAX_HOPS
+        type: integer
+        description: "Nombre maximum de hops"
+        format:
+          sql: "$2"
+          cypher: "$max_hops"
+          sparql: "?maxHops"
+        example: 3
+        default: 3
+    relations: [ADJACENT_TO, CONTAINS, MONITORS, SERVES]
+    max_depth: "$MAX_HOPS"
+    result_schema:
+      columns:
+        - {name: node_id, type: string, description: "ID nœud impacté"}
+        - {name: node_type, type: string, description: "Type nœud (Space/Equipment)"}
+        - {name: node_name, type: string, description: "Nom nœud"}
+        - {name: hop_distance, type: integer, description: "Distance en hops"}
+        - {name: via_relation, type: string, description: "Relation de propagation"}
+      order_by: [hop_distance, node_type, node_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "CTE récursif avec depth <= N fonctionnel"}
+      P2: {status: NATIVE, note: "CTE récursif avec depth <= N fonctionnel"}
+      M1: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
+      M2: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
+      O2: {status: DEGRADED, note: "Property path avec limite partiel"}
+
+# ===========================================================================
+# PARAMETER FORMATS PAR PARADIGME
+# ===========================================================================
+parameter_formats:
+  pattern_match:
+    SQL: "LIKE 'prefix_%'"
+    Cypher: "STARTS WITH 'prefix_'"
+    SPARQL: "STRSTARTS(?var, 'prefix_')"
+  date_format:
+    SQL: "ISO 8601 string (YYYY-MM-DDTHH:MM:SSZ)"
+    Cypher: "Unix timestamp (ms) ou datetime()"
+    SPARQL: "xsd:dateTime"
+  array_contains:
+    SQL_P1: "Non supporté"
+    SQL_P2: "data->'array' @> '[\"value\"]'"
+    Cypher: "value IN node.array"
+    SPARQL: "FILTER(?val = 'value')"
+  json_path:
+    SQL_P1: "Non supporté"
+    SQL_P2: "data->'key1'->'key2'->>'value'"
+    Cypher: "node.key1.key2.value (si exporté)"
+    SPARQL: "Triple dédié"
+  recursive_depth:
+    SQL: "WITH RECURSIVE ... WHERE depth <= N"
+    Cypher: "*1..N"
+    SPARQL: "property path avec limite"
+
+# ===========================================================================
+# STATUS LEGEND
+# ===========================================================================
+status_legend:
+  NATIVE: "Supporté nativement avec performance optimale"
+  DEGRADED: "Possible mais avec limitations ou performance réduite"
+  VERY_DEGRADED: "Possible mais complexité élevée et performance faible"
+  IMPOSSIBLE: "Non supporté par le paradigme"

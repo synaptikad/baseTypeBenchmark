@@ -1,0 +1,108 @@
+# ParkingGuidanceController - Contrôleur de zone parking
+# 12 points
+
+equipment:
+  code: PKC
+  domain: Parking
+  haystack: parking guidance controller
+  brick: Parking_Guidance_Controller
+  protocols: [bacnet, modbus, rest_api]
+
+points:
+  # === COMPTAGES ===
+  - id: total_spaces
+    type: mesure
+    freq: slow
+    unit: "-"
+    desc: Nb places total zone
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: occupied_spaces
+    type: mesure
+    freq: fast
+    unit: "-"
+    desc: Nb places occupées
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: available_spaces
+    type: mesure
+    freq: fast
+    unit: "-"
+    desc: Nb places libres
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: occupancy_rate
+    type: mesure
+    freq: normal
+    unit: "%"
+    desc: Taux occupation
+    bacnet: "AV:1"
+    modbus: "40004"
+
+  # === ENTRÉES/SORTIES ===
+  - id: entries_count
+    type: mesure
+    freq: energy
+    unit: "-"
+    desc: Compteur entrées (cumul)
+    bacnet: "AI:4"
+    modbus: "40005"
+
+  - id: exits_count
+    type: mesure
+    freq: energy
+    unit: "-"
+    desc: Compteur sorties (cumul)
+    bacnet: "AI:5"
+    modbus: "40006"
+
+  # === ÉTATS ===
+  - id: zone_status
+    type: etat
+    freq: event
+    values: [available, full, reserved, maintenance]
+    desc: État zone
+    bacnet: "MSV:1"
+    modbus: "40101"
+
+  - id: display_mode
+    type: etat
+    freq: event
+    values: [auto, manual, off]
+    desc: Mode affichage
+    bacnet: "MSV:2"
+    modbus: "40102"
+
+  # === COMMANDES ===
+  - id: display_message_cmd
+    type: cmd
+    freq: event
+    desc: Message panneau affichage
+    bacnet: "AV:2"
+    modbus: "40201"
+
+  - id: zone_lock_cmd
+    type: cmd
+    freq: event
+    desc: Verrouillage zone
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  # === ALARMES ===
+  - id: sensor_fault_count
+    type: mesure
+    freq: slow
+    unit: "-"
+    desc: Nb capteurs en défaut
+    bacnet: "AI:6"
+    modbus: "40007"
+
+  - id: comm_fault
+    type: alarme
+    freq: event
+    desc: Défaut communication
+    bacnet: "BI:1"
+    modbus: "10001"

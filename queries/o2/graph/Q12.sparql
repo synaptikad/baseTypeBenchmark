@@ -1,0 +1,12 @@
+# Q12: Full Building Analytics - Points par quantity
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?quantity (GROUP_CONCAT(?point_id; separator=",") AS ?point_ids)
+WHERE {
+    ?point a btb:Point ;
+           btb:id ?point_id ;
+           btb:buildingId "building_1" ;
+           btb:quantity ?quantity .
+    FILTER(?quantity IN ("energy", "temperature", "occupancy"))
+}
+GROUP BY ?quantity

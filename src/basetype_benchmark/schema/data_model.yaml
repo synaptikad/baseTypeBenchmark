@@ -1,0 +1,398 @@
+# Schema Canonique Benchmark BaseType V3
+# FROZEN - Ne pas modifier après validation Phase 0
+# Généré par AGENT-A
+
+version: "3.0"
+frozen_date: "2025-01-06"
+
+# ===========================================================================
+# NODE TYPES (10 types)
+# ===========================================================================
+node_types:
+
+  Site:
+    description: "Campus ou site géographique"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      address: {type: string, required: false}
+      gps_coords: {type: object, required: false}
+
+  Building:
+    description: "Bâtiment physique"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      site_id: {type: string, required: true, fk: Site.id}
+      address: {type: string, required: false}
+      gross_area_m2: {type: float, required: false}
+
+  Floor:
+    description: "Étage d'un bâtiment"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      floor_type: {type: string, required: true, enum: [ground, standard, basement, rooftop]}
+      building_id: {type: string, required: true, fk: Building.id}
+      level_index: {type: integer, required: false}
+
+  Space:
+    description: "Espace ou pièce"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      space_type: {type: string, required: true}
+      floor_id: {type: string, required: true, fk: Floor.id}
+      building_id: {type: string, required: true, fk: Building.id}
+      area_m2: {type: float, required: false}
+      capacity: {type: integer, required: false}
+
+  Equipment:
+    description: "Équipement technique (CVC, électrique, sécurité, IT)"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      equipment_type: {type: string, required: true}
+      domain: {type: string, required: true, enum: [HVAC, Electrical, Security, IT, Lighting, Metering]}
+      building_id: {type: string, required: true, fk: Building.id}
+      floor_id: {type: string, required: false, fk: Floor.id}
+      space_id: {type: string, required: false, fk: Space.id}
+      # Propriétés JSONB (P2 uniquement)
+      capabilities: {type: "array<string>", required: false, jsonb_only: true}
+      metadata: {type: object, required: false, jsonb_only: true, schema: equipment_metadata}
+      tags: {type: "array<string>", required: false, jsonb_only: true}
+      protocol: {type: object, required: false, jsonb_only: true, schema: equipment_protocol}
+
+  Point:
+    description: "Point de mesure ou commande"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      quantity: {type: string, required: true, enum_ref: quantities}
+      unit: {type: string, required: true}
+      equipment_id: {type: string, required: true, fk: Equipment.id}
+      building_id: {type: string, required: true, fk: Building.id}
+      frequency: {type: string, required: false}
+      # Propriétés JSONB (P2 uniquement)
+      protocol: {type: object, required: false, jsonb_only: true, schema: point_protocol}
+      range: {type: object, required: false, jsonb_only: true, schema: point_range}
+      calibration: {type: object, required: false, jsonb_only: true, schema: point_calibration}
+
+  Tenant:
+    description: "Locataire ou occupant"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      contract_start: {type: date, required: false}
+      contract_end: {type: date, required: false}
+
+  Contract:
+    description: "Contrat de maintenance ou garantie"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      contract_type: {type: string, required: true, enum: [maintenance, warranty, lease, service]}
+      start_date: {type: date, required: false}
+      end_date: {type: date, required: false}
+      provider: {type: string, required: false}
+
+  Ticket:
+    description: "Ticket GMAO/maintenance"
+    properties:
+      id: {type: string, required: true, pk: true}
+      title: {type: string, required: true}
+      status: {type: string, required: true, enum: [open, in_progress, resolved, closed]}
+      priority: {type: string, required: true, enum: [low, medium, high, critical]}
+      created_at: {type: datetime, required: false}
+      closed_at: {type: datetime, required: false}
+      equipment_id: {type: string, required: false, fk: Equipment.id}
+
+  Zone:
+    description: "Zone logique (thermique, sécurité, etc.)"
+    properties:
+      id: {type: string, required: true, pk: true}
+      name: {type: string, required: true}
+      zone_type: {type: string, required: true, enum: [thermal, security, fire, parking, administrative]}
+      description: {type: string, required: false}
+
+# ===========================================================================
+# RELATION TYPES (~20 types classifiés)
+# ===========================================================================
+relation_types:
+
+  # --- Spatiales ---
+  CONTAINS:
+    category: spatial
+    description: "Hiérarchie spatiale"
+    sources: [Site, Building, Floor, Space]
+    targets: [Building, Floor, Space]
+    cardinality: "1:N"
+
+  LOCATED_IN:
+    category: spatial
+    description: "Localisation physique d'un équipement"
+    sources: [Equipment]
+    targets: [Space]
+    cardinality: "N:1"
+
+  ADJACENT_TO:
+    category: spatial
+    description: "Topologie spatiale entre espaces"
+    sources: [Space]
+    targets: [Space]
+    cardinality: "N:N"
+    symmetric: true
+
+  # --- Fonctionnelles ---
+  HAS_PART:
+    category: functional
+    description: "Composition d'équipement"
+    sources: [Equipment]
+    targets: [Equipment]
+    cardinality: "1:N"
+
+  HAS_POINT:
+    category: functional
+    description: "Points de mesure d'un équipement"
+    sources: [Equipment]
+    targets: [Point]
+    cardinality: "1:N"
+
+  SERVES:
+    category: functional
+    description: "Service rendu par un équipement"
+    sources: [Equipment]
+    targets: [Space, Floor, Building]
+    cardinality: "N:N"
+
+  CONTROLS:
+    category: functional
+    description: "Contrôle BMS (thermostat→équipement)"
+    sources: [Equipment]
+    targets: [Equipment]
+    cardinality: "N:N"
+
+  MONITORS:
+    category: functional
+    description: "Supervision par capteur"
+    sources: [Equipment]
+    targets: [Space, Equipment]
+    cardinality: "N:N"
+
+  # --- Énergétiques ---
+  FEEDS:
+    category: energy
+    description: "Distribution énergie (Meter→Equipment)"
+    sources: [Equipment]
+    targets: [Equipment]
+    cardinality: "1:N"
+    note: "Utilisé pour chaîne compteur→sous-compteur→équipement"
+
+  METERS_TENANT:
+    category: energy
+    description: "Comptage divisionnaire locataire"
+    sources: [Equipment]
+    targets: [Tenant]
+    cardinality: "N:1"
+
+  METERS_ZONE:
+    category: energy
+    description: "Comptage par zone thermique"
+    sources: [Equipment]
+    targets: [Zone, Space]
+    cardinality: "N:N"
+
+  # --- IT/Réseau ---
+  HOSTS:
+    category: it
+    description: "Hébergement virtuel"
+    sources: [Equipment]
+    targets: [Equipment]
+    cardinality: "1:N"
+
+  NETWORK_LINK:
+    category: it
+    description: "Connexion réseau"
+    sources: [Equipment]
+    targets: [Equipment]
+    cardinality: "N:N"
+
+  # --- Organisationnelles ---
+  OCCUPIES:
+    category: organizational
+    description: "Occupation d'un espace par un locataire"
+    sources: [Tenant]
+    targets: [Space]
+    cardinality: "N:N"
+
+  MANAGES:
+    category: organizational
+    description: "Responsabilité de gestion"
+    sources: [Tenant]
+    targets: [Building, Zone]
+    cardinality: "N:N"
+
+  MEMBER_OF:
+    category: organizational
+    description: "Appartenance à une zone logique"
+    sources: [Equipment]
+    targets: [Zone]
+    cardinality: "N:N"
+
+  # --- Contractuelles ---
+  COVERED_BY:
+    category: contractual
+    description: "Couverture par contrat"
+    sources: [Equipment]
+    targets: [Contract]
+    cardinality: "N:N"
+
+  LEASED_TO:
+    category: contractual
+    description: "Location d'espace"
+    sources: [Space]
+    targets: [Tenant]
+    cardinality: "N:1"
+
+  # --- Sécurité ---
+  SECURES:
+    category: security
+    description: "Sécurisation d'un espace"
+    sources: [Equipment]
+    targets: [Space]
+    cardinality: "N:N"
+
+  GRANTS_ACCESS:
+    category: security
+    description: "Contrôle d'accès"
+    sources: [Equipment]
+    targets: [Space]
+    cardinality: "N:N"
+
+  # --- Exploitation ---
+  HAS_TICKET:
+    category: exploitation
+    description: "Tickets GMAO associés"
+    sources: [Equipment]
+    targets: [Ticket]
+    cardinality: "1:N"
+
+# ===========================================================================
+# JSONB SCHEMAS (P2 uniquement)
+# ===========================================================================
+jsonb_schemas:
+
+  equipment_protocol:
+    description: "Protocole de communication équipement"
+    type: object
+    properties:
+      type: {type: string, enum: [BACnet, Modbus, KNX, LonWorks, MQTT, OPC-UA]}
+      device_id: {type: integer}
+      network: {type: integer}
+      address: {type: string}
+      vendor_id: {type: integer}
+
+  equipment_metadata:
+    description: "Métadonnées d'exploitation"
+    type: object
+    properties:
+      manufacturer: {type: string}
+      model: {type: string}
+      serial_number: {type: string}
+      installation_date: {type: date}
+      warranty_end: {type: date}
+      maintenance_priority: {type: string, enum: [low, medium, high, critical]}
+      last_maintenance: {type: date}
+      firmware_version: {type: string}
+
+  point_protocol:
+    description: "Adressage protocolaire du point"
+    type: object
+    properties:
+      type: {type: string, enum: [BACnet, Modbus, KNX, MQTT]}
+      object_type: {type: string}
+      object_instance: {type: integer}
+      property: {type: string}
+      cov_increment: {type: float}
+      address: {type: string}
+      register: {type: integer}
+
+  point_range:
+    description: "Plage de mesure"
+    type: object
+    properties:
+      min: {type: float}
+      max: {type: float}
+      unit: {type: string}
+      precision: {type: float}
+
+  point_calibration:
+    description: "Données de calibration"
+    type: object
+    properties:
+      last_date: {type: date}
+      next_date: {type: date}
+      offset: {type: float}
+      technician: {type: string}
+
+# ===========================================================================
+# QUANTITIES (liste fermée)
+# ===========================================================================
+quantities:
+  # Environnement
+  - temperature
+  - humidity
+  - co2
+  - pressure
+  - flow
+  - illuminance
+  # Énergie
+  - power
+  - energy
+  - voltage
+  - current
+  # Occupation
+  - occupancy
+  - count
+  - presence
+  # Actionneurs
+  - position
+  - speed
+  - status
+  - alarm
+  - fault
+  # Commandes
+  - setpoint
+  - command
+  - mode
+
+# ===========================================================================
+# EQUIPMENT TYPES (référence)
+# ===========================================================================
+equipment_types:
+  HVAC: [AHU, VAV, FCU, Chiller, Boiler, HeatPump, Thermostat, TemperatureSensor, CO2_Sensor, HumiditySensor]
+  Electrical: [MainMeter, SubMeter, UPS, Transformer, PDU, CircuitBreaker]
+  Security: [BadgeReader, IPCamera, DoorContact, PIRDetector, SmokeDetector, FireAlarm]
+  IT: [RackServer, NetworkSwitch, Router, AccessPoint, StorageArray]
+  Lighting: [Luminaire, Dimmer, OccupancySensor, LightSensor]
+  Metering: [EnergyMeter, WaterMeter, GasMeter, ThermalMeter]
+
+# ===========================================================================
+# SPACE TYPES (référence)
+# ===========================================================================
+space_types:
+  - office
+  - open_space
+  - meeting_room
+  - conference_room
+  - reception
+  - lobby
+  - corridor
+  - restroom
+  - kitchen
+  - cafeteria
+  - technical
+  - server_room
+  - storage
+  - parking
+  - loading_dock

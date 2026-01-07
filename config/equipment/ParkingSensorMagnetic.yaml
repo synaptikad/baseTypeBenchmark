@@ -1,0 +1,32 @@
+# ParkingSensorMagnetic - Capteur individuel place parking
+# 4 points
+
+equipment:
+  code: PKS
+  domain: Parking
+  haystack: parking sensor magnetic
+  brick: Parking_Sensor
+  protocols: [proprietary, lora, rs485]
+
+points:
+  - id: occupied
+    type: etat
+    freq: event
+    desc: Place occupée
+
+  - id: vehicle_present_time
+    type: mesure
+    freq: slow
+    unit: min
+    desc: Durée présence véhicule
+
+  - id: battery_level
+    type: mesure
+    freq: daily
+    unit: "%"
+    desc: Niveau batterie (si sans fil)
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut capteur

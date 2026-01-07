@@ -1,0 +1,240 @@
+# Chiller - Groupe de production d'eau glacée
+# 28 points
+
+equipment:
+  code: CHL
+  domain: HVAC
+  haystack: chiller
+  brick: Chiller
+  protocols: [bacnet, modbus, lon]
+
+points:
+  # === TEMPÉRATURES EAU ===
+  - id: chw_supply_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau glacée départ
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: chw_return_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau glacée retour
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  - id: chw_supply_temp_sp
+    type: cmd
+    freq: event
+    unit: "°C"
+    desc: Consigne température départ
+    bacnet: "AV:1"
+    modbus: "40101"
+
+  - id: cw_supply_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau condenseur entrée
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: cw_return_temp
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température eau condenseur sortie
+    bacnet: "AI:4"
+    modbus: "40004"
+
+  # === PRESSIONS CIRCUIT FRIGORIGÈNE ===
+  - id: evap_pressure
+    type: mesure
+    freq: normal
+    unit: bar
+    quantity: pressure
+    desc: Pression évaporateur
+    bacnet: "AI:5"
+    modbus: "40005"
+
+  - id: cond_pressure
+    type: mesure
+    freq: normal
+    unit: bar
+    quantity: pressure
+    desc: Pression condenseur
+    bacnet: "AI:6"
+    modbus: "40006"
+
+  # === COMPRESSEURS ===
+  - id: comp_1_status
+    type: etat
+    freq: event
+    values: [off, starting, running, stopping, fault]
+    desc: État compresseur 1
+    bacnet: "MSV:1"
+    modbus: "40201"
+
+  - id: comp_2_status
+    type: etat
+    freq: event
+    values: [off, starting, running, stopping, fault]
+    desc: État compresseur 2
+    bacnet: "MSV:2"
+    modbus: "40202"
+
+  - id: comp_1_hours
+    type: mesure
+    freq: slow
+    unit: h
+    quantity: runtime
+    desc: Heures fonctionnement compresseur 1
+    bacnet: "AI:7"
+    modbus: "40007"
+
+  - id: comp_2_hours
+    type: mesure
+    freq: slow
+    unit: h
+    quantity: runtime
+    desc: Heures fonctionnement compresseur 2
+    bacnet: "AI:8"
+    modbus: "40008"
+
+  # === POMPES ===
+  - id: chw_pump_status
+    type: etat
+    freq: event
+    desc: État pompe eau glacée
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: cw_pump_status
+    type: etat
+    freq: event
+    desc: État pompe condenseur
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  # === PUISSANCES / ÉNERGIE ===
+  - id: power_consumption
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: power
+    desc: Puissance électrique absorbée
+    bacnet: "AI:9"
+    modbus: "40009"
+
+  - id: cooling_capacity
+    type: mesure
+    freq: normal
+    unit: kW
+    quantity: cooling_capacity
+    desc: Puissance frigorifique
+    bacnet: "AI:10"
+    modbus: "40010"
+
+  - id: cop
+    type: mesure
+    freq: normal
+    unit: "-"
+    quantity: efficiency
+    desc: COP instantané
+    bacnet: "AV:2"
+    modbus: "40102"
+
+  - id: energy_consumed
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie consommée (cumul)
+    bacnet: "AI:11"
+    modbus: "40011"
+
+  # === DÉBITS ===
+  - id: chw_flow
+    type: mesure
+    freq: normal
+    unit: m3/h
+    quantity: flow
+    desc: Débit eau glacée
+    bacnet: "AI:12"
+    modbus: "40012"
+
+  - id: cw_flow
+    type: mesure
+    freq: normal
+    unit: m3/h
+    quantity: flow
+    desc: Débit eau condenseur
+    bacnet: "AI:13"
+    modbus: "40013"
+
+  # === MODE / ÉTAT GÉNÉRAL ===
+  - id: operating_mode
+    type: etat
+    freq: event
+    values: [off, cooling, ice_making, free_cooling]
+    desc: Mode de fonctionnement
+    bacnet: "MSV:3"
+    modbus: "40203"
+
+  - id: run_status
+    type: etat
+    freq: event
+    desc: En fonctionnement
+    bacnet: "BI:3"
+    modbus: "10003"
+
+  - id: enable_cmd
+    type: cmd
+    freq: event
+    desc: Commande marche/arrêt
+    bacnet: "BO:1"
+    modbus: "00001"
+
+  - id: capacity_limit
+    type: cmd
+    freq: event
+    unit: "%"
+    desc: Limitation capacité
+    bacnet: "AO:1"
+    modbus: "40301"
+
+  # === ALARMES ===
+  - id: high_pressure_alarm
+    type: alarme
+    freq: event
+    desc: Haute pression
+    bacnet: "BI:4"
+    modbus: "10004"
+
+  - id: low_pressure_alarm
+    type: alarme
+    freq: event
+    desc: Basse pression
+    bacnet: "BI:5"
+    modbus: "10005"
+
+  - id: flow_alarm
+    type: alarme
+    freq: event
+    desc: Défaut débit
+    bacnet: "BI:6"
+    modbus: "10006"
+
+  - id: general_fault
+    type: alarme
+    freq: event
+    desc: Défaut général
+    bacnet: "BI:7"
+    modbus: "10007"

@@ -1,0 +1,96 @@
+# SubMeter - Sous-compteur simplifié par usage/zone (TD)
+# 10 points
+
+equipment:
+  code: SMT
+  domain: Electrical
+  haystack: sub-meter elec
+  brick: Electrical_Sub_Meter
+  protocols: [modbus_tcp, modbus_rtu, bacnet]
+
+points:
+  # === PUISSANCES ===
+  - id: p_total
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: active_power
+    desc: Puissance active totale
+    bacnet: "AI:1"
+    modbus: "40001"
+
+  - id: pf_total
+    type: mesure
+    freq: normal
+    unit: "-"
+    quantity: power_factor
+    desc: Facteur de puissance
+    bacnet: "AI:2"
+    modbus: "40002"
+
+  # === ÉNERGIES ===
+  - id: energy_import
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie active importée
+    bacnet: "AI:3"
+    modbus: "40003"
+
+  - id: energy_export
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie active exportée (si prod locale)
+    bacnet: "AI:4"
+    modbus: "40005"
+
+  # === COURANTS (pour dimensionnement) ===
+  - id: i_max
+    type: mesure
+    freq: slow
+    unit: A
+    quantity: current
+    desc: Courant max (pic)
+    bacnet: "AI:5"
+    modbus: "40007"
+
+  - id: i_avg
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    desc: Courant moyen
+    bacnet: "AI:6"
+    modbus: "40008"
+
+  # === ÉTATS / ALARMES ===
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: breaker_status
+    type: etat
+    freq: event
+    desc: État disjoncteur
+    bacnet: "BI:2"
+    modbus: "10002"
+
+  - id: overload_alarm
+    type: alarme
+    freq: event
+    desc: Dépassement puissance
+    bacnet: "BI:3"
+    modbus: "10003"
+
+  - id: fault
+    type: alarme
+    freq: event
+    desc: Défaut général
+    bacnet: "BI:4"
+    modbus: "10004"

@@ -1,0 +1,19 @@
+# FireExtinguisher - Extincteur (asset avec suivi inspection)
+# 1 point - Pas de télémesure active
+
+equipment:
+  code: FEX
+  domain: FireSafety
+  haystack: fire extinguisher
+  brick: Fire_Extinguisher
+  protocols: []  # Asset seulement, pas de protocole
+
+points:
+  - id: inspection_due
+    type: etat
+    freq: daily
+    desc: Inspection à effectuer (date dépassée)
+
+# Note: Équipement passif - les autres informations (type, capacité,
+# date dernière inspection) sont stockées comme métadonnées de l'asset,
+# pas comme points télémesure.

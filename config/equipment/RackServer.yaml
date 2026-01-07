@@ -1,0 +1,146 @@
+# RackServer - Serveur rack (monitoring via IPMI/Redfish/SNMP)
+# 16 points
+
+equipment:
+  code: SRV
+  domain: IT
+  haystack: server rack
+  brick: Rack_Server
+  protocols: [ipmi, redfish, snmp]
+
+points:
+  # === ÉTAT GÉNÉRAL ===
+  - id: power_state
+    type: etat
+    freq: event
+    values: [on, off, standby, unknown]
+    desc: État alimentation
+    ipmi: "chassis power status"
+    redfish: "/redfish/v1/Systems/1"
+
+  - id: system_health
+    type: etat
+    freq: event
+    values: [ok, warning, critical]
+    desc: Santé globale système
+    ipmi: "sel info"
+    redfish: "/redfish/v1/Systems/1#Status.Health"
+
+  - id: bios_post_status
+    type: etat
+    freq: event
+    values: [completed, in_progress, failed]
+    desc: État POST BIOS
+    redfish: "/redfish/v1/Systems/1#Status.State"
+
+  # === TEMPÉRATURE ===
+  - id: cpu_temperature
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température CPU
+    ipmi: "sensor reading CPU_Temp"
+    redfish: "/redfish/v1/Chassis/1/Thermal#Temperatures"
+    snmp: "1.3.6.1.4.1.674.10892.5.4.700.20.1.6"  # Dell specific
+
+  - id: inlet_temperature
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température entrée air
+    ipmi: "sensor reading Inlet_Temp"
+    redfish: "/redfish/v1/Chassis/1/Thermal"
+
+  - id: exhaust_temperature
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+    desc: Température sortie air
+    ipmi: "sensor reading Exhaust_Temp"
+    redfish: "/redfish/v1/Chassis/1/Thermal"
+
+  # === VENTILATION ===
+  - id: fan_speed_avg
+    type: mesure
+    freq: normal
+    unit: RPM
+    quantity: speed
+    desc: Vitesse moyenne ventilateurs
+    ipmi: "sensor reading Fan1"
+    redfish: "/redfish/v1/Chassis/1/Thermal#Fans"
+
+  # === ÉNERGIE ===
+  - id: power_consumption
+    type: mesure
+    freq: fast
+    unit: W
+    quantity: power
+    desc: Consommation électrique
+    ipmi: "dcmi power reading"
+    redfish: "/redfish/v1/Chassis/1/Power#PowerConsumedWatts"
+    snmp: "1.3.6.1.4.1.674.10892.5.4.600.30.1.6"
+
+  - id: energy_consumed
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie consommée (cumul)
+    redfish: "/redfish/v1/Chassis/1/Power#PowerMetrics"
+
+  # === RESSOURCES ===
+  - id: cpu_utilization
+    type: mesure
+    freq: fast
+    unit: "%"
+    quantity: utilization
+    desc: Utilisation CPU
+    snmp: "1.3.6.1.2.1.25.3.3.1.2"  # hrProcessorLoad
+
+  - id: memory_utilization
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: utilization
+    desc: Utilisation mémoire
+    snmp: "1.3.6.1.4.1.2021.4.6"  # memAvailReal
+
+  # === COMMANDES ===
+  - id: power_on_cmd
+    type: cmd
+    freq: event
+    desc: Commande démarrage
+    ipmi: "chassis power on"
+    redfish: "POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
+
+  - id: power_off_cmd
+    type: cmd
+    freq: event
+    desc: Commande arrêt
+    ipmi: "chassis power off"
+    redfish: "POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
+
+  # === ALARMES ===
+  - id: temperature_alarm
+    type: alarme
+    freq: event
+    desc: Surchauffe
+    ipmi: "sel elist | grep Temperature"
+    redfish: "/redfish/v1/Systems/1/LogServices"
+
+  - id: fan_fault
+    type: alarme
+    freq: event
+    desc: Défaut ventilateur
+    ipmi: "sel elist | grep Fan"
+    redfish: "/redfish/v1/Chassis/1/Thermal#Fans"
+
+  - id: psu_fault
+    type: alarme
+    freq: event
+    desc: Défaut alimentation
+    ipmi: "sel elist | grep Power"
+    redfish: "/redfish/v1/Chassis/1/Power#PowerSupplies"

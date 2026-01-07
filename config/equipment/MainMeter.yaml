@@ -1,0 +1,234 @@
+# MainMeter - Compteur principal TGBT (Tableau Général Basse Tension)
+# 24 points
+
+equipment:
+  code: MMT
+  domain: Electrical
+  haystack: main-meter elec
+  brick: Electrical_Main_Meter
+  protocols: [modbus_tcp, modbus_rtu, bacnet, iec61850]
+
+points:
+  # === PUISSANCES ===
+  - id: p_total
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: active_power
+    desc: Puissance active totale triphasée
+    bacnet: "AI:1"
+    modbus: "40001"
+    iec61850: "MMXU1.TotW"
+
+  - id: p_l1
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: active_power
+    desc: Puissance active phase L1
+    bacnet: "AI:2"
+    modbus: "40003"
+
+  - id: p_l2
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: active_power
+    desc: Puissance active phase L2
+    bacnet: "AI:3"
+    modbus: "40005"
+
+  - id: p_l3
+    type: mesure
+    freq: fast
+    unit: kW
+    quantity: active_power
+    desc: Puissance active phase L3
+    bacnet: "AI:4"
+    modbus: "40007"
+
+  - id: q_total
+    type: mesure
+    freq: normal
+    unit: kVAR
+    quantity: reactive_power
+    desc: Puissance réactive totale
+    bacnet: "AI:5"
+    modbus: "40009"
+    iec61850: "MMXU1.TotVAr"
+
+  - id: s_total
+    type: mesure
+    freq: normal
+    unit: kVA
+    quantity: apparent_power
+    desc: Puissance apparente totale
+    bacnet: "AI:6"
+    modbus: "40011"
+    iec61850: "MMXU1.TotVA"
+
+  # === FACTEUR DE PUISSANCE ===
+  - id: pf_total
+    type: mesure
+    freq: normal
+    unit: "-"
+    quantity: power_factor
+    desc: Facteur de puissance global
+    bacnet: "AI:7"
+    modbus: "40013"
+    iec61850: "MMXU1.TotPF"
+
+  # === TENSIONS ===
+  - id: v_l1n
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension L1-N
+    bacnet: "AI:8"
+    modbus: "40015"
+
+  - id: v_l2n
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension L2-N
+    bacnet: "AI:9"
+    modbus: "40017"
+
+  - id: v_l3n
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension L3-N
+    bacnet: "AI:10"
+    modbus: "40019"
+
+  - id: v_avg
+    type: mesure
+    freq: normal
+    unit: V
+    quantity: voltage
+    desc: Tension moyenne
+    bacnet: "AI:11"
+    modbus: "40021"
+
+  # === COURANTS ===
+  - id: i_l1
+    type: mesure
+    freq: fast
+    unit: A
+    quantity: current
+    desc: Courant L1
+    bacnet: "AI:12"
+    modbus: "40023"
+
+  - id: i_l2
+    type: mesure
+    freq: fast
+    unit: A
+    quantity: current
+    desc: Courant L2
+    bacnet: "AI:13"
+    modbus: "40025"
+
+  - id: i_l3
+    type: mesure
+    freq: fast
+    unit: A
+    quantity: current
+    desc: Courant L3
+    bacnet: "AI:14"
+    modbus: "40027"
+
+  - id: i_n
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+    desc: Courant neutre
+    bacnet: "AI:15"
+    modbus: "40029"
+
+  # === FRÉQUENCE ===
+  - id: frequency
+    type: mesure
+    freq: normal
+    unit: Hz
+    quantity: frequency
+    desc: Fréquence réseau
+    bacnet: "AI:16"
+    modbus: "40031"
+    iec61850: "MMXU1.Hz"
+
+  # === ÉNERGIES (COMPTEURS) ===
+  - id: energy_import
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie active importée (cumul)
+    bacnet: "AI:17"
+    modbus: "40033"
+    iec61850: "MMTR1.TotWh"
+
+  - id: energy_export
+    type: mesure
+    freq: energy
+    unit: kWh
+    quantity: energy
+    desc: Énergie active exportée (cumul)
+    bacnet: "AI:18"
+    modbus: "40037"
+
+  - id: energy_reactive
+    type: mesure
+    freq: energy
+    unit: kVARh
+    quantity: reactive_energy
+    desc: Énergie réactive (cumul)
+    bacnet: "AI:19"
+    modbus: "40041"
+
+  # === DEMANDE MAX ===
+  - id: demand_max
+    type: mesure
+    freq: slow
+    unit: kW
+    quantity: demand
+    desc: Demande maximale (pic)
+    bacnet: "AI:20"
+    modbus: "40045"
+
+  # === ÉTATS / ALARMES ===
+  - id: comm_status
+    type: etat
+    freq: event
+    desc: État communication
+    bacnet: "BI:1"
+    modbus: "10001"
+
+  - id: breaker_status
+    type: etat
+    freq: event
+    values: [closed, open, tripped]
+    desc: État disjoncteur principal
+    bacnet: "MSV:1"
+    modbus: "10002"
+    iec61850: "XCBR1.Pos"
+
+  - id: overload_alarm
+    type: alarme
+    freq: event
+    desc: Dépassement puissance souscrite
+    bacnet: "BI:2"
+    modbus: "10003"
+
+  - id: power_quality_alarm
+    type: alarme
+    freq: event
+    desc: Alarme qualité réseau (THD, déséquilibre)
+    bacnet: "BI:3"
+    modbus: "10004"
