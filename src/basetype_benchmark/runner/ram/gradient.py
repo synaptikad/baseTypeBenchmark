@@ -365,7 +365,12 @@ class RAMGradientExecutor:
                 )
             sampler.start()
             query_stats = self._run_queries(queries, sampler)
-            sampling_result = sampler.stop()
+
+            # Fix: MultiContainerSampler.stop() returns dict, use get_combined_result()
+            if isinstance(sampler, MultiContainerSampler):
+                sampling_result = sampler.get_combined_result()
+            else:
+                sampling_result = sampler.stop()
 
             duration = time.perf_counter() - start_time
 
@@ -489,7 +494,7 @@ class RAMGradientExecutor:
             if self.verbose:
                 if query_stats.runs:
                     last_status = query_stats.runs[-1].status
-                    if last_status == RunStatus.OK:
+                    if last_status == RunStatus.SUCCESS:
                         avg_ms = query_stats.avg_ms
                         self._console.print(
                             f"[green]OK[/green] "

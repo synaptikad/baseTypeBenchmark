@@ -462,7 +462,12 @@ class BenchmarkOrchestrator:
             if ram is not None:
                 console.print(f"  {paradigm}: {ram:,} MB ({ram/1024:.0f} GB)")
             else:
-                console.print(f"  {paradigm}: [red]All OOM[/red]")
+                # Fix: Distinguish OOM from ERROR
+                pr = results.results.get(paradigm)
+                if pr and any(l.status == "error" for l in pr.levels):
+                    console.print(f"  {paradigm}: [red]ERROR (check logs)[/red]")
+                else:
+                    console.print(f"  {paradigm}: [red]All OOM[/red]")
 
         console.print("\n[cyan]RAM Baseline:[/cyan]")
         for paradigm, ram in summary["ram_baseline"].items():
