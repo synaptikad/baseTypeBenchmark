@@ -18,6 +18,10 @@ from typing import Literal
 
 from ..monitoring import DockerClient, is_docker_available
 
+# Project root: isolation.py is in src/basetype_benchmark/runner/ram/
+# So we go up 5 levels to reach project root
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
+
 
 class IsolationError(Exception):
     """Raised when isolation operations fail."""
@@ -78,7 +82,7 @@ class IsolationManager:
 
     Example:
         ```python
-        manager = IsolationManager(compose_file=Path("docker-compose.yml"))
+        manager = IsolationManager()  # uses DEFAULT_COMPOSE_FILE
 
         # Start paradigm
         manager.start_paradigm("M1")
@@ -90,7 +94,7 @@ class IsolationManager:
         ```
     """
 
-    DEFAULT_COMPOSE_FILE = Path("docker-compose.yml")
+    DEFAULT_COMPOSE_FILE = _PROJECT_ROOT / "docker" / "docker-compose.yml"
     HEALTH_CHECK_TIMEOUT = 60  # seconds
     CLEANUP_DELAY = 5  # seconds between stop and start
 
