@@ -98,13 +98,12 @@ init-deps:
 		sudo usermod -aG docker $$USER; \
 		echo "Docker installed. NOTE: You may need to re-login for group to apply."; \
 	fi
-	@# Python
+	@# Python + venv
 	@if command -v python3 &> /dev/null; then \
 		echo "Python: $$(python3 --version)"; \
-	else \
-		echo "Installing Python 3..."; \
-		sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-venv python3-pip; \
 	fi
+	@# Always ensure venv is installed (may be missing even if python3 exists)
+	@sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv python3-pip python3-dev
 	@# Git (should be there but just in case)
 	@if ! command -v git &> /dev/null; then \
 		sudo apt-get install -y -qq git; \
