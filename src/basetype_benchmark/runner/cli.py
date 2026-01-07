@@ -515,10 +515,14 @@ def run_query(
 
 @app.command("benchmark")
 def benchmark(
-    data_dir: Annotated[
+    source_dir: Annotated[
         Path,
-        typer.Option("--data", "-d", help="Path to exported data directory")
+        typer.Option("--source", "-s", help="Path to generated Parquet data (e.g., data/generated/small-1w)")
     ],
+    export_dir: Annotated[
+        Path,
+        typer.Option("--export", "-e", help="Path for temporary exports")
+    ] = Path("data/exports"),
     output: Annotated[
         Path,
         typer.Option("--output", "-o", help="Output JSON file")
@@ -543,19 +547,36 @@ def benchmark(
         int,
         typer.Option("--variants", "-v", help="Number of parameter variants")
     ] = 3,
+    cleanup: Annotated[
+        bool,
+        typer.Option("--cleanup/--no-cleanup", help="Cleanup exports after each paradigm (saves disk)")
+    ] = True,
 ) -> None:
-    """Execute full benchmark with RAM gradient.
+    """Execute full benchmark with RAM gradient and disk optimization.
+
+    The benchmark exports, loads, and benchmarks each paradigm sequentially,
+    optionally cleaning up exports after each paradigm to save disk space.
 
     Examples:
-        btb-runner benchmark -d data/export -o results.json
-        btb-runner benchmark -d data/export -p P1,M1 --ram "32,16,8"
+        btb-runner benchmark -s data/generated/small-1w -o results.json
+        btb-runner benchmark -s data/generated/small-1w -p P1,M1 --ram "32,16,8"
+        btb-runner benchmark -s data/generated/small-1w --no-cleanup  # Keep exports
     """
     from .benchmark import BenchmarkOrchestrator, ScenarioConfig
 
-    # Validate data directory
-    if not data_dir.exists():
-        console.print(f"[red]Data directory not found: {data_dir}[/red]")
+    # Validate source directory (Parquet files)
+    if not source_dir.exists():
+        console.print(f"[red]Source directory not found: {source_dir}[/red]")
         raise typer.Exit(1)
+
+    # Check for Parquet files
+    if not (source_dir / "nodes.parquet").exists():
+        console.print(f"[red]No nodes.parquet found in {source_dir}[/red]")
+        console.print("[yellow]Hint: Use data/generated/<profile> directory[/yellow]")
+        raise typer.Exit(1)
+
+    # Ensure export directory exists
+    export_dir.mkdir(parents=True, exist_ok=True)
 
     # Parse paradigms
     paradigm_list = ["P1", "P2", "M1", "M2", "O2"]
@@ -590,23 +611,28 @@ def benchmark(
         n_variants=variants,
     )
 
+    disk_mode = "optimisé (cleanup)" if cleanup else "persistant"
     console.print(Panel.fit(
         f"[bold blue]Benchmark Configuration[/bold blue]\n\n"
+        f"Source: {source_dir}\n"
         f"Paradigms: {', '.join(paradigm_list)}\n"
         f"Queries: {len(query_list) if query_list else 'all'}\n"
         f"RAM levels: {', '.join(f'{r}GB' for r in [r//1024 for r in ram_levels_mb])}\n"
         f"Runs: {runs}, Variants: {variants}\n"
+        f"Disk mode: {disk_mode}\n"
         f"Output: {output}",
         border_style="blue"
     ))
 
-    # Run benchmark
+    # Run benchmark with disk optimization
     try:
         orchestrator = BenchmarkOrchestrator(configs=configs)
         results = orchestrator.run_full_benchmark(
-            data_dir=data_dir,
+            source_dir=source_dir,
+            export_dir=export_dir,
             output_path=output,
             scenario=scenario,
+            cleanup_exports=cleanup,
         )
         console.print(f"\n[green]Benchmark complete! Results saved to {output}[/green]")
     except Exception as e:

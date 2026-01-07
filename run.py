@@ -311,7 +311,11 @@ def menu_load():
 # =============================================================================
 
 def menu_benchmark():
-    """Benchmark execution menu."""
+    """Benchmark execution menu with disk optimization.
+
+    New workflow: The benchmark now exports/loads/benchmarks each paradigm
+    sequentially, cleaning up exports after each to minimize disk usage.
+    """
     show_header()
     console.print("[bold]4. Run Benchmark[/bold]\n")
 
@@ -323,23 +327,25 @@ def menu_benchmark():
 
     choice = Prompt.ask("\nScenario", choices=["1", "2", "3", "4"], default="1")
 
-    # Get data directory
-    console.print("\n[cyan]Select data source:[/cyan]")
-    export_dirs = []
-    for p in PARADIGMS:
-        p_dir = EXPORT_DIR / p.lower()
-        if p_dir.exists():
-            for ds in p_dir.glob("*"):
-                if ds not in export_dirs:
-                    export_dirs.append(ds)
+    # Get source directory (generated Parquet data)
+    console.print("\n[cyan]Select generated dataset (Parquet source):[/cyan]")
+    generated_dirs = list(GENERATED_DIR.glob("*"))
+    generated_dirs = [d for d in generated_dirs if d.is_dir() and (d / "nodes.parquet").exists()]
 
-    if not export_dirs:
-        console.print("[yellow]No exported data found. Export datasets first.[/yellow]")
+    if not generated_dirs:
+        console.print("[yellow]No generated datasets found. Generate a dataset first.[/yellow]")
         Prompt.ask("\n[dim]Press Enter to continue[/dim]")
         return
 
-    # Use parent export dir
-    data_dir = str(EXPORT_DIR)
+    for i, d in enumerate(generated_dirs, 1):
+        console.print(f"  {i}. {d.name}")
+
+    ds_idx = IntPrompt.ask("\nSelect dataset", default=1)
+    if ds_idx < 1 or ds_idx > len(generated_dirs):
+        console.print("[red]Invalid selection[/red]")
+        return
+
+    source_dir = generated_dirs[ds_idx - 1]
 
     # Output file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -369,25 +375,33 @@ def menu_benchmark():
         ram = Prompt.ask("RAM levels GB (comma-separated)", default="64,32,16,8")
         runs = IntPrompt.ask("Number of runs", default=10)
 
+    # Ask about disk cleanup
+    cleanup = Confirm.ask("Cleanup exports after each paradigm (saves disk)?", default=True)
+
     # Confirm
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     console.print(f"\n[yellow]Benchmark configuration:[/yellow]")
+    console.print(f"  Source: {source_dir}")
     console.print(f"  Paradigms: {paradigms}")
     console.print(f"  RAM levels: {ram} GB")
     console.print(f"  Runs: {runs}")
+    console.print(f"  Disk mode: {'optimisé (cleanup)' if cleanup else 'persistant'}")
     console.print(f"  Output: {output}")
 
     if not Confirm.ask("\nStart benchmark?", default=True):
         return
 
-    # Run benchmark
+    # Run benchmark with disk optimization
+    cleanup_flag = "--cleanup" if cleanup else "--no-cleanup"
     btb("benchmark",
-        "-d", data_dir,
+        "-s", str(source_dir),
+        "-e", str(EXPORT_DIR),
         "-o", str(output),
         "-p", paradigms,
         "--ram", ram,
-        "--runs", str(runs))
+        "--runs", str(runs),
+        cleanup_flag)
 
     Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 

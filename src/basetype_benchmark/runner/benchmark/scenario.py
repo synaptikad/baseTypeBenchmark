@@ -12,6 +12,9 @@ Implements the protocol from papier.md Section 3.4.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -75,14 +78,19 @@ ProgressCallback = Callable[[str, str, float], None]
 class BenchmarkOrchestrator:
     """Main benchmark orchestration.
 
-    Coordinates the complete benchmark workflow:
+    Coordinates the complete benchmark workflow with disk optimization:
     1. For each paradigm:
-       a. Start containers
-       b. Load data
-       c. Run RAM gradient
-       d. Stop containers
+       a. Export data (from Parquet source)
+       b. Start containers
+       c. Load data
+       d. Run RAM gradient
+       e. Stop containers
+       f. Cleanup exports (optional, saves disk space)
     2. Aggregate results
     3. Export to JSON
+
+    This disk-optimized workflow keeps only ONE paradigm's exported data
+    on disk at a time, reducing peak disk usage from ~5x to ~1x dataset size.
 
     Example:
         ```python
@@ -92,15 +100,25 @@ class BenchmarkOrchestrator:
             ...
         })
 
+        # Disk-optimized mode (default)
         results = orchestrator.run_full_benchmark(
-            data_dir=Path("data/export"),
+            source_dir=Path("data/generated/small-1w"),  # Parquet source
+            export_dir=Path("data/exports"),             # Temporary exports
             output_path=Path("results.json"),
             scenario=ScenarioConfig(paradigms=["P1", "M1"]),
+            cleanup_exports=True,  # Remove exports after each paradigm
         )
         ```
     """
 
-    PAUSE_BETWEEN_PARADIGMS = 30  # seconds
+    # Map paradigm → exporter module
+    EXPORTER_MODULES = {
+        "P1": "src.basetype_benchmark.exporters.p1_extractor",
+        "P2": "src.basetype_benchmark.exporters.p2_extractor",
+        "M1": "src.basetype_benchmark.exporters.m1m2_extractor",
+        "M2": "src.basetype_benchmark.exporters.m1m2_extractor",
+        "O2": "src.basetype_benchmark.exporters.o2_extractor",
+    }
 
     def __init__(
         self,
@@ -118,17 +136,21 @@ class BenchmarkOrchestrator:
 
     def run_full_benchmark(
         self,
-        data_dir: Path,
+        source_dir: Path,
+        export_dir: Path,
         output_path: Path | None = None,
         scenario: ScenarioConfig | None = None,
+        cleanup_exports: bool = True,
         on_progress: ProgressCallback | None = None,
     ) -> BenchmarkResults:
-        """Execute complete benchmark.
+        """Execute complete benchmark with disk optimization.
 
         Args:
-            data_dir: Directory with exported data
+            source_dir: Directory with Parquet source files (nodes.parquet, etc.)
+            export_dir: Base directory for paradigm exports (temporary)
             output_path: Path for JSON output (optional)
             scenario: Scenario configuration
+            cleanup_exports: If True, delete exports after each paradigm (saves disk)
             on_progress: Progress callback
 
         Returns:
@@ -144,26 +166,30 @@ class BenchmarkOrchestrator:
         if not queries:
             queries = self._get_all_queries()
 
+        disk_mode = "optimisé" if cleanup_exports else "persistant"
         console.print(Panel.fit(
             f"[bold blue]Benchmark Runner V3[/bold blue]\n\n"
             f"Paradigms: {', '.join(scenario.paradigms)}\n"
             f"Queries: {len(queries)}\n"
             f"RAM levels: {len(scenario.ram_levels_mb)}\n"
-            f"Data profile: {scenario.data_profile}",
+            f"Data profile: {scenario.data_profile}\n"
+            f"Disk mode: {disk_mode}",
             title="Starting Benchmark",
             border_style="blue",
         ))
 
-        # Run each paradigm
+        # Run each paradigm (export → load → benchmark → cleanup)
         for i, paradigm in enumerate(scenario.paradigms):
             console.print(f"\n[bold cyan]===== {paradigm} ({i+1}/{len(scenario.paradigms)}) =====[/bold cyan]")
 
             try:
                 paradigm_results = self._run_paradigm(
                     paradigm=paradigm,
-                    data_dir=data_dir,
+                    source_dir=source_dir,
+                    export_dir=export_dir,
                     queries=queries,
                     scenario=scenario,
+                    cleanup_exports=cleanup_exports,
                     on_progress=on_progress,
                 )
                 results.add_paradigm_results(paradigm, paradigm_results)
@@ -173,11 +199,6 @@ class BenchmarkOrchestrator:
                 results.add_paradigm_results(paradigm, ParadigmResults(
                     paradigm=paradigm,
                 ))
-
-            # Pause between paradigms
-            if i < len(scenario.paradigms) - 1:
-                console.print(f"[dim]Pausing {self.PAUSE_BETWEEN_PARADIGMS}s before next paradigm...[/dim]")
-                time.sleep(self.PAUSE_BETWEEN_PARADIGMS)
 
         results.end_time = datetime.now()
 
@@ -194,81 +215,134 @@ class BenchmarkOrchestrator:
     def _run_paradigm(
         self,
         paradigm: str,
-        data_dir: Path,
+        source_dir: Path,
+        export_dir: Path,
         queries: list[str],
         scenario: ScenarioConfig,
+        cleanup_exports: bool = True,
         on_progress: ProgressCallback | None = None,
     ) -> ParadigmResults:
-        """Run benchmark for a single paradigm.
+        """Run benchmark for a single paradigm with disk optimization.
+
+        Workflow: export → start → load → benchmark → stop → cleanup
 
         Args:
             paradigm: Paradigm ID
-            data_dir: Data directory
+            source_dir: Parquet source directory
+            export_dir: Base export directory
             queries: Query IDs
             scenario: Scenario config
+            cleanup_exports: Delete exports after benchmark
             on_progress: Progress callback
 
         Returns:
             ParadigmResults
         """
         results = ParadigmResults(paradigm=paradigm)
-
-        # 1. Start containers
-        console.print(f"  [dim]Starting containers...[/dim]")
-        self.isolation.start_paradigm(paradigm)
+        paradigm_export_dir = None
 
         try:
-            # 2. Load data
-            console.print(f"  [dim]Loading data...[/dim]")
-            self._load_data(paradigm, data_dir)
+            # 1. Export paradigm data
+            console.print(f"  [dim]Exporting {paradigm}...[/dim]")
+            paradigm_export_dir = self._export_paradigm(paradigm, source_dir, export_dir)
 
-            # 3. Run gradient
-            console.print(f"  [dim]Running RAM gradient...[/dim]")
-            gradient_result = self._run_gradient(
-                paradigm=paradigm,
-                queries=queries,
-                scenario=scenario,
-                on_progress=on_progress,
-            )
+            # 2. Start containers
+            console.print(f"  [dim]Starting containers...[/dim]")
+            self.isolation.start_paradigm(paradigm)
 
-            # Convert gradient results
-            results.baseline_peak_mb = gradient_result.baseline_peak_mb
+            try:
+                # 3. Load data
+                console.print(f"  [dim]Loading data...[/dim]")
+                self._load_data(paradigm, paradigm_export_dir)
 
-            for level in gradient_result.levels:
-                level_result = LevelResult(
-                    limit_mb=level.limit_mb,
-                    status=level.status,
-                    actual_peak_mb=level.actual_peak_mb,
-                    duration_seconds=level.duration_seconds,
-                    error_message=level.error_message,
+                # 4. Run gradient
+                console.print(f"  [dim]Running RAM gradient...[/dim]")
+                gradient_result = self._run_gradient(
+                    paradigm=paradigm,
+                    queries=queries,
+                    scenario=scenario,
+                    on_progress=on_progress,
                 )
 
-                # Convert query stats
-                for qid, stats in level.query_stats.items():
-                    level_result.queries[qid] = QueryResult(
-                        query_id=qid,
-                        p50_ms=stats.p50_ms,
-                        p95_ms=stats.p95_ms,
-                        avg_ms=stats.avg_ms,
-                        min_ms=stats.min_ms,
-                        max_ms=stats.max_ms,
-                        stddev_ms=stats.stddev_ms,
-                        success_rate=stats.success_rate,
-                        memory_peak_mb=stats.memory_peak_mb,
-                        run_count=len(stats.runs),
+                # Convert gradient results
+                results.baseline_peak_mb = gradient_result.baseline_peak_mb
+
+                for level in gradient_result.levels:
+                    level_result = LevelResult(
+                        limit_mb=level.limit_mb,
+                        status=level.status,
+                        actual_peak_mb=level.actual_peak_mb,
+                        duration_seconds=level.duration_seconds,
+                        error_message=level.error_message,
                     )
 
-                results.levels.append(level_result)
+                    # Convert query stats
+                    for qid, stats in level.query_stats.items():
+                        level_result.queries[qid] = QueryResult(
+                            query_id=qid,
+                            p50_ms=stats.p50_ms,
+                            p95_ms=stats.p95_ms,
+                            avg_ms=stats.avg_ms,
+                            min_ms=stats.min_ms,
+                            max_ms=stats.max_ms,
+                            stddev_ms=stats.stddev_ms,
+                            success_rate=stats.success_rate,
+                            memory_peak_mb=stats.memory_peak_mb,
+                            run_count=len(stats.runs),
+                        )
+
+                    results.levels.append(level_result)
+
+            finally:
+                # 5. Stop containers
+                console.print(f"  [dim]Stopping containers...[/dim]")
+                self.isolation.stop_paradigm(paradigm)
 
         finally:
-            # 4. Stop containers
-            console.print(f"  [dim]Stopping containers...[/dim]")
-            self.isolation.stop_paradigm(paradigm)
+            # 6. Cleanup exports (disk optimization)
+            if cleanup_exports and paradigm_export_dir and paradigm_export_dir.exists():
+                console.print(f"  [dim]Cleaning up exports...[/dim]")
+                shutil.rmtree(paradigm_export_dir)
 
         # Print paradigm summary
         console.print(f"  [green]RAM viable: {results.ram_viable_mb} MB[/green]")
 
         return results
+
+    def _export_paradigm(
+        self,
+        paradigm: str,
+        source_dir: Path,
+        export_base_dir: Path,
+    ) -> Path:
+        """Export a paradigm from Parquet source files.
+
+        Args:
+            paradigm: Paradigm ID (P1, P2, M1, M2, O2)
+            source_dir: Directory with Parquet files
+            export_base_dir: Base directory for exports
+
+        Returns:
+            Path to exported paradigm directory
+        """
+        paradigm_export_dir = export_base_dir / paradigm.lower() / source_dir.name
+        paradigm_export_dir.mkdir(parents=True, exist_ok=True)
+
+        module = self.EXPORTER_MODULES.get(paradigm.upper())
+        if not module:
+            raise ValueError(f"Unknown paradigm: {paradigm}")
+
+        cmd = [
+            sys.executable, "-m", module,
+            "--input", str(source_dir),
+            "--output", str(paradigm_export_dir),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Export failed for {paradigm}: {result.stderr}")
+
+        return paradigm_export_dir
 
     def _load_data(self, paradigm: str, data_dir: Path) -> None:
         """Load data for a paradigm.
