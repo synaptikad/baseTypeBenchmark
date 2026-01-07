@@ -69,9 +69,9 @@ init: init-system init-deps init-docker install
 	@echo "=========================================="
 	@echo ""
 	@echo "Next steps:"
-	@echo "  make docker-up     # Start containers"
 	@echo "  make check         # Verify installation"
-	@echo "  make dry-run       # Test queries"
+	@echo "  make dry-run       # Validate queries"
+	@echo "  make benchmark     # Run full benchmark (runner manages containers)"
 	@echo ""
 
 init-system:
@@ -127,6 +127,13 @@ install:
 	$(PIP) install -e .
 	$(PIP) install -r requirements.txt
 	@echo "Python environment ready"
+	@# Create .env from example if not exists
+	@if [ ! -f .env ]; then \
+		cp .env.example .env; \
+		echo ".env created from .env.example"; \
+	fi
+	@# Create data directories
+	@mkdir -p $(DATA_DIR) $(EXPORT_DIR) $(RESULTS_DIR) 2>/dev/null || true
 
 check:
 	@echo "=== Verification ==="
