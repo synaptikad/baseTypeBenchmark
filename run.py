@@ -1,44 +1,63 @@
 #!/usr/bin/env python3
 """Interactive Benchmark Runner V3.
 
-Menu-driven interface for benchmark operations.
+Complete menu-driven interface for:
+- Dataset generation (profile + duration)
+- Data export to paradigm formats
+- Data loading
+- Benchmark execution
+- Results management
 """
 from __future__ import annotations
 
 import subprocess
 import sys
+import shutil
+import json
 from pathlib import Path
+from datetime import datetime
 
 # Rich for beautiful menus
 try:
     from rich.console import Console
     from rich.panel import Panel
-    from rich.prompt import Prompt, Confirm
+    from rich.prompt import Prompt, Confirm, IntPrompt
     from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn
 except ImportError:
     print("Installing rich...")
     subprocess.run([sys.executable, "-m", "pip", "install", "rich", "-q"])
     from rich.console import Console
     from rich.panel import Panel
-    from rich.prompt import Prompt, Confirm
+    from rich.prompt import Prompt, Confirm, IntPrompt
     from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
 # Paths
 PROJECT_DIR = Path(__file__).parent
+VENV_PYTHON = PROJECT_DIR / ".venv" / "bin" / "python"
 VENV_BTB = PROJECT_DIR / ".venv" / "bin" / "btb-runner"
+CONFIG_DIR = PROJECT_DIR / "config"
 DATA_DIR = Path("/data/benchmark")
+GENERATED_DIR = DATA_DIR / "generated"
 EXPORT_DIR = DATA_DIR / "exports"
 RESULTS_DIR = DATA_DIR / "results"
+
+# Profiles and durations
+PROFILES = ["small", "medium", "large", "xlarge"]
+DURATIONS = ["2d", "1w", "1m", "6m", "1y"]
+PARADIGMS = ["P1", "P2", "M1", "M2", "O2"]
 
 
 def run_command(cmd: list[str], capture: bool = False) -> int:
     """Run a command and return exit code."""
-    console.print(f"[dim]$ {' '.join(cmd)}[/dim]\n")
+    console.print(f"[dim]$ {' '.join(str(c) for c in cmd)}[/dim]\n")
     if capture:
         result = subprocess.run(cmd, capture_output=True, text=True)
-        console.print(result.stdout)
+        if result.stdout:
+            console.print(result.stdout)
         if result.stderr:
             console.print(f"[red]{result.stderr}[/red]")
         return result.returncode
@@ -47,7 +66,13 @@ def run_command(cmd: list[str], capture: bool = False) -> int:
 
 def btb(*args) -> int:
     """Run btb-runner command."""
-    cmd = [str(VENV_BTB)] + list(args)
+    cmd = [str(VENV_BTB)] + [str(a) for a in args]
+    return run_command(cmd)
+
+
+def python_module(module: str, *args) -> int:
+    """Run a Python module."""
+    cmd = [str(VENV_PYTHON), "-m", module] + [str(a) for a in args]
     return run_command(cmd)
 
 
@@ -56,7 +81,7 @@ def show_header():
     console.clear()
     console.print(Panel.fit(
         "[bold blue]BaseType Benchmark V3[/bold blue]\n"
-        "[dim]Interactive Runner[/dim]",
+        "[dim]Interactive Runner - Full Feature Menu[/dim]",
         border_style="blue"
     ))
     console.print()
@@ -64,236 +89,575 @@ def show_header():
 
 def show_main_menu() -> str:
     """Show main menu and return choice."""
-    table = Table(show_header=False, box=None)
+    table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Key", style="cyan bold", width=4)
     table.add_column("Action")
+    table.add_column("Description", style="dim")
 
-    table.add_row("1", "Query Validation (dry-run)")
-    table.add_row("2", "Docker Containers")
-    table.add_row("3", "Load Data")
-    table.add_row("4", "Run Benchmark")
-    table.add_row("5", "RAM Gradient Test")
-    table.add_row("6", "View Results")
-    table.add_row("", "")
-    table.add_row("i", "System Info")
-    table.add_row("q", "Quit")
+    table.add_row("1", "Generate Dataset", "Create synthetic building data")
+    table.add_row("2", "Export Dataset", "Convert to paradigm formats (P1/M1/O2)")
+    table.add_row("3", "Load Data", "Import into databases")
+    table.add_row("4", "Run Benchmark", "Execute benchmark scenarios")
+    table.add_row("5", "RAM Gradient", "Test memory limits")
+    table.add_row("", "", "")
+    table.add_row("6", "Manage Datasets", "List/delete generated data")
+    table.add_row("7", "View Results", "Browse benchmark results")
+    table.add_row("8", "Docker", "Container management")
+    table.add_row("", "", "")
+    table.add_row("v", "Validation", "Query dry-run and matrix")
+    table.add_row("i", "System Info", "Check system status")
+    table.add_row("q", "Quit", "")
 
     console.print(table)
     console.print()
 
-    return Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "i", "q"], default="1")
+    return Prompt.ask("Select", choices=["1", "2", "3", "4", "5", "6", "7", "8", "v", "i", "q"], default="1")
 
 
-def menu_validation():
-    """Query validation menu."""
+# =============================================================================
+# 1. GENERATE DATASET
+# =============================================================================
+
+def menu_generate():
+    """Dataset generation menu."""
     show_header()
-    console.print("[bold]Query Validation[/bold]\n")
+    console.print("[bold]1. Generate Dataset[/bold]\n")
 
-    choices = {
-        "1": ("Paradigm Matrix", lambda: btb("dry-run", "--matrix")),
-        "2": ("Validate All Queries", lambda: btb("dry-run", "--all", "--verbose")),
-        "3": ("Query Info", lambda: query_info()),
-        "b": ("Back", None),
-    }
+    # Show available profiles
+    console.print("[cyan]Available profiles:[/cyan]")
+    for p in PROFILES:
+        profile_path = CONFIG_DIR / "profiles" / f"{p}.yaml"
+        if profile_path.exists():
+            console.print(f"  - {p}")
 
-    for key, (label, _) in choices.items():
-        console.print(f"  [cyan]{key}[/cyan] - {label}")
+    profile = Prompt.ask("\nProfile", choices=PROFILES, default="small")
 
-    choice = Prompt.ask("\nSelect", choices=list(choices.keys()), default="1")
+    # Show durations
+    console.print("\n[cyan]Available durations:[/cyan]")
+    for d in DURATIONS:
+        console.print(f"  - {d}")
 
-    if choice != "b" and choices[choice][1]:
-        console.print()
-        choices[choice][1]()
+    duration = Prompt.ask("\nDuration", choices=DURATIONS, default="1w")
+
+    # Seed
+    seed = IntPrompt.ask("Seed (for reproducibility)", default=42)
+
+    # Output format
+    fmt = Prompt.ask("Output format", choices=["parquet", "json"], default="parquet")
+
+    # Confirm
+    console.print(f"\n[yellow]Will generate:[/yellow]")
+    console.print(f"  Profile: {profile}")
+    console.print(f"  Duration: {duration}")
+    console.print(f"  Seed: {seed}")
+    console.print(f"  Format: {fmt}")
+    console.print(f"  Output: {GENERATED_DIR / profile}-{duration}")
+
+    if not Confirm.ask("\nProceed?", default=True):
+        return
+
+    # Create output directory
+    output_dir = GENERATED_DIR / f"{profile}-{duration}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Run generator
+    console.print("\n[bold]Generating dataset...[/bold]\n")
+    python_module(
+        "src.basetype_benchmark.dataset.generator",
+        "--profile", profile,
+        "--seed", str(seed),
+        "--config-dir", str(CONFIG_DIR),
+        "--output", str(GENERATED_DIR),
+        "--format", fmt
+    )
+
+    console.print(f"\n[green]Dataset generated: {output_dir}[/green]")
+    Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+
+# =============================================================================
+# 2. EXPORT DATASET
+# =============================================================================
+
+def menu_export():
+    """Export dataset to paradigm formats."""
+    show_header()
+    console.print("[bold]2. Export Dataset[/bold]\n")
+
+    # List available generated datasets
+    datasets = list_datasets(GENERATED_DIR)
+    if not datasets:
+        console.print("[yellow]No generated datasets found. Generate one first.[/yellow]")
         Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+        return
+
+    console.print("[cyan]Available datasets:[/cyan]")
+    for i, ds in enumerate(datasets, 1):
+        console.print(f"  {i}. {ds.name}")
+
+    choice = IntPrompt.ask("\nSelect dataset", default=1)
+    if choice < 1 or choice > len(datasets):
+        return
+
+    source_dir = datasets[choice - 1]
+
+    # Select paradigms to export
+    console.print("\n[cyan]Export to paradigms:[/cyan]")
+    for i, p in enumerate(PARADIGMS, 1):
+        console.print(f"  {i}. {p}")
+    console.print(f"  a. All")
+
+    paradigm_choice = Prompt.ask("\nSelect", choices=[str(i) for i in range(1, 6)] + ["a"], default="a")
+
+    if paradigm_choice == "a":
+        selected_paradigms = PARADIGMS
+    else:
+        selected_paradigms = [PARADIGMS[int(paradigm_choice) - 1]]
+
+    # Confirm
+    console.print(f"\n[yellow]Will export {source_dir.name} to: {', '.join(selected_paradigms)}[/yellow]")
+
+    if not Confirm.ask("\nProceed?", default=True):
+        return
+
+    # Run exporters
+    for paradigm in selected_paradigms:
+        console.print(f"\n[bold]Exporting to {paradigm}...[/bold]")
+        output_dir = EXPORT_DIR / paradigm.lower() / source_dir.name
+
+        if paradigm in ("P1", "P2"):
+            python_module(
+                "src.basetype_benchmark.exporters.p1_extractor" if paradigm == "P1" else "src.basetype_benchmark.exporters.p2_extractor",
+                "--input", str(source_dir),
+                "--output", str(output_dir)
+            )
+        elif paradigm in ("M1", "M2"):
+            python_module(
+                "src.basetype_benchmark.exporters.m1m2_extractor",
+                "--input", str(source_dir),
+                "--output", str(output_dir)
+            )
+        elif paradigm == "O2":
+            python_module(
+                "src.basetype_benchmark.exporters.o2_extractor",
+                "--input", str(source_dir),
+                "--output", str(output_dir)
+            )
+
+    console.print(f"\n[green]Export complete![/green]")
+    Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
 
-def query_info():
-    """Show info for a specific query."""
-    qid = Prompt.ask("Query ID", default="Q1")
-    btb("info", qid.upper())
-
-
-def menu_docker():
-    """Docker management menu."""
-    show_header()
-    console.print("[bold]Docker Containers[/bold]\n")
-
-    choices = {
-        "1": ("Status", lambda: run_command(["docker", "compose", "-f", "docker/docker-compose.yml", "ps"])),
-        "2": ("Start All", lambda: run_command(["docker", "compose", "-f", "docker/docker-compose.yml", "up", "-d"])),
-        "3": ("Stop All", lambda: run_command(["docker", "compose", "-f", "docker/docker-compose.yml", "down"])),
-        "4": ("Logs (follow)", lambda: run_command(["docker", "compose", "-f", "docker/docker-compose.yml", "logs", "-f", "--tail=50"])),
-        "5": ("Stats", lambda: run_command(["docker", "stats", "--no-stream"])),
-        "b": ("Back", None),
-    }
-
-    for key, (label, _) in choices.items():
-        console.print(f"  [cyan]{key}[/cyan] - {label}")
-
-    choice = Prompt.ask("\nSelect", choices=list(choices.keys()), default="1")
-
-    if choice != "b" and choices[choice][1]:
-        console.print()
-        choices[choice][1]()
-        if choice != "4":  # Don't wait after logs -f
-            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
-
+# =============================================================================
+# 3. LOAD DATA
+# =============================================================================
 
 def menu_load():
     """Data loading menu."""
     show_header()
-    console.print("[bold]Load Data[/bold]\n")
+    console.print("[bold]3. Load Data[/bold]\n")
 
-    paradigms = ["P1", "P2", "M1", "M2", "O2"]
+    # List exported datasets by paradigm
+    console.print("[cyan]Select paradigm:[/cyan]")
+    for i, p in enumerate(PARADIGMS, 1):
+        export_path = EXPORT_DIR / p.lower()
+        count = len(list(export_path.glob("*"))) if export_path.exists() else 0
+        console.print(f"  {i}. {p} ({count} datasets)")
 
-    for i, p in enumerate(paradigms, 1):
-        console.print(f"  [cyan]{i}[/cyan] - Load {p}")
-    console.print(f"  [cyan]a[/cyan] - Load All")
-    console.print(f"  [cyan]b[/cyan] - Back")
-
-    choice = Prompt.ask("\nSelect", choices=[str(i) for i in range(1, 6)] + ["a", "b"], default="1")
-
-    if choice == "b":
+    paradigm_idx = IntPrompt.ask("\nParadigm", default=1)
+    if paradigm_idx < 1 or paradigm_idx > len(PARADIGMS):
         return
 
-    # Get data directory
-    default_dir = str(EXPORT_DIR)
-    data_dir = Prompt.ask("Data directory", default=default_dir)
+    paradigm = PARADIGMS[paradigm_idx - 1]
+    export_path = EXPORT_DIR / paradigm.lower()
 
+    # List datasets for this paradigm
+    datasets = list(export_path.glob("*")) if export_path.exists() else []
+    if not datasets:
+        console.print(f"[yellow]No exported datasets for {paradigm}. Export one first.[/yellow]")
+        Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+        return
+
+    console.print(f"\n[cyan]Datasets for {paradigm}:[/cyan]")
+    for i, ds in enumerate(datasets, 1):
+        console.print(f"  {i}. {ds.name}")
+
+    ds_idx = IntPrompt.ask("\nSelect dataset", default=1)
+    if ds_idx < 1 or ds_idx > len(datasets):
+        return
+
+    data_dir = datasets[ds_idx - 1]
+
+    # Options
     clear = Confirm.ask("Clear database before loading?", default=True)
+    workers = IntPrompt.ask("Workers (parallel loading)", default=16)
 
-    if choice == "a":
-        for p in paradigms:
-            console.print(f"\n[bold]Loading {p}...[/bold]")
-            args = ["load", p, "-d", data_dir]
-            if clear:
-                args.append("--clear")
-            btb(*args)
-    else:
-        p = paradigms[int(choice) - 1]
-        args = ["load", p, "-d", data_dir]
-        if clear:
-            args.append("--clear")
-        btb(*args)
+    # Confirm
+    console.print(f"\n[yellow]Will load {data_dir} into {paradigm}[/yellow]")
+
+    if not Confirm.ask("\nProceed?", default=True):
+        return
+
+    # Run loader
+    args = ["load", paradigm, "-d", str(data_dir), "-w", str(workers)]
+    if clear:
+        args.append("--clear")
+
+    btb(*args)
 
     Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
+
+# =============================================================================
+# 4. RUN BENCHMARK
+# =============================================================================
 
 def menu_benchmark():
     """Benchmark execution menu."""
     show_header()
-    console.print("[bold]Run Benchmark[/bold]\n")
+    console.print("[bold]4. Run Benchmark[/bold]\n")
 
-    choices = {
-        "1": "Quick (P1, M1 - 3 runs)",
-        "2": "Standard (All paradigms - 10 runs)",
-        "3": "Custom",
-        "b": "Back",
-    }
+    console.print("[cyan]Benchmark scenarios:[/cyan]")
+    console.print("  1. Quick Test (P1+M1, 3 runs, 32-16-8 GB)")
+    console.print("  2. Standard (All paradigms, 10 runs, 128-64-32-16-8 GB)")
+    console.print("  3. Memory Focus (M1 only, 10 runs, fine-grained RAM)")
+    console.print("  4. Custom")
 
-    for key, label in choices.items():
-        console.print(f"  [cyan]{key}[/cyan] - {label}")
-
-    choice = Prompt.ask("\nSelect", choices=list(choices.keys()), default="1")
-
-    if choice == "b":
-        return
+    choice = Prompt.ask("\nScenario", choices=["1", "2", "3", "4"], default="1")
 
     # Get data directory
-    default_dir = str(EXPORT_DIR)
-    data_dir = Prompt.ask("Data directory", default=default_dir)
+    console.print("\n[cyan]Select data source:[/cyan]")
+    export_dirs = []
+    for p in PARADIGMS:
+        p_dir = EXPORT_DIR / p.lower()
+        if p_dir.exists():
+            for ds in p_dir.glob("*"):
+                if ds not in export_dirs:
+                    export_dirs.append(ds)
+
+    if not export_dirs:
+        console.print("[yellow]No exported data found. Export datasets first.[/yellow]")
+        Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+        return
+
+    # Use parent export dir
+    data_dir = str(EXPORT_DIR)
 
     # Output file
-    import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_output = str(RESULTS_DIR / f"results_{timestamp}.json")
-    output = Prompt.ask("Output file", default=default_output)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if choice == "1":
         # Quick
-        btb("benchmark", "-d", data_dir, "-o", output, "-p", "P1,M1", "--ram", "32,16,8", "--runs", "3")
+        output = RESULTS_DIR / f"quick_{timestamp}.json"
+        paradigms = "P1,M1"
+        ram = "32,16,8"
+        runs = 3
     elif choice == "2":
         # Standard
-        btb("benchmark", "-d", data_dir, "-o", output, "--ram", "128,64,32,16,8")
+        output = RESULTS_DIR / f"standard_{timestamp}.json"
+        paradigms = "P1,P2,M1,M2,O2"
+        ram = "128,64,32,16,8"
+        runs = 10
+    elif choice == "3":
+        # Memory focus
+        output = RESULTS_DIR / f"memory_{timestamp}.json"
+        paradigms = "M1"
+        ram = "64,48,32,24,16,12,8"
+        runs = 10
     else:
         # Custom
-        paradigms = Prompt.ask("Paradigms (comma-separated)", default="P1,P2,M1,M2,O2")
+        output = RESULTS_DIR / f"custom_{timestamp}.json"
+        paradigms = Prompt.ask("Paradigms (comma-separated)", default="P1,M1,M2")
         ram = Prompt.ask("RAM levels GB (comma-separated)", default="64,32,16,8")
-        runs = Prompt.ask("Number of runs", default="10")
-        btb("benchmark", "-d", data_dir, "-o", output, "-p", paradigms, "--ram", ram, "--runs", runs)
+        runs = IntPrompt.ask("Number of runs", default=10)
+
+    # Confirm
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"\n[yellow]Benchmark configuration:[/yellow]")
+    console.print(f"  Paradigms: {paradigms}")
+    console.print(f"  RAM levels: {ram} GB")
+    console.print(f"  Runs: {runs}")
+    console.print(f"  Output: {output}")
+
+    if not Confirm.ask("\nStart benchmark?", default=True):
+        return
+
+    # Run benchmark
+    btb("benchmark",
+        "-d", data_dir,
+        "-o", str(output),
+        "-p", paradigms,
+        "--ram", ram,
+        "--runs", str(runs))
 
     Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
+
+# =============================================================================
+# 5. RAM GRADIENT
+# =============================================================================
 
 def menu_gradient():
     """RAM gradient test menu."""
     show_header()
-    console.print("[bold]RAM Gradient Test[/bold]\n")
+    console.print("[bold]5. RAM Gradient Test[/bold]\n")
 
-    paradigm = Prompt.ask("Paradigm", choices=["P1", "P2", "M1", "M2", "O2"], default="M1")
+    paradigm = Prompt.ask("Paradigm", choices=PARADIGMS, default="M1")
 
-    default_dir = str(EXPORT_DIR)
-    data_dir = Prompt.ask("Data directory", default=default_dir)
+    # Find data
+    data_dir = EXPORT_DIR / paradigm.lower()
+    if not data_dir.exists() or not list(data_dir.glob("*")):
+        console.print(f"[yellow]No data for {paradigm}. Export first.[/yellow]")
+        Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+        return
+
+    datasets = list(data_dir.glob("*"))
+    console.print(f"\n[cyan]Datasets for {paradigm}:[/cyan]")
+    for i, ds in enumerate(datasets, 1):
+        console.print(f"  {i}. {ds.name}")
+
+    ds_idx = IntPrompt.ask("Select dataset", default=1)
+    selected_data = datasets[ds_idx - 1] if 1 <= ds_idx <= len(datasets) else datasets[0]
 
     ram = Prompt.ask("RAM levels GB", default="32,16,8")
     query = Prompt.ask("Query to test", default="Q1")
 
-    btb("gradient", paradigm, "-d", data_dir, "--ram", ram, "-q", query)
+    btb("gradient", paradigm, "-d", str(selected_data), "--ram", ram, "-q", query)
 
     Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
 
-def menu_results():
-    """View results menu."""
+# =============================================================================
+# 6. MANAGE DATASETS
+# =============================================================================
+
+def menu_manage_datasets():
+    """Dataset management menu."""
     show_header()
-    console.print("[bold]View Results[/bold]\n")
+    console.print("[bold]6. Manage Datasets[/bold]\n")
 
-    # List result files
-    results_path = RESULTS_DIR
-    if not results_path.exists():
-        console.print("[yellow]No results directory found[/yellow]")
+    console.print("[cyan]Options:[/cyan]")
+    console.print("  1. List all datasets")
+    console.print("  2. Delete generated dataset")
+    console.print("  3. Delete exported dataset")
+    console.print("  4. Delete all data")
+    console.print("  b. Back")
+
+    choice = Prompt.ask("\nSelect", choices=["1", "2", "3", "4", "b"], default="1")
+
+    if choice == "b":
+        return
+
+    if choice == "1":
+        # List all
+        console.print("\n[bold]Generated datasets:[/bold]")
+        for ds in list_datasets(GENERATED_DIR):
+            size = get_dir_size(ds)
+            console.print(f"  {ds.name} ({size})")
+
+        console.print("\n[bold]Exported datasets:[/bold]")
+        for p in PARADIGMS:
+            p_dir = EXPORT_DIR / p.lower()
+            if p_dir.exists():
+                for ds in p_dir.glob("*"):
+                    size = get_dir_size(ds)
+                    console.print(f"  {p}/{ds.name} ({size})")
+
+    elif choice == "2":
+        # Delete generated
+        datasets = list_datasets(GENERATED_DIR)
+        if not datasets:
+            console.print("[yellow]No generated datasets.[/yellow]")
+        else:
+            console.print("\n[cyan]Generated datasets:[/cyan]")
+            for i, ds in enumerate(datasets, 1):
+                console.print(f"  {i}. {ds.name}")
+
+            idx = IntPrompt.ask("Delete which?", default=1)
+            if 1 <= idx <= len(datasets):
+                ds = datasets[idx - 1]
+                if Confirm.ask(f"[red]Delete {ds.name}?[/red]", default=False):
+                    shutil.rmtree(ds)
+                    console.print(f"[green]Deleted {ds.name}[/green]")
+
+    elif choice == "3":
+        # Delete exported
+        console.print("\n[cyan]Select paradigm:[/cyan]")
+        for i, p in enumerate(PARADIGMS, 1):
+            console.print(f"  {i}. {p}")
+
+        p_idx = IntPrompt.ask("Paradigm", default=1)
+        if 1 <= p_idx <= len(PARADIGMS):
+            p_dir = EXPORT_DIR / PARADIGMS[p_idx - 1].lower()
+            datasets = list(p_dir.glob("*")) if p_dir.exists() else []
+
+            if not datasets:
+                console.print("[yellow]No exported datasets.[/yellow]")
+            else:
+                for i, ds in enumerate(datasets, 1):
+                    console.print(f"  {i}. {ds.name}")
+
+                idx = IntPrompt.ask("Delete which?", default=1)
+                if 1 <= idx <= len(datasets):
+                    ds = datasets[idx - 1]
+                    if Confirm.ask(f"[red]Delete {ds.name}?[/red]", default=False):
+                        shutil.rmtree(ds)
+                        console.print(f"[green]Deleted {ds.name}[/green]")
+
+    elif choice == "4":
+        # Delete all
+        if Confirm.ask("[red]DELETE ALL DATA? This cannot be undone![/red]", default=False):
+            if GENERATED_DIR.exists():
+                shutil.rmtree(GENERATED_DIR)
+            if EXPORT_DIR.exists():
+                shutil.rmtree(EXPORT_DIR)
+            console.print("[green]All data deleted.[/green]")
+
+    Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+
+# =============================================================================
+# 7. VIEW RESULTS
+# =============================================================================
+
+def menu_results():
+    """View benchmark results."""
+    show_header()
+    console.print("[bold]7. View Results[/bold]\n")
+
+    if not RESULTS_DIR.exists():
+        console.print("[yellow]No results directory.[/yellow]")
         Prompt.ask("\n[dim]Press Enter to continue[/dim]")
         return
 
-    files = sorted(results_path.glob("*.json"), reverse=True)
-
+    files = sorted(RESULTS_DIR.glob("*.json"), reverse=True)
     if not files:
-        console.print("[yellow]No result files found[/yellow]")
+        console.print("[yellow]No result files.[/yellow]")
         Prompt.ask("\n[dim]Press Enter to continue[/dim]")
         return
 
-    console.print("Recent results:")
+    console.print("[cyan]Recent results:[/cyan]")
     for i, f in enumerate(files[:10], 1):
         size = f.stat().st_size / 1024
-        console.print(f"  [cyan]{i}[/cyan] - {f.name} ({size:.1f} KB)")
+        console.print(f"  {i}. {f.name} ({size:.1f} KB)")
 
-    choice = Prompt.ask("\nSelect file to view (or 'b' to go back)", default="1")
-
+    choice = Prompt.ask("\nSelect (or 'b' to go back)", default="1")
     if choice == "b":
         return
 
     try:
         idx = int(choice) - 1
         if 0 <= idx < len(files):
-            # Show summary
-            import json
             with open(files[idx]) as f:
                 data = json.load(f)
 
             console.print(f"\n[bold]Results: {files[idx].name}[/bold]\n")
 
+            # Config
+            if "config" in data:
+                cfg = data["config"]
+                console.print(f"[cyan]Configuration:[/cyan]")
+                console.print(f"  Paradigms: {', '.join(cfg.get('paradigms', []))}")
+                console.print(f"  RAM levels: {cfg.get('ram_levels_mb', [])}")
+                console.print(f"  Runs: {cfg.get('n_runs', 'N/A')}")
+
+            # Summary
             if "summary" in data:
-                console.print("[cyan]RAM Viable:[/cyan]")
+                console.print(f"\n[cyan]RAM Viable (smallest without OOM):[/cyan]")
                 for p, ram in data["summary"].get("ram_viable", {}).items():
                     if ram:
-                        console.print(f"  {p}: {ram:,} MB ({ram/1024:.0f} GB)")
+                        console.print(f"  {p}: [green]{ram:,} MB ({ram/1024:.0f} GB)[/green]")
                     else:
-                        console.print(f"  {p}: [red]OOM[/red]")
-    except (ValueError, IndexError, json.JSONDecodeError) as e:
+                        console.print(f"  {p}: [red]All OOM[/red]")
+
+                console.print(f"\n[cyan]RAM Baseline:[/cyan]")
+                for p, ram in data["summary"].get("ram_baseline", {}).items():
+                    console.print(f"  {p}: {ram:,.0f} MB")
+
+    except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
 
     Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
+
+# =============================================================================
+# 8. DOCKER
+# =============================================================================
+
+def menu_docker():
+    """Docker management."""
+    show_header()
+    console.print("[bold]8. Docker Containers[/bold]\n")
+
+    console.print("[cyan]Options:[/cyan]")
+    console.print("  1. Status")
+    console.print("  2. Start all")
+    console.print("  3. Stop all")
+    console.print("  4. Restart all")
+    console.print("  5. Logs")
+    console.print("  6. Stats (live)")
+    console.print("  b. Back")
+
+    choice = Prompt.ask("\nSelect", choices=["1", "2", "3", "4", "5", "6", "b"], default="1")
+
+    if choice == "b":
+        return
+
+    compose = ["docker", "compose", "-f", str(PROJECT_DIR / "docker" / "docker-compose.yml")]
+
+    if choice == "1":
+        run_command(compose + ["ps"])
+    elif choice == "2":
+        run_command(compose + ["up", "-d"])
+    elif choice == "3":
+        run_command(compose + ["down"])
+    elif choice == "4":
+        run_command(compose + ["down"])
+        run_command(compose + ["up", "-d"])
+    elif choice == "5":
+        run_command(compose + ["logs", "-f", "--tail=50"])
+    elif choice == "6":
+        run_command(["docker", "stats"])
+
+    if choice not in ["5", "6"]:
+        Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+
+# =============================================================================
+# VALIDATION
+# =============================================================================
+
+def menu_validation():
+    """Query validation."""
+    show_header()
+    console.print("[bold]Query Validation[/bold]\n")
+
+    console.print("[cyan]Options:[/cyan]")
+    console.print("  1. Paradigm Matrix")
+    console.print("  2. Validate all queries")
+    console.print("  3. Query info")
+    console.print("  b. Back")
+
+    choice = Prompt.ask("\nSelect", choices=["1", "2", "3", "b"], default="1")
+
+    if choice == "b":
+        return
+
+    if choice == "1":
+        btb("dry-run", "--matrix")
+    elif choice == "2":
+        btb("dry-run", "--all", "--verbose")
+    elif choice == "3":
+        qid = Prompt.ask("Query ID", default="Q1")
+        btb("info", qid.upper())
+
+    Prompt.ask("\n[dim]Press Enter to continue[/dim]")
+
+
+# =============================================================================
+# SYSTEM INFO
+# =============================================================================
 
 def show_system_info():
     """Show system information."""
@@ -301,11 +665,11 @@ def show_system_info():
     console.print("[bold]System Information[/bold]\n")
 
     import platform
-    import shutil
+    import os
 
-    # System
     console.print(f"[cyan]OS:[/cyan] {platform.system()} {platform.release()}")
     console.print(f"[cyan]Python:[/cyan] {platform.python_version()}")
+    console.print(f"[cyan]CPUs:[/cyan] {os.cpu_count()}")
 
     # Memory
     try:
@@ -314,20 +678,18 @@ def show_system_info():
                 if line.startswith("MemTotal:"):
                     mem_kb = int(line.split()[1])
                     console.print(f"[cyan]RAM:[/cyan] {mem_kb / 1024 / 1024:.0f} GB")
-                    break
-    except:
-        pass
-
-    # CPU
-    try:
-        import os
-        console.print(f"[cyan]CPUs:[/cyan] {os.cpu_count()}")
+                if line.startswith("MemAvailable:"):
+                    mem_kb = int(line.split()[1])
+                    console.print(f"[cyan]RAM Available:[/cyan] {mem_kb / 1024 / 1024:.0f} GB")
     except:
         pass
 
     # Disk
-    total, used, free = shutil.disk_usage("/")
-    console.print(f"[cyan]Disk:[/cyan] {free/1024/1024/1024:.0f} GB free / {total/1024/1024/1024:.0f} GB total")
+    try:
+        total, used, free = shutil.disk_usage("/")
+        console.print(f"[cyan]Disk:[/cyan] {free/1024/1024/1024:.0f} GB free / {total/1024/1024/1024:.0f} GB total")
+    except:
+        pass
 
     # Docker
     console.print()
@@ -335,17 +697,55 @@ def show_system_info():
 
     # cgroups
     console.print()
-    cgroup_path = Path("/sys/fs/cgroup")
-    if (cgroup_path / "cgroup.controllers").exists():
+    if Path("/sys/fs/cgroup/cgroup.controllers").exists():
         console.print("[green]cgroups v2: OK[/green]")
     else:
         console.print("[yellow]cgroups v2: Not detected[/yellow]")
 
+    # Data directories
+    console.print(f"\n[cyan]Data paths:[/cyan]")
+    console.print(f"  Generated: {GENERATED_DIR}")
+    console.print(f"  Exports: {EXPORT_DIR}")
+    console.print(f"  Results: {RESULTS_DIR}")
+
     Prompt.ask("\n[dim]Press Enter to continue[/dim]")
 
 
+# =============================================================================
+# UTILITIES
+# =============================================================================
+
+def list_datasets(directory: Path) -> list[Path]:
+    """List datasets in directory."""
+    if not directory.exists():
+        return []
+    return sorted([d for d in directory.iterdir() if d.is_dir()])
+
+
+def get_dir_size(path: Path) -> str:
+    """Get directory size as human-readable string."""
+    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    if total < 1024:
+        return f"{total} B"
+    elif total < 1024 * 1024:
+        return f"{total/1024:.1f} KB"
+    elif total < 1024 * 1024 * 1024:
+        return f"{total/1024/1024:.1f} MB"
+    else:
+        return f"{total/1024/1024/1024:.1f} GB"
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
 def main():
     """Main entry point."""
+    # Ensure data directories exist
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
     while True:
         show_header()
         choice = show_main_menu()
@@ -354,9 +754,9 @@ def main():
             console.print("\n[dim]Goodbye![/dim]")
             break
         elif choice == "1":
-            menu_validation()
+            menu_generate()
         elif choice == "2":
-            menu_docker()
+            menu_export()
         elif choice == "3":
             menu_load()
         elif choice == "4":
@@ -364,7 +764,13 @@ def main():
         elif choice == "5":
             menu_gradient()
         elif choice == "6":
+            menu_manage_datasets()
+        elif choice == "7":
             menu_results()
+        elif choice == "8":
+            menu_docker()
+        elif choice == "v":
+            menu_validation()
         elif choice == "i":
             show_system_info()
 
