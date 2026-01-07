@@ -938,34 +938,51 @@ def _count_file_rows(filepath: Path) -> int:
 
 
 def _get_loader_configs(paradigm: str):
-    """Get loader configurations from environment or defaults."""
+    """Get loader configurations from environment or defaults.
+
+    Builds proper DSN/URI strings for each database type.
+    Port defaults match docker-compose.yml port mappings:
+    - TimescaleDB: 5432:5432
+    - Memgraph: 7688:7687 (host:container)
+    - Oxigraph: 7878:7878
+    """
     import os
     from .config import PostgresConfig, MemgraphConfig, OxigraphConfig
 
     timescale_config = None
 
+    # Helper to build PostgreSQL DSN
+    def build_pg_dsn(host: str, port: int, database: str, user: str, password: str) -> str:
+        return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
     if paradigm in ("P1", "P2"):
+        host = os.getenv("POSTGRES_HOST", "localhost")
+        port = int(os.getenv("POSTGRES_PORT", "5432"))
+        database = os.getenv("POSTGRES_DB", "benchmark")
+        user = os.getenv("POSTGRES_USER", "postgres")
+        password = os.getenv("POSTGRES_PASSWORD", "postgres")
         primary_config = PostgresConfig(
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", "5432")),
-            database=os.getenv("POSTGRES_DB", f"benchmark_{paradigm.lower()}"),
-            user=os.getenv("POSTGRES_USER", "postgres"),
-            password=os.getenv("POSTGRES_PASSWORD", "postgres"),
+            dsn=build_pg_dsn(host, port, database, user, password)
         )
     elif paradigm in ("M1", "M2"):
-        primary_config = MemgraphConfig(
-            host=os.getenv("MEMGRAPH_HOST", "localhost"),
-            port=int(os.getenv("MEMGRAPH_PORT", "7687")),
-            user=os.getenv("MEMGRAPH_USER", ""),
-            password=os.getenv("MEMGRAPH_PASSWORD", ""),
-        )
+        # Memgraph uses Bolt protocol - port 7688 on host maps to 7687 in container
+        host = os.getenv("MEMGRAPH_HOST", "localhost")
+        port = int(os.getenv("MEMGRAPH_PORT", "7688"))  # Host port from docker-compose
+        user = os.getenv("MEMGRAPH_USER", "")
+        password = os.getenv("MEMGRAPH_PASSWORD", "")
+
+        uri = f"bolt://{host}:{port}"
+        auth = (user, password) if user else None
+        primary_config = MemgraphConfig(uri=uri, auth=auth)
+
         if paradigm == "M2":
+            ts_host = os.getenv("TIMESCALE_HOST", "localhost")
+            ts_port = int(os.getenv("TIMESCALE_PORT", "5432"))
+            ts_database = os.getenv("TIMESCALE_DB", "benchmark")
+            ts_user = os.getenv("TIMESCALE_USER", "postgres")
+            ts_password = os.getenv("TIMESCALE_PASSWORD", "postgres")
             timescale_config = PostgresConfig(
-                host=os.getenv("TIMESCALE_HOST", "localhost"),
-                port=int(os.getenv("TIMESCALE_PORT", "5432")),
-                database=os.getenv("TIMESCALE_DB", "benchmark_timeseries"),
-                user=os.getenv("TIMESCALE_USER", "postgres"),
-                password=os.getenv("TIMESCALE_PASSWORD", "postgres"),
+                dsn=build_pg_dsn(ts_host, ts_port, ts_database, ts_user, ts_password)
             )
     elif paradigm == "O2":
         base_url = os.getenv("OXIGRAPH_URL", "http://localhost:7878")
@@ -973,12 +990,13 @@ def _get_loader_configs(paradigm: str):
             query_endpoint=f"{base_url}/query",
             update_endpoint=f"{base_url}/update",
         )
+        ts_host = os.getenv("TIMESCALE_HOST", "localhost")
+        ts_port = int(os.getenv("TIMESCALE_PORT", "5432"))
+        ts_database = os.getenv("TIMESCALE_DB", "benchmark")
+        ts_user = os.getenv("TIMESCALE_USER", "postgres")
+        ts_password = os.getenv("TIMESCALE_PASSWORD", "postgres")
         timescale_config = PostgresConfig(
-            host=os.getenv("TIMESCALE_HOST", "localhost"),
-            port=int(os.getenv("TIMESCALE_PORT", "5432")),
-            database=os.getenv("TIMESCALE_DB", "benchmark_timeseries"),
-            user=os.getenv("TIMESCALE_USER", "postgres"),
-            password=os.getenv("TIMESCALE_PASSWORD", "postgres"),
+            dsn=build_pg_dsn(ts_host, ts_port, ts_database, ts_user, ts_password)
         )
     else:
         raise ValueError(f"Unknown paradigm: {paradigm}")
