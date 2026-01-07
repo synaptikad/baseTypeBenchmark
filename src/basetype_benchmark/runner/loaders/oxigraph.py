@@ -309,6 +309,9 @@ class OxigraphLoader(BaseLoader):
 
         pg_loader = PostgresLoader(self.timescale_config, paradigm="P1")
 
+        # Créer le schema timeseries si nécessaire
+        pg_loader.ensure_timeseries_schema()
+
         total_count = self._count_csv_rows(csv_file)
         self._emit_progress(callback, LoadPhase.TIMESERIES, 0, total_count)
 

@@ -123,9 +123,28 @@ class MemgraphLoader(BaseLoader):
             with driver.session() as session:
                 # Drop all nodes and relationships
                 session.run("MATCH (n) DETACH DELETE n")
-                # Drop indexes
-                session.run("DROP INDEX ON :Equipment(id)")
-                session.run("DROP INDEX ON :Point(id)")
+
+                # Drop all indexes - must match those created in _create_indexes()
+                # Index on id for each node type
+                for node_type in self.NODE_TYPES:
+                    try:
+                        session.run(f"DROP INDEX ON :{node_type}(id)")
+                    except Exception:
+                        pass  # Index may not exist
+
+                # Additional indexes
+                additional_indexes = [
+                    ("Equipment", "equipment_type"),
+                    ("Equipment", "domain"),
+                    ("Point", "quantity"),
+                    ("Space", "space_type"),
+                ]
+                for node_type, prop in additional_indexes:
+                    try:
+                        session.run(f"DROP INDEX ON :{node_type}({prop})")
+                    except Exception:
+                        pass  # Index may not exist
+
             return True
         except Exception as e:
             print(f"Error clearing database: {e}")
@@ -288,13 +307,18 @@ class MemgraphLoader(BaseLoader):
         if not rows:
             return 0
 
-        # Build properties list (excluding node_type)
-        sample = rows[0]
-        props = [k for k in sample.keys() if k != "node_type" and sample[k]]
+        # Build properties list from ALL rows (excluding node_type)
+        # Must consider all rows because first row might have empty values
+        all_props = set()
+        for row in rows:
+            for k, v in row.items():
+                if k != "node_type" and v:  # Property exists with value
+                    all_props.add(k)
+        props = sorted(all_props)  # Sorted for consistent ordering
 
         # Build Cypher query with UNWIND
         prop_assignments = ", ".join(
-            f"{prop}: row.{prop}" for prop in props if prop in sample
+            f"{prop}: row.{prop}" for prop in props
         )
 
         query = f"""
@@ -414,6 +438,9 @@ class MemgraphLoader(BaseLoader):
         from .postgres import PostgresLoader
 
         pg_loader = PostgresLoader(self.timescale_config, paradigm="P1")
+
+        # Créer le schema timeseries si nécessaire
+        pg_loader.ensure_timeseries_schema()
 
         total_count = self._count_csv_rows(csv_file)
         self._emit_progress(callback, LoadPhase.TIMESERIES, 0, total_count)

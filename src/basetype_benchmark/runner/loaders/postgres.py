@@ -547,6 +547,32 @@ class PostgresLoader(BaseLoader):
 
         return True
 
+    def ensure_timeseries_schema(self) -> bool:
+        """Create timeseries table and hypertable if they don't exist.
+
+        Used by M2/O2 loaders that delegate timeseries to TimescaleDB.
+        """
+        schema_sql = """
+        CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+        CREATE TABLE IF NOT EXISTS timeseries (
+            time TIMESTAMPTZ NOT NULL,
+            point_id VARCHAR(64) NOT NULL,
+            value DOUBLE PRECISION NOT NULL
+        );
+
+        SELECT create_hypertable('timeseries', 'time', if_not_exists => TRUE);
+
+        CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries(point_id, time DESC);
+        """
+
+        with psycopg.connect(self.config.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(schema_sql)
+            conn.commit()
+
+        return True
+
     # =========================================================================
     # HELPERS
     # =========================================================================
@@ -557,11 +583,17 @@ class PostgresLoader(BaseLoader):
         table: str,
         csv_file: Path,
     ) -> int:
-        """COPY un CSV vers une table."""
+        """COPY un CSV vers une table avec colonnes explicites du header."""
+        # Lire le header pour obtenir les noms de colonnes
+        with open(csv_file, "r", encoding="utf-8") as f:
+            header_line = f.readline().strip()
+        columns = header_line.split(",")
+        columns_sql = ", ".join(columns)
+
         with open(csv_file, "rb") as f:
             with conn.cursor() as cur:
                 with cur.copy(
-                    f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER true)"
+                    f"COPY {table} ({columns_sql}) FROM STDIN WITH (FORMAT csv, HEADER true)"
                 ) as copy:
                     while True:
                         chunk = f.read(1024 * 1024)

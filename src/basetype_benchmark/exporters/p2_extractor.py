@@ -124,6 +124,8 @@ CREATE INDEX IF NOT EXISTS idx_nodes_domain ON nodes((data->>'domain')) WHERE no
 CREATE INDEX IF NOT EXISTS idx_nodes_quantity ON nodes((data->>'quantity')) WHERE node_type = 'Point';
 CREATE INDEX IF NOT EXISTS idx_nodes_space_type ON nodes((data->>'space_type')) WHERE node_type = 'Space';
 CREATE INDEX IF NOT EXISTS idx_nodes_floor_id ON nodes((data->>'floor_id'));
+CREATE INDEX IF NOT EXISTS idx_nodes_equipment_id ON nodes((data->>'equipment_id')) WHERE node_type = 'Point';
+CREATE INDEX IF NOT EXISTS idx_nodes_space_id ON nodes((data->>'space_id')) WHERE node_type = 'Equipment';
 
 -- Index pour JSONB arrays (Q16, Q17)
 CREATE INDEX IF NOT EXISTS idx_nodes_tags ON nodes USING GIN ((data->'tags'));
