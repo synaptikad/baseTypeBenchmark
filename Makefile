@@ -138,7 +138,7 @@ install:
 check:
 	@echo "=== Verification ==="
 	@echo -n "Python: " && $(VENV)/bin/python --version
-	@echo -n "btb-runner: " && $(BTB) --version || echo "NOT FOUND"
+	@echo -n "btb-runner: " && $(BTB) --help > /dev/null 2>&1 && echo "OK" || echo "NOT FOUND"
 	@echo -n "Docker: " && docker --version
 	@echo -n "Compose: " && docker compose version
 	@echo ""

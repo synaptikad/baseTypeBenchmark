@@ -995,16 +995,23 @@ def _setup_progress_phases(display, paradigm: str, data_dir: Path) -> None:
         display.add_phase(LoadPhase.TIMESERIES, count, phase_num)
 
 
-@app.callback()
+def version_callback(value: bool) -> None:
+    if value:
+        console.print("Benchmark Runner V3 - 2025.1.0")
+        raise typer.Exit()
+
+
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: Annotated[
         bool,
-        typer.Option("--version", "-V", help="Show version")
+        typer.Option("--version", "-V", help="Show version", callback=version_callback, is_eager=True)
     ] = False,
 ) -> None:
     """Benchmark Runner V3 - Parquet-first query execution framework."""
-    if version:
-        console.print("Benchmark Runner V3 - 2025.1.0")
+    if ctx.invoked_subcommand is None and not version:
+        console.print("Use --help for available commands")
         raise typer.Exit()
 
 
