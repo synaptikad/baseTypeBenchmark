@@ -62,9 +62,17 @@ help:
 # SETUP
 # =============================================================================
 
-init: init-system init-docker install
+init: init-system init-deps init-docker install
 	@echo ""
-	@echo "Setup complete! Run 'make check' to verify."
+	@echo "=========================================="
+	@echo "Setup complete!"
+	@echo "=========================================="
+	@echo ""
+	@echo "Next steps:"
+	@echo "  make docker-up     # Start containers"
+	@echo "  make check         # Verify installation"
+	@echo "  make dry-run       # Test queries"
+	@echo ""
 
 init-system:
 	@echo "=== System Setup ==="
@@ -77,9 +85,38 @@ init-system:
 	@# Check RAM
 	@echo "RAM: $$(free -h | awk '/^Mem:/{print $$2}')"
 	@echo "Kernel: $$(uname -r)"
+	@echo "CPUs: $$(nproc)"
+
+init-deps:
+	@echo "=== Installing Dependencies ==="
+	@# Docker
+	@if command -v docker &> /dev/null; then \
+		echo "Docker: $$(docker --version)"; \
+	else \
+		echo "Installing Docker..."; \
+		curl -fsSL https://get.docker.com | sudo sh; \
+		sudo usermod -aG docker $$USER; \
+		echo "Docker installed. NOTE: You may need to re-login for group to apply."; \
+	fi
+	@# Python
+	@if command -v python3 &> /dev/null; then \
+		echo "Python: $$(python3 --version)"; \
+	else \
+		echo "Installing Python 3..."; \
+		sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-venv python3-pip; \
+	fi
+	@# Git (should be there but just in case)
+	@if ! command -v git &> /dev/null; then \
+		sudo apt-get install -y -qq git; \
+	fi
 
 init-docker:
 	@echo "=== Docker Setup ==="
+	@# Check if docker works (user in group)
+	@if ! docker info &> /dev/null; then \
+		echo "ERROR: Docker not accessible. Try: newgrp docker OR re-login"; \
+		exit 1; \
+	fi
 	@# Pull images
 	$(COMPOSE) pull
 	@echo "Docker images ready"
