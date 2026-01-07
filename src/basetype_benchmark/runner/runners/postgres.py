@@ -91,8 +91,9 @@ class PostgresRunner(BaseRunner):
 
             # Execute query
             if params:
-                # Convert dict params to positional for psycopg
-                cursor = conn.execute(query, self._convert_params(params, query))
+                # Convert dict params and query to psycopg format
+                converted_query, converted_params = self._convert_params(params, query)
+                cursor = conn.execute(converted_query, converted_params)
             else:
                 cursor = conn.execute(query)
 
@@ -184,11 +185,12 @@ class PostgresRunner(BaseRunner):
         try:
             conn = self._get_connection()
 
-            explain_query = f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {query}"
-
             if params:
-                cursor = conn.execute(explain_query, self._convert_params(params, query))
+                converted_query, converted_params = self._convert_params(params, query)
+                explain_query = f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {converted_query}"
+                cursor = conn.execute(explain_query, converted_params)
             else:
+                explain_query = f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {query}"
                 cursor = conn.execute(explain_query)
 
             result = cursor.fetchone()
@@ -203,26 +205,31 @@ class PostgresRunner(BaseRunner):
         except Exception:
             return None
 
-    def _convert_params(self, params: dict[str, Any], query: str) -> tuple | dict:
-        """Convert parameter dict to format suitable for psycopg.
+    def _convert_params(self, params: dict[str, Any], query: str) -> tuple[str, tuple | dict]:
+        """Convert parameter dict and query to format suitable for psycopg.
 
-        psycopg3 supports both positional (%s, $1) and named (%(name)s) params.
-        This method converts our dict to the appropriate format.
+        psycopg3 supports positional (%s) and named (%(name)s) params.
+        PostgreSQL native $1, $2 style must be converted to %s.
 
         Args:
             params: Parameter dictionary
             query: Query string (to detect param style)
 
         Returns:
-            Parameters in format suitable for psycopg
+            Tuple of (converted_query, converted_params)
         """
-        # If query uses %(name)s style, return dict as-is
-        if "%(" in query:
-            return params
+        import re
 
-        # If query uses $1, $2 style (PostgreSQL native), convert to tuple
+        # If query uses %(name)s style, return as-is
+        if "%(" in query:
+            return query, params
+
+        # If query uses $1, $2 style (PostgreSQL native), convert to psycopg format
         if "$1" in query:
-            # Extract positional params
+            # Convert $1, $2, ... to %s in query
+            converted_query = re.sub(r'\$(\d+)', '%s', query)
+
+            # Extract positional params in order
             result = []
             for i in range(1, 100):  # Reasonable upper limit
                 placeholder = f"${i}"
@@ -237,10 +244,10 @@ class PostgresRunner(BaseRunner):
                     keys = list(params.keys())
                     if i - 1 < len(keys):
                         result.append(params[keys[i - 1]])
-            return tuple(result)
+            return converted_query, tuple(result)
 
-        # Default: return dict for named params
-        return params
+        # Default: return query and params as-is (no params or unknown style)
+        return query, params
 
     def __enter__(self) -> "PostgresRunner":
         """Context manager entry."""
