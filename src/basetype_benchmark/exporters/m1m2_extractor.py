@@ -346,12 +346,19 @@ CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries(point_id, time DES
 # ===========================================================================
 
 if __name__ == "__main__":
+    import argparse
     from pathlib import Path
 
-    output_dir = Path("data/export/m1m2")
-    print(f"M1/M2 Extractor - Export vers {output_dir}")
+    parser = argparse.ArgumentParser(description='M1/M2 Extractor - Memgraph')
+    parser.add_argument('--input', type=str, required=True, help='Input directory with Parquet files')
+    parser.add_argument('--output', type=str, required=True, help='Output directory for CSV files')
+    args = parser.parse_args()
 
-    extractor = M1M2Extractor(output_dir)
+    input_dir = Path(args.input)
+    output_dir = Path(args.output)
+    print(f"M1/M2 Extractor - {input_dir} → {output_dir}")
+
+    extractor = M1M2Extractor(output_dir, input_dir)
     extractor.load_dataset()
 
     # Export données

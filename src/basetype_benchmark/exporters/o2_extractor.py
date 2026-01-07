@@ -557,12 +557,19 @@ ORDER BY ?equipment_type ?equipment_id
 # ===========================================================================
 
 if __name__ == "__main__":
+    import argparse
     from pathlib import Path
 
-    output_dir = Path("data/export/o2")
-    print(f"O2 Extractor - Export vers {output_dir}")
+    parser = argparse.ArgumentParser(description='O2 Extractor - Oxigraph/SPARQL')
+    parser.add_argument('--input', type=str, required=True, help='Input directory with Parquet files')
+    parser.add_argument('--output', type=str, required=True, help='Output directory for N-Triples files')
+    args = parser.parse_args()
 
-    extractor = O2Extractor(output_dir)
+    input_dir = Path(args.input)
+    output_dir = Path(args.output)
+    print(f"O2 Extractor - {input_dir} → {output_dir}")
+
+    extractor = O2Extractor(output_dir, input_dir)
     extractor.load_dataset()
 
     # Export données

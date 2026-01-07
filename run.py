@@ -143,15 +143,11 @@ def menu_generate():
     # Seed
     seed = IntPrompt.ask("Seed (for reproducibility)", default=42)
 
-    # Output format
-    fmt = Prompt.ask("Output format", choices=["parquet", "json"], default="parquet")
-
     # Confirm
     console.print(f"\n[yellow]Will generate:[/yellow]")
     console.print(f"  Profile: {profile}")
     console.print(f"  Duration: {duration}")
     console.print(f"  Seed: {seed}")
-    console.print(f"  Format: {fmt}")
     console.print(f"  Output: {GENERATED_DIR / profile}-{duration}")
 
     if not Confirm.ask("\nProceed?", default=True):
@@ -169,7 +165,7 @@ def menu_generate():
         "--seed", str(seed),
         "--config-dir", str(CONFIG_DIR),
         "--output", str(GENERATED_DIR),
-        "--format", fmt
+        "--format", "parquet"
     )
 
     console.print(f"\n[green]Dataset generated: {output_dir}[/green]")

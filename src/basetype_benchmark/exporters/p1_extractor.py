@@ -298,12 +298,19 @@ CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries(point_id, time DES
 # ===========================================================================
 
 if __name__ == "__main__":
+    import argparse
     from pathlib import Path
 
-    output_dir = Path("data/export/p1")
-    print(f"P1 Extractor - Export vers {output_dir}")
+    parser = argparse.ArgumentParser(description='P1 Extractor - PostgreSQL relationnel')
+    parser.add_argument('--input', type=str, required=True, help='Input directory with Parquet files')
+    parser.add_argument('--output', type=str, required=True, help='Output directory for CSV files')
+    args = parser.parse_args()
 
-    extractor = P1Extractor(output_dir)
+    input_dir = Path(args.input)
+    output_dir = Path(args.output)
+    print(f"P1 Extractor - {input_dir} → {output_dir}")
+
+    extractor = P1Extractor(output_dir, input_dir)
     extractor.load_dataset()
 
     # Export schema
@@ -329,4 +336,3 @@ if __name__ == "__main__":
         print(cmd)
 
     print("\nP1 extraction complete.")
-    print("\nAGENT-EXTRACT-P1 TERMINE")

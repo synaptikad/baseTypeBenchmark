@@ -6,7 +6,8 @@ Infrastructure commune pour l'extraction vers tous les paradigmes.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+from datetime import datetime
 import csv
 import json
 import sys
@@ -14,6 +15,65 @@ import sys
 # Ajouter le chemin pour importer golden
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from src.basetype_benchmark.dataset.golden import GoldenDataset, Node, Edge, TimeseriesPoint
+
+
+class ParquetDataset:
+    """Dataset chargé depuis des fichiers Parquet générés."""
+
+    def __init__(self, input_dir: Path):
+        self.input_dir = Path(input_dir)
+        self.nodes: List[Node] = []
+        self.edges: List[Edge] = []
+        self.timeseries: List[TimeseriesPoint] = []
+        self._load()
+
+    def _load(self):
+        """Charge les données depuis les fichiers Parquet."""
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            raise ImportError("pyarrow required to load Parquet files")
+
+        # Load nodes
+        nodes_file = self.input_dir / "nodes.parquet"
+        if nodes_file.exists():
+            table = pq.read_table(nodes_file)
+            for row in table.to_pylist():
+                self.nodes.append(Node(
+                    id=row['id'],
+                    type=row['type'],
+                    name=row['name'],
+                    properties=json.loads(row.get('properties', '{}')),
+                    capabilities=json.loads(row.get('capabilities', '[]')),
+                    metadata=json.loads(row.get('metadata', '{}')),
+                    tags=json.loads(row.get('tags', '[]')),
+                    protocol=json.loads(row.get('protocol', '{}')),
+                    calibration=json.loads(row.get('calibration', '{}')),
+                    range_info=json.loads(row.get('range', '{}'))
+                ))
+
+        # Load edges
+        edges_file = self.input_dir / "edges.parquet"
+        if edges_file.exists():
+            table = pq.read_table(edges_file)
+            for row in table.to_pylist():
+                self.edges.append(Edge(
+                    source_id=row['source_id'],
+                    target_id=row['target_id'],
+                    rel_type=row['rel_type'],
+                    properties=json.loads(row.get('properties', '{}'))
+                ))
+
+        # Load timeseries
+        ts_file = self.input_dir / "timeseries.parquet"
+        if ts_file.exists():
+            table = pq.read_table(ts_file)
+            for row in table.to_pylist():
+                self.timeseries.append(TimeseriesPoint(
+                    point_id=row['point_id'],
+                    timestamp=datetime.fromisoformat(row['time']),
+                    value=float(row['value'])
+                ))
 
 
 @dataclass
@@ -38,10 +98,11 @@ class BaseExtractor(ABC):
     - get_load_commands() : commandes de chargement bulk
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, input_dir: Optional[Path] = None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.dataset: GoldenDataset = None
+        self.input_dir = Path(input_dir) if input_dir else None
+        self.dataset = None
 
     @property
     @abstractmethod
@@ -49,9 +110,12 @@ class BaseExtractor(ABC):
         """Nom du paradigme (p1, p2, m1, m2, o2)"""
         pass
 
-    def load_dataset(self) -> GoldenDataset:
-        """Charge le golden dataset"""
-        self.dataset = GoldenDataset()
+    def load_dataset(self):
+        """Charge le dataset depuis Parquet (si input_dir) ou GoldenDataset (fallback)"""
+        if self.input_dir and (self.input_dir / "nodes.parquet").exists():
+            self.dataset = ParquetDataset(self.input_dir)
+        else:
+            self.dataset = GoldenDataset()
         return self.dataset
 
     @abstractmethod
