@@ -1,0 +1,32 @@
+# Scenario: RAM Gradient
+# Purpose: Fine-grained RAM testing for single paradigm
+# Duration: ~30 minutes per paradigm
+
+name: RAM Gradient
+description: Fine-grained RAM levels to find precise RAM_viable threshold
+
+paradigms:
+  - M1   # Default: Memgraph (highest RAM usage typically)
+         # Override with --paradigms flag for other paradigms
+
+queries:
+  - Q1   # Graph traversal
+  - Q6   # Timeseries aggregation
+  - Q8   # Hybrid query
+
+dataset:
+  profile: small
+
+ram_gradient:
+  # Fine-grained levels for precise threshold detection
+  levels_gb: [64, 48, 32, 24, 16, 12, 8, 4]
+
+execution:
+  warmup_runs: 3
+  timed_runs: 10
+  variants: 3
+  timeout_seconds: 300
+
+options:
+  cleanup_exports: false  # Keep exports for re-testing
+  stop_on_oom: false      # Continue to find exact threshold

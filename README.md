@@ -1,84 +1,184 @@
-# Benchmark BaseType V3
+# BaseType Benchmark V3
 
-Benchmark académique comparant 5 paradigmes de stockage pour les systèmes d'information bâtimentaires.
+Benchmark academique comparant 5 paradigmes de stockage SGBD pour les systemes d'information batimentaires (middleware smart building).
 
-**Question de recherche** : Un graphe in-memory est-il justifié pour les SI bâtimentaires ?
+**Question de recherche** : Un graphe in-memory est-il justifie pour les SI batimentaires ?
 
-**Hypothèse** : Les graphes bâtimentaires sont structurellement simples (degré ~1, profondeur 6-8), donc SQL récursif suffit.
+**Hypothese** : Les graphes batimentaires sont structurellement simples (degre ~1, profondeur 6-8), donc SQL recursif (CTEs) pourrait suffire.
+
+**Contexte 2025** : Explosion des couts RAM et enjeux energetiques - ce benchmark mesure precisement la consommation memoire de chaque paradigme.
 
 ---
 
-## Paradigmes comparés
+## Quick Start
 
-| ID | Paradigme | Graph | Timeseries | Statut JSONB |
-|----|-----------|-------|------------|--------------|
-| P1 | PostgreSQL Relational | CTEs récursifs | TimescaleDB | IMPOSSIBLE |
-| P2 | PostgreSQL JSONB | CTEs + JSONB | TimescaleDB | NATIVE |
-| M1 | Memgraph Standalone | Cypher natif | Chunks in-memory | DEGRADED |
-| M2 | Memgraph + TimescaleDB | Cypher natif | TimescaleDB externe | DEGRADED |
-| O2 | Oxigraph + TimescaleDB | SPARQL | TimescaleDB externe | DEGRADED |
+### Installation
+
+```bash
+# Cloner et installer
+git clone <repo-url>
+cd baseTypeBenchmark
+pip install -e .
+
+# Verifier l'installation
+btb-runner --version
+```
+
+### Demarrage Docker (requis)
+
+```bash
+# Lancer les conteneurs (TimescaleDB, Memgraph, Oxigraph)
+docker compose -f docker/docker-compose.yml up -d
+
+# Verifier le statut
+docker compose -f docker/docker-compose.yml ps
+```
+
+### Lancer un benchmark
+
+**Option 1 : Menu interactif** (recommande pour debutants)
+
+```bash
+python run.py
+```
+
+**Option 2 : CLI direct** (utilisateurs avances)
+
+```bash
+# Scenario rapide (~10 min)
+btb-runner benchmark -s data/generated/small-2d --scenario quick
+
+# Scenario standard (~2h)
+btb-runner benchmark -s data/generated/small-2d --scenario standard
+
+# Personnalise
+btb-runner benchmark -s data/generated/small-2d -p P1,M1 --ram "32,16,8" --runs 5
+```
+
+---
+
+## Paradigmes compares
+
+| ID | Paradigme | Technologie Graph | Timeseries | JSONB |
+|----|-----------|-------------------|------------|-------|
+| **P1** | PostgreSQL Relational | CTEs recursifs | TimescaleDB | IMPOSSIBLE |
+| **P2** | PostgreSQL JSONB | CTEs + JSONB ops | TimescaleDB | NATIVE |
+| **M1** | Memgraph Standalone | Cypher natif | Chunks in-memory | DEGRADED |
+| **M2** | Memgraph + TimescaleDB | Cypher natif | TimescaleDB (federe) | DEGRADED |
+| **O2** | Oxigraph + TimescaleDB | SPARQL RDF | TimescaleDB (federe) | DEGRADED |
+
+### Architecture Option A (partage TimescaleDB)
+
+```
+                    ┌─────────────────┐
+                    │  TimescaleDB    │  <- Charge UNE SEULE FOIS
+                    │  (ts.timeseries)│
+                    └────────┬────────┘
+           ┌─────────────────┼─────────────────┐
+           │                 │                 │
+    ┌──────┴──────┐   ┌──────┴──────┐   ┌──────┴──────┐
+    │ P1 (p1.*)   │   │ M2 (Memgraph│   │ O2 (Oxigraph│
+    │ P2 (p2.*)   │   │ + ts.*)     │   │ + ts.*)     │
+    └─────────────┘   └─────────────┘   └─────────────┘
+```
+
+**Avantage** : Pas de biais de mesure du au rechargement des timeseries entre paradigmes.
+
+---
+
+## Scenarios de benchmark
+
+### Scenarios predefinies
+
+| Scenario | Paradigmes | RAM Levels | Runs | Duree estimee |
+|----------|------------|------------|------|---------------|
+| `quick` | P1, M1 | 32, 16, 8 GB | 3 | ~10 min |
+| `standard` | P1, P2, M1, M2, O2 | 128, 64, 32, 16, 8 GB | 10 | ~2h |
+| `ram_gradient` | 1 paradigme | 64, 48, 32, 24, 16, 12, 8, 4 GB | 10 | ~30 min |
+| `publication` | P1, P2, M1, M2, O2 | 10 niveaux fins | 30 | ~8h |
+
+### Utilisation
+
+```bash
+# Scenario predefini
+btb-runner benchmark -s data/generated/small-2d --scenario quick
+
+# Scenario YAML personnalise
+btb-runner benchmark -s data/generated/small-2d --scenario config/scenarios/custom.yaml
+
+# Parametres individuels
+btb-runner benchmark -s data/generated/small-2d \
+  -p P1,P2,M1 \
+  --ram "64,32,16,8" \
+  --runs 10 \
+  --variants 3 \
+  --cleanup
+```
 
 ---
 
 ## 23 Queries de benchmark
 
-| Catégorie | Queries | Description |
+| Categorie | Queries | Description |
 |-----------|---------|-------------|
-| Graph-only | Q1-Q5 | Traversées structurelles (FEEDS, SERVES, CONTAINS) |
-| Timeseries | Q6 | Agrégation horaire |
-| Hybrid | Q7-Q13 | Sélection graph + agrégation timeseries |
-| JSONB-specific | Q14-Q19 | protocol{}, metadata{}, capabilities[], tags[] |
-| Graph-native | Q20-Q23 | shortestPath, allShortestPaths, siblings, propagation |
+| **Graph-only** | Q1-Q5 | Traversees structurelles (FEEDS, SERVES, CONTAINS) |
+| **Timeseries** | Q6 | Agregation horaire |
+| **Hybrid** | Q7-Q13 | Selection graph + agregation timeseries |
+| **JSONB-specific** | Q14-Q19 | protocol{}, metadata{}, capabilities[], tags[] |
+| **Graph-native** | Q20-Q23 | shortestPath, allShortestPaths, siblings, propagation |
+| **Write workloads** | QW1-QW3 | Insertion TS, update metadata, mutation relations |
 
----
-
-## Installation
+### Matrice de compatibilite
 
 ```bash
-# Cloner le repo
-git clone <repo-url>
-cd benchmarkV3
-
-# Installer les dépendances Python
-pip install pyyaml pyarrow
+# Afficher la matrice paradigme/query
+btb-runner dry-run --matrix
 ```
 
 ---
 
-## Usage rapide
+## Workflows typiques
 
-### 1. Générer un dataset
+### Chercheur academique
 
 ```bash
-# Profil small (1 bâtiment, ~1300 nodes)
-python -m src.basetype_benchmark.dataset.generator --profile small
-
-# Profil medium avec seed spécifique
+# 1. Generer un dataset reproductible
 python -m src.basetype_benchmark.dataset.generator --profile medium --seed 42
+
+# 2. Lancer le benchmark complet
+btb-runner benchmark -s data/generated/medium-1w --scenario publication -o results_pub.json
+
+# 3. Valider la reproductibilite
+btb-runner golden validate
+
+# 4. Exporter les resultats
+# Le fichier results_pub.json contient toutes les metriques
 ```
 
-### 2. Exporter vers les paradigmes
+### Debug / Developpement
 
 ```bash
-# Tous les exports
-python -m src.basetype_benchmark.exporters.p1_extractor
-python -m src.basetype_benchmark.exporters.p2_extractor
-python -m src.basetype_benchmark.exporters.m1m2_extractor
-python -m src.basetype_benchmark.exporters.o2_extractor
+# Valider les queries sans execution
+btb-runner dry-run --all --verbose
+
+# Tester une query specifique
+btb-runner run-query Q8 -p M1 --params '{"equipment_id": "eq_123"}'
+
+# Voir les infos d'une query
+btb-runner info Q8
+
+# Charger manuellement les donnees
+btb-runner load P1 -d data/exports/p1/small-2d --clear
 ```
 
-### 3. Charger dans les moteurs
+### CI/CD / Automatisation
 
 ```bash
-# PostgreSQL (P1/P2)
-psql -d benchmark -f data/export/p1/schema_p1.sql
-psql -d benchmark -f data/export/p1/load_p1.sql
+# Verification rapide
+btb-runner benchmark -s data/generated/small-2d --scenario quick -o ci_results.json
 
-# Memgraph (M1/M2)
-cat data/export/m1m2/load_memgraph.cypher | mgconsole
-
-# Oxigraph (O2)
-./data/export/o2/load_oxigraph.sh
+# Avec fichier de config
+btb-runner benchmark --scenario config/scenarios/ci.yaml
 ```
 
 ---
@@ -86,81 +186,165 @@ cat data/export/m1m2/load_memgraph.cypher | mgconsole
 ## Structure du projet
 
 ```
-benchmarkV3/
+baseTypeBenchmark/
+├── run.py                    # Menu interactif Rich
+├── README.md                 # Ce fichier
+│
 ├── config/
-│   ├── equipment/          # 32 types d'équipements (AHU, VAV, IPCamera, ...)
-│   └── profiles/           # Profils volumétrie (small, medium, large)
+│   ├── equipment/            # 32 types d'equipements
+│   ├── profiles/             # Profils volumetrie (small, medium, large)
+│   └── scenarios/            # Scenarios YAML predefinies
+│
 ├── data/
-│   ├── export/             # Exports par paradigme
-│   └── generated/          # Datasets générés
+│   ├── generated/            # Datasets Parquet generes
+│   ├── exports/              # Exports par paradigme
+│   └── results/              # Resultats JSON
+│
 ├── queries/
-│   ├── catalog.yaml        # Définition des 23 queries
-│   ├── golden_answers.yaml # Réponses attendues
-│   ├── p1/*.sql           # Implémentations P1
-│   ├── p2/*.sql           # Implémentations P2
-│   ├── m1/*.cypher        # Implémentations M1
-│   ├── m2/                # Implémentations M2 (graph + ts)
-│   └── o2/                # Implémentations O2 (graph + ts)
+│   ├── catalog.yaml          # Definition des 23 queries
+│   ├── golden_answers.yaml   # Reponses attendues (reproductibilite)
+│   ├── p1/*.sql              # Implementations P1
+│   ├── p2/*.sql              # Implementations P2
+│   ├── m1/*.cypher           # Implementations M1
+│   ├── m2/                   # Implementations M2 (hybrid)
+│   └── o2/                   # Implementations O2 (hybrid)
+│
+├── docker/
+│   └── docker-compose.yml    # TimescaleDB, Memgraph, Oxigraph
+│
 ├── src/basetype_benchmark/
-│   ├── schema/            # Schéma canonique
-│   ├── dataset/           # Générateur + golden
-│   ├── exporters/         # Transformateurs par paradigme
-│   └── validation/        # Validateurs cross-paradigm
-└── docs/
-    └── IMPLEMENTATION_STATUS.md
+│   ├── dataset/              # Generateur + golden dataset
+│   ├── exporters/            # Transformateurs par paradigme
+│   └── runner/               # Execution et benchmarking
+│       ├── cli.py            # CLI btb-runner
+│       ├── benchmark/        # Orchestration
+│       ├── loaders/          # Chargement bulk
+│       ├── runners/          # Execution queries
+│       ├── ram/              # RAM gradient
+│       └── monitoring/       # Metriques cgroups v2
+│
+└── refactor/                 # Documentation technique
 ```
 
 ---
 
-## Modèle de données
+## Mesure RAM (Methodologie)
 
-### 10 Types de nœuds
-Site → Building → Floor → Space → Equipment → Point
-+ Tenant, Contract, Ticket, Zone
+### Protocole RAM-Gradient
 
-### ~20 Types de relations
-- **Spatiales** : CONTAINS, LOCATED_IN, ADJACENT_TO
-- **Fonctionnelles** : HAS_POINT, SERVES, CONTROLS, MONITORS
-- **Énergétiques** : FEEDS, METERS_TENANT, METERS_ZONE
-- **IT** : HOSTS, NETWORK_LINK
-- **Contractuelles** : COVERED_BY, OCCUPIES, LEASED_TO
+1. **Test avec RAM decroissante** : 128 → 64 → 32 → 16 → 8 GB
+2. **Mesure via cgroups v2** : `memory.peak` du kernel (le plus precis)
+3. **Detection OOM** : Exit codes Docker, syslog
+4. **Reset entre niveaux** : Restart containers, preserve volumes
 
-### Propriétés JSONB (P2 = NATIVE)
-```yaml
-Equipment:
-  capabilities: ["cooling", "heating", "humidity_control"]
-  metadata: {manufacturer, warranty_end, serial_number}
-  tags: ["brick:AHU", "haystack:ahu"]
-  protocol: {type: "BACnet", device_id: 1234}
+### Metriques collectees
 
-Point:
-  protocol: {type: "BACnet", object_type: "analogInput"}
-  calibration: {next_date: "2024-06-01"}
-  range: {min: 0, max: 100, unit: "°C"}
+- **RAM_viable** : Plus petit niveau sans OOM
+- **RAM_baseline** : Pic memoire a charge nominale
+- **Latences** : p50, p95, p99 par query
+- **Success rate** : Taux de reussite par query/niveau
+
+### Exclusions
+
+- **Load time** : Non mesure (n'affecte pas l'usage)
+- **Warmup** : 3 runs exclus avant mesure
+
+---
+
+## Commandes CLI (btb-runner)
+
+```bash
+# Benchmark
+btb-runner benchmark -s <source> [options]    # Lancer un benchmark complet
+btb-runner gradient <paradigm> -d <data>      # Test RAM gradient seul
+
+# Validation
+btb-runner dry-run [--matrix|--all]           # Valider queries sans execution
+btb-runner info <query_id>                    # Infos detaillees d'une query
+btb-runner golden validate                    # Valider reproductibilite
+
+# Data
+btb-runner generate --profile <name>          # Generer dataset
+btb-runner export <paradigm> -s <source>      # Exporter vers paradigme
+btb-runner load <paradigm> -d <data>          # Charger dans DB
+
+# Systeme
+btb-runner status                             # Etat Docker, datasets, exports
+btb-runner profiles                           # Infos profils et engines
 ```
 
 ---
 
-## Protocoles supportés
+## Formats de sortie
 
-| Domaine | Protocoles |
-|---------|------------|
-| HVAC | BACnet, Modbus, LON, KNX |
-| Electrical | Modbus TCP/RTU, BACnet, IEC 61850 |
-| Security | ONVIF, OSDP, Wiegand |
-| IT | SNMP, IPMI, Redfish |
-| Lighting | DALI, KNX |
+### Resultats JSON
+
+```json
+{
+  "config": {
+    "paradigms": ["P1", "P2", "M1", "M2", "O2"],
+    "ram_levels_mb": [131072, 65536, 32768, 16384, 8192],
+    "n_runs": 10
+  },
+  "summary": {
+    "ram_viable": {"P1": 8192, "M1": 16384, ...},
+    "ram_baseline": {"P1": 245.3, "M1": 412.7, ...}
+  },
+  "results": {
+    "P1": {
+      "levels": [
+        {"limit_mb": 32768, "status": "success", "actual_peak_mb": 245.3, ...}
+      ]
+    }
+  }
+}
+```
 
 ---
 
-## Documentation
+## Dependances
 
-- [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) - État d'avancement détaillé
-- [SPEC_BENCHMARK_V3.md](docs_private/SPEC_BENCHMARK_V3.md) - Spécification complète
-- [catalog.yaml](queries/catalog.yaml) - Définition des 23 queries
+```
+Python >= 3.11
+Docker avec cgroups v2
+```
+
+**Packages Python** :
+- `typer`, `rich` : CLI et affichage
+- `pyarrow`, `polars` : Manipulation Parquet
+- `psycopg`, `neo4j`, `httpx` : Connecteurs DB
+- `pyyaml` : Configuration
+
+---
+
+## Reproductibilite
+
+Ce benchmark est concu pour la recherche academique :
+
+1. **Datasets Parquet** : Source immuable avec seed
+2. **Golden answers** : Resultats attendus pour validation
+3. **Scenarios YAML** : Configuration reproductible
+4. **Logs detailles** : Traçabilite complete
+
+```bash
+# Valider que les resultats sont corrects
+btb-runner golden validate
+
+# Rejouer un scenario exact
+btb-runner benchmark --scenario config/scenarios/paper_v1.yaml
+```
+
+---
+
+## Documentation supplementaire
+
+- [refactor/00_INDEX.md](refactor/00_INDEX.md) - Index documentation technique
+- [refactor/06_ram_gradient_protocol.md](refactor/06_ram_gradient_protocol.md) - Protocole RAM detaille
+- [refactor/07_todo_tracker.md](refactor/07_todo_tracker.md) - Etat d'avancement
+- [queries/catalog.yaml](queries/catalog.yaml) - Definition des 23 queries
 
 ---
 
 ## Licence
 
-Projet académique - Usage recherche uniquement.
+Projet academique - Usage recherche uniquement.

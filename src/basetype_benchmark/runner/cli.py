@@ -527,6 +527,10 @@ def benchmark(
         Path,
         typer.Option("--output", "-o", help="Output JSON file")
     ] = Path("results.json"),
+    scenario: Annotated[
+        Optional[str],
+        typer.Option("--scenario", "-S", help="Predefined scenario name or YAML file path")
+    ] = None,
     paradigms: Annotated[
         Optional[str],
         typer.Option("--paradigms", "-p", help="Comma-separated paradigms (default: all)")
@@ -559,10 +563,13 @@ def benchmark(
 
     Examples:
         btb-runner benchmark -s data/generated/small-1w -o results.json
+        btb-runner benchmark -s data/generated/small-1w --scenario quick
+        btb-runner benchmark -s data/generated/small-1w --scenario config/scenarios/custom.yaml
         btb-runner benchmark -s data/generated/small-1w -p P1,M1 --ram "32,16,8"
         btb-runner benchmark -s data/generated/small-1w --no-cleanup  # Keep exports
     """
     from .benchmark import BenchmarkOrchestrator, ScenarioConfig
+    from .scenarios import get_scenario, load_scenario_from_yaml
 
     # Validate source directory (Parquet files)
     if not source_dir.exists():
@@ -578,18 +585,52 @@ def benchmark(
     # Ensure export directory exists
     export_dir.mkdir(parents=True, exist_ok=True)
 
-    # Parse paradigms
-    paradigm_list = ["P1", "P2", "M1", "M2", "O2"]
-    if paradigms:
-        paradigm_list = [p.strip().upper() for p in paradigms.split(",")]
+    # Load scenario if specified
+    if scenario:
+        scenario_path = Path(scenario)
+        if scenario_path.exists() and (scenario.endswith(".yaml") or scenario.endswith(".yml")):
+            # Load from YAML file
+            try:
+                loaded_config = load_scenario_from_yaml(scenario_path)
+                console.print(f"[dim]Loaded scenario from {scenario}[/dim]")
+            except Exception as e:
+                console.print(f"[red]Failed to load scenario: {e}[/red]")
+                raise typer.Exit(1)
+        else:
+            # Load predefined scenario
+            try:
+                loaded_config = get_scenario(scenario)
+                console.print(f"[dim]Using predefined scenario: {scenario}[/dim]")
+            except ValueError as e:
+                console.print(f"[red]{e}[/red]")
+                console.print("[dim]Use 'btb-runner scenarios' to list available scenarios[/dim]")
+                raise typer.Exit(1)
 
-    # Parse queries
-    query_list = None
-    if queries:
-        query_list = [q.strip().upper() for q in queries.split(",")]
+        # Use scenario values, but allow CLI overrides
+        paradigm_list = loaded_config.paradigms
+        query_list = loaded_config.queries
+        ram_levels_mb = loaded_config.ram_levels_mb
+        runs = loaded_config.n_runs
+        variants = loaded_config.n_variants
 
-    # Parse RAM levels (GB to MB)
-    ram_levels_mb = [int(float(r.strip()) * 1024) for r in ram_levels.split(",")]
+        # CLI overrides take precedence
+        if paradigms:
+            paradigm_list = [p.strip().upper() for p in paradigms.split(",")]
+        if queries:
+            query_list = [q.strip().upper() for q in queries.split(",")]
+        if ram_levels != "128,64,32,16,8":  # Not default
+            ram_levels_mb = [int(float(r.strip()) * 1024) for r in ram_levels.split(",")]
+    else:
+        # Parse from CLI options
+        paradigm_list = ["P1", "P2", "M1", "M2", "O2"]
+        if paradigms:
+            paradigm_list = [p.strip().upper() for p in paradigms.split(",")]
+
+        query_list = None
+        if queries:
+            query_list = [q.strip().upper() for q in queries.split(",")]
+
+        ram_levels_mb = [int(float(r.strip()) * 1024) for r in ram_levels.split(",")]
 
     # Build configs
     configs = {}
@@ -1037,6 +1078,416 @@ def _setup_progress_phases(display, paradigm: str, data_dir: Path) -> None:
     if ts_file.exists():
         count = _count_file_rows(ts_file)
         display.add_phase(LoadPhase.TIMESERIES, count, phase_num)
+
+
+# =============================================================================
+# STATUS COMMAND
+# =============================================================================
+
+@app.command("status")
+def status() -> None:
+    """Show system status: Docker, datasets, exports, last run.
+
+    Displays the current state of the benchmark environment.
+    """
+    import subprocess
+    import os
+
+    console.print(Panel.fit(
+        "[bold blue]System Status[/bold blue]",
+        border_style="blue"
+    ))
+
+    # Docker status
+    console.print("\n[cyan]Docker Containers:[/cyan]")
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", "docker/docker-compose.yml", "ps", "--format", "table {{.Name}}\t{{.Status}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            for line in result.stdout.strip().split("\n"):
+                if "Up" in line or "running" in line.lower():
+                    console.print(f"  [green]✓[/green] {line}")
+                elif line.strip():
+                    console.print(f"  [red]✗[/red] {line}")
+        else:
+            console.print("  [yellow]No containers found or docker-compose not configured[/yellow]")
+    except Exception as e:
+        console.print(f"  [red]Docker check failed: {e}[/red]")
+
+    # Generated datasets
+    console.print("\n[cyan]Generated Datasets:[/cyan]")
+    data_dir = Path(os.environ.get("BTB_DATA_DIR", "data"))
+    generated_dir = data_dir / "generated"
+    if generated_dir.exists():
+        datasets = list(generated_dir.glob("*"))
+        datasets = [d for d in datasets if d.is_dir() and (d / "nodes.parquet").exists()]
+        if datasets:
+            for ds in sorted(datasets):
+                size_mb = sum(f.stat().st_size for f in ds.rglob("*") if f.is_file()) / 1024 / 1024
+                console.print(f"  [green]✓[/green] {ds.name} ({size_mb:.1f} MB)")
+        else:
+            console.print("  [dim]No datasets generated[/dim]")
+    else:
+        console.print("  [dim]No generated directory[/dim]")
+
+    # Exports
+    console.print("\n[cyan]Exports:[/cyan]")
+    export_dir = data_dir / "exports"
+    paradigms = ["p1", "p2", "m1", "m2", "o2"]
+    for p in paradigms:
+        p_dir = export_dir / p
+        if p_dir.exists() and list(p_dir.glob("*")):
+            console.print(f"  [green]✓[/green] {p.upper()}")
+        else:
+            console.print(f"  [dim]✗[/dim] {p.upper()}")
+
+    # Last result
+    console.print("\n[cyan]Last Result:[/cyan]")
+    results_dir = data_dir / "results"
+    if results_dir.exists():
+        results = sorted(results_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if results:
+            last = results[0]
+            mtime = last.stat().st_mtime
+            from datetime import datetime
+            dt = datetime.fromtimestamp(mtime)
+            console.print(f"  [green]✓[/green] {last.name} ({dt.strftime('%Y-%m-%d %H:%M')})")
+        else:
+            console.print("  [dim]No results yet[/dim]")
+    else:
+        console.print("  [dim]No results directory[/dim]")
+
+
+# =============================================================================
+# GOLDEN COMMANDS
+# =============================================================================
+
+golden_app = typer.Typer(
+    name="golden",
+    help="Golden dataset validation commands",
+)
+app.add_typer(golden_app, name="golden")
+
+
+@golden_app.command("export")
+def golden_export(
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Output directory for Parquet files")
+    ] = Path("data/golden"),
+) -> None:
+    """Export golden dataset to Parquet files.
+
+    Creates nodes.parquet, edges.parquet, timeseries.parquet from the
+    reference golden dataset for validation purposes.
+    """
+    from ..dataset.golden import export_to_parquet
+
+    console.print(Panel.fit(
+        "[bold blue]Export Golden Dataset[/bold blue]",
+        border_style="blue"
+    ))
+
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        export_to_parquet(output)
+        console.print(f"\n[green]Golden dataset exported to {output}[/green]")
+
+        # Show file sizes
+        for f in output.glob("*.parquet"):
+            size_kb = f.stat().st_size / 1024
+            console.print(f"  {f.name}: {size_kb:.1f} KB")
+
+    except Exception as e:
+        console.print(f"[red]Export failed: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@golden_app.command("validate")
+def golden_validate(
+    paradigm: Annotated[
+        Optional[str],
+        typer.Option("--paradigm", "-p", help="Paradigm to validate (P1, P2, M1, M2, O2)")
+    ] = None,
+    queries: Annotated[
+        Optional[str],
+        typer.Option("--queries", "-q", help="Comma-separated query IDs to validate")
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Show detailed validation results")
+    ] = False,
+) -> None:
+    """Validate query results against golden answers.
+
+    Compares actual query execution results with expected values
+    from golden_answers.yaml to ensure reproducibility.
+    """
+    from .core.validator import GoldenValidator
+
+    console.print(Panel.fit(
+        "[bold blue]Golden Validation[/bold blue]",
+        border_style="blue"
+    ))
+
+    try:
+        validator = GoldenValidator()
+
+        # Parse queries
+        query_list = None
+        if queries:
+            query_list = [q.strip().upper() for q in queries.split(",")]
+
+        # Run validation
+        results = validator.validate_all(
+            paradigm=paradigm.upper() if paradigm else None,
+            queries=query_list,
+        )
+
+        # Display results
+        table = Table(title="Validation Results", show_header=True)
+        table.add_column("Query")
+        table.add_column("Status", justify="center")
+        table.add_column("Details" if verbose else "")
+
+        passed = 0
+        failed = 0
+
+        for qid, result in results.items():
+            if result["valid"]:
+                status = "[green]PASS[/green]"
+                passed += 1
+            else:
+                status = "[red]FAIL[/red]"
+                failed += 1
+
+            details = ""
+            if verbose and not result["valid"]:
+                details = result.get("error", "")[:50]
+
+            table.add_row(qid, status, details)
+
+        console.print(table)
+        console.print(f"\n[bold]Summary:[/bold] {passed} passed, {failed} failed")
+
+        if failed > 0:
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Validation failed: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@golden_app.command("report")
+def golden_report() -> None:
+    """Show golden validation report.
+
+    Displays a summary of the golden dataset and expected answers.
+    """
+    from .core.params import get_golden_loader
+
+    console.print(Panel.fit(
+        "[bold blue]Golden Dataset Report[/bold blue]",
+        border_style="blue"
+    ))
+
+    try:
+        loader = get_golden_loader()
+
+        # Query count
+        console.print("\n[cyan]Golden Answers:[/cyan]")
+        for qid in sorted(loader.get_query_ids()):
+            answer = loader.get_answer(qid)
+            if answer:
+                row_count = answer.get("row_count", "?")
+                console.print(f"  {qid}: {row_count} rows expected")
+
+    except Exception as e:
+        console.print(f"[red]Report failed: {e}[/red]")
+        raise typer.Exit(1)
+
+
+# =============================================================================
+# GENERATE COMMAND
+# =============================================================================
+
+@app.command("generate")
+def generate(
+    profile: Annotated[
+        str,
+        typer.Option("--profile", "-p", help="Dataset profile (small, medium, large)")
+    ] = "small",
+    duration: Annotated[
+        str,
+        typer.Option("--duration", "-d", help="Time duration (2d, 1w, 1m, 6m, 1y)")
+    ] = "1w",
+    seed: Annotated[
+        int,
+        typer.Option("--seed", "-s", help="Random seed for reproducibility")
+    ] = 42,
+    output: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Output directory")
+    ] = None,
+) -> None:
+    """Generate synthetic dataset.
+
+    Creates Parquet files (nodes, edges, timeseries) for benchmarking.
+
+    Examples:
+        btb-runner generate --profile small --duration 1w
+        btb-runner generate --profile medium --seed 123
+    """
+    import subprocess
+    import os
+
+    console.print(Panel.fit(
+        f"[bold blue]Generate Dataset[/bold blue]\n\n"
+        f"Profile: {profile}\n"
+        f"Duration: {duration}\n"
+        f"Seed: {seed}",
+        border_style="blue"
+    ))
+
+    # Build command
+    data_dir = Path(os.environ.get("BTB_DATA_DIR", "data"))
+    output_dir = output or data_dir / "generated"
+
+    cmd = [
+        sys.executable, "-m", "src.basetype_benchmark.dataset.generator",
+        "--profile", profile,
+        "--duration", duration,
+        "--seed", str(seed),
+        "--output", str(output_dir),
+        "--format", "parquet",
+    ]
+
+    console.print(f"\n[dim]$ {' '.join(cmd)}[/dim]\n")
+
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        console.print("[red]Generation failed[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[green]Dataset generated: {output_dir}/{profile}-{duration}[/green]")
+
+
+# =============================================================================
+# EXPORT COMMAND
+# =============================================================================
+
+@app.command("export")
+def export_cmd(
+    paradigm: Annotated[
+        str,
+        typer.Argument(help="Target paradigm (P1, P2, M1, M2, O2)")
+    ],
+    source: Annotated[
+        Path,
+        typer.Option("--source", "-s", help="Source Parquet directory")
+    ],
+    output: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Output directory")
+    ] = None,
+) -> None:
+    """Export Parquet data to paradigm format.
+
+    Converts generated Parquet files to the format required by each paradigm.
+
+    Examples:
+        btb-runner export P1 -s data/generated/small-1w
+        btb-runner export M1 -s data/generated/small-1w -o data/exports/m1
+    """
+    import subprocess
+    import os
+
+    paradigm = paradigm.upper()
+
+    # Map paradigm to exporter module
+    exporter_modules = {
+        "P1": "src.basetype_benchmark.exporters.p1_extractor",
+        "P2": "src.basetype_benchmark.exporters.p2_extractor",
+        "M1": "src.basetype_benchmark.exporters.m1m2_extractor",
+        "M2": "src.basetype_benchmark.exporters.m1m2_extractor",
+        "O2": "src.basetype_benchmark.exporters.o2_extractor",
+    }
+
+    if paradigm not in exporter_modules:
+        console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
+        console.print(f"Valid paradigms: {', '.join(exporter_modules.keys())}")
+        raise typer.Exit(1)
+
+    if not source.exists():
+        console.print(f"[red]Source directory not found: {source}[/red]")
+        raise typer.Exit(1)
+
+    console.print(Panel.fit(
+        f"[bold blue]Export to {paradigm}[/bold blue]\n\n"
+        f"Source: {source}",
+        border_style="blue"
+    ))
+
+    # Determine output directory
+    data_dir = Path(os.environ.get("BTB_DATA_DIR", "data"))
+    output_dir = output or data_dir / "exports" / paradigm.lower() / source.name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        sys.executable, "-m", exporter_modules[paradigm],
+        "--input", str(source),
+        "--output", str(output_dir),
+    ]
+
+    console.print(f"\n[dim]$ {' '.join(cmd)}[/dim]\n")
+
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        console.print(f"[red]Export failed for {paradigm}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[green]Exported to {output_dir}[/green]")
+
+
+# =============================================================================
+# SCENARIOS COMMAND
+# =============================================================================
+
+@app.command("scenarios")
+def list_scenarios_cmd() -> None:
+    """List available benchmark scenarios.
+
+    Shows predefined scenarios with their configurations.
+    """
+    from .scenarios import SCENARIOS, SCENARIO_INFO
+
+    console.print(Panel.fit(
+        "[bold blue]Available Scenarios[/bold blue]",
+        border_style="blue"
+    ))
+
+    table = Table(show_header=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+    table.add_column("Paradigms")
+    table.add_column("RAM Levels")
+    table.add_column("Duration")
+
+    for name, config in SCENARIOS.items():
+        info = SCENARIO_INFO.get(name, {})
+        table.add_row(
+            name,
+            info.get("description", ""),
+            ", ".join(config.paradigms[:3]) + ("..." if len(config.paradigms) > 3 else ""),
+            f"{len(config.ram_levels_mb)} levels",
+            info.get("estimated_duration", ""),
+        )
+
+    console.print(table)
+
+    console.print("\n[dim]Use: btb-runner benchmark --scenario <name>[/dim]")
 
 
 def version_callback(value: bool) -> None:

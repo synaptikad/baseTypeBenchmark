@@ -1,0 +1,32 @@
+# Scenario: Publication Ready
+# Purpose: High precision benchmark for academic papers
+# Duration: ~8 hours
+
+name: Publication Ready
+description: Maximum precision for reproducible academic research
+
+paradigms:
+  - P1   # PostgreSQL Relational (CTEs)
+  - P2   # PostgreSQL JSONB
+  - M1   # Memgraph Standalone
+  - M2   # Memgraph + TimescaleDB
+  - O2   # Oxigraph + TimescaleDB
+
+queries: all  # All 23 queries for complete coverage
+
+dataset:
+  profile: medium  # Larger dataset for statistical significance
+
+ram_gradient:
+  # 10 fine-grained levels for precise characterization
+  levels_gb: [128, 96, 64, 48, 32, 24, 16, 12, 8, 4]
+
+execution:
+  warmup_runs: 5      # More warmup for stable results
+  timed_runs: 30      # High sample count for statistics
+  variants: 5         # Multiple parameter variations
+  timeout_seconds: 600  # 10 min timeout for complex queries
+
+options:
+  cleanup_exports: false  # Keep all data for reproducibility
+  stop_on_oom: false

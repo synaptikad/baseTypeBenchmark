@@ -1,0 +1,29 @@
+# Scenario: CI/CD Quick Check
+# Purpose: Minimal test for continuous integration pipelines
+# Duration: ~2 minutes
+
+name: CI/CD Quick Check
+description: Minimal validation for automated testing pipelines
+
+paradigms:
+  - P1   # Single paradigm for speed
+
+queries:
+  - Q1   # Graph only
+  - Q6   # Timeseries only
+
+dataset:
+  profile: small
+
+ram_gradient:
+  levels_gb: [32]  # Single level, no gradient
+
+execution:
+  warmup_runs: 1
+  timed_runs: 2
+  variants: 1
+  timeout_seconds: 30
+
+options:
+  cleanup_exports: true
+  stop_on_oom: true  # Fail fast on CI

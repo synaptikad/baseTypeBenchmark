@@ -1,0 +1,31 @@
+# Scenario: Standard Benchmark
+# Purpose: Full comparison of all paradigms
+# Duration: ~2 hours
+
+name: Standard Benchmark
+description: Full comparison, all paradigms with standard precision
+
+paradigms:
+  - P1   # PostgreSQL Relational (CTEs)
+  - P2   # PostgreSQL JSONB
+  - M1   # Memgraph Standalone
+  - M2   # Memgraph + TimescaleDB
+  - O2   # Oxigraph + TimescaleDB
+
+queries: all  # All 23 queries
+
+dataset:
+  profile: small
+
+ram_gradient:
+  levels_gb: [128, 64, 32, 16, 8]
+
+execution:
+  warmup_runs: 3
+  timed_runs: 10
+  variants: 3
+  timeout_seconds: 300
+
+options:
+  cleanup_exports: true
+  stop_on_oom: false
