@@ -299,8 +299,8 @@ class RAMGradientExecutor:
         if not self.isolation.is_paradigm_running(self.paradigm):
             self.isolation.start_paradigm(self.paradigm)
 
-        # Measure baseline (unlimited RAM)
-        result.baseline_peak_mb = self._measure_baseline()
+        # Measure baseline (run query without RAM limit, after resetting load peak)
+        result.baseline_peak_mb = self._measure_baseline(queries)
 
         # Run gradient (descending to detect OOM early)
         for i, limit_mb in enumerate(levels_mb):
@@ -538,23 +538,59 @@ class RAMGradientExecutor:
 
         return stats
 
-    def _measure_baseline(self) -> float:
-        """Measure baseline memory without limit.
+    def _measure_baseline(self, queries: list[str] | None = None) -> float:
+        """Measure baseline memory for queries without RAM limit.
+
+        This resets memory.peak after load, then runs a warmup query to measure
+        the actual RAM needed for query execution (not the load peak which can
+        be much higher due to multi-worker bulk inserts).
+
+        Args:
+            queries: Query IDs to use for baseline measurement. Uses first query.
 
         Returns:
-            Peak memory in MB
+            Peak memory in MB during query execution
         """
         container_ids = self.isolation.get_container_ids(self.paradigm)
 
         if not container_ids:
             return 0.0
 
-        # Get current memory from first container
-        container_id = list(container_ids.values())[0]
         try:
             from ..monitoring import CgroupsV2Monitor
-            monitor = CgroupsV2Monitor(container_id)
-            return monitor.get_memory_peak() / (1024 * 1024)
+
+            # Reset peak for all containers (clears load peak)
+            monitors = {}
+            for name, container_id in container_ids.items():
+                monitor = CgroupsV2Monitor(container_id)
+                monitor.reset_memory_peak()
+                monitors[name] = monitor
+
+            # Run one warmup query without RAM limit to measure query baseline
+            if queries:
+                runner = self._get_runner()
+                query_id = queries[0]
+                query_files = self._load_query_files(query_id)
+                if query_files:
+                    params = self._get_variant_params(query_id, 0)
+                    try:
+                        if self.paradigm in ("M2", "O2") and "ts" in query_files:
+                            runner.execute_hybrid(
+                                query_files["graph"],
+                                query_files["ts"],
+                                params,
+                                timeout=self.timeout,
+                            )
+                        else:
+                            query_text = query_files.get("main") or query_files.get("graph", "")
+                            runner.execute(query_text, params, timeout=self.timeout, query_id=query_id)
+                    except Exception:
+                        pass  # Baseline measurement, ignore errors
+
+            # Get peak after query execution
+            total_peak = sum(m.get_memory_peak() for m in monitors.values())
+            return total_peak / (1024 * 1024)
+
         except Exception:
             return 0.0
 

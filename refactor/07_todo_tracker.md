@@ -13,8 +13,8 @@ Legend:
 
 - [x] A1. Docker compose health: `timescale`, `memgraph`, `oxigraph` start and are healthy (Phase 0)
 - [x] A2. `IsolationManager` does not delete volumes (remove `down -v`) (Phase 3.1: 986858f)
-- [ ] A3. RAM limit updates apply correctly to container(s) at runtime
-- [ ] A4. Hybrid RAM split applied deterministically (document ratio and rounding)
+- [x] A3. RAM limit updates apply correctly to container(s) at runtime **(G3 validated 2026-01-08)**
+- [x] A4. Hybrid RAM split applied deterministically (document ratio and rounding) **(70/30 split for M2/O2)**
 
 ## B. Option A shared Timescale
 
@@ -74,7 +74,19 @@ Legend:
     - ✅ O2: "⏭️ Timeseries already loaded for O2, skipping"
   - See: [13_schema_isolation_applied.md](13_schema_isolation_applied.md) for full report
   - See: [12_schema_isolation_implementation_plan.md](12_schema_isolation_implementation_plan.md) for implementation details
-- [ ] G3. Small profile, 2 RAM levels, plateau/OOM behavior recorded
+- [x] G3. Small profile, 2+ RAM levels, plateau/OOM behavior recorded **(COMPLETED 2026-01-08)**
+  - **Test**: small-2d dataset, RAM levels 1GB/512MB/256MB, queries Q1/Q6
+  - **Results** (`results_g3_full.json`):
+    | Paradigm | RAM Viable | RAM Baseline | Status |
+    |----------|------------|--------------|--------|
+    | P1 | 262 MB | 250 MB | ✅ 3/3 success |
+    | P2 | 262 MB | 250 MB | ✅ 3/3 success |
+    | M1 | 262 MB | 229 MB | ✅ 3/3 success |
+    | M2 | 512 MB | 245 MB | ⚠️ 2/3 (error at 262MB due to 70/30 split) |
+    | O2 | 512 MB | 234 MB | ⚠️ SPARQL syntax error on Q1 (unrelated to RAM) |
+  - **OOM Detection**: Working (detected at 131MB for P1)
+  - **Option A**: Working (timeseries skip messages confirmed)
+  - **Hybrid split**: 70% graph DB / 30% TimescaleDB confirmed
 - [ ] G4. Medium profile, 1 RAM level, correctness smoke test (Q1, Q6, Q8, Q13)
 - [ ] G5. Full run produces results JSON with all queries and statuses
 
@@ -121,7 +133,15 @@ Legend:
     * Q16 (no params): 159 results, 37.68ms ✅
   - **Documentation**: [15_values_injection_solution.md](15_values_injection_solution.md), [16_bug4_validation_report.md](16_bug4_validation_report.md)
   - **Status**: PRODUCTION READY
-- Hybrid RAM split ratio: TODO (future work)
-- Rounding rule: TODO (future work)
+- **G3 RAM Gradient Testing**: ✅ COMPLETE (2026-01-08)
+  - Hybrid RAM split ratio: **70% graph DB / 30% TimescaleDB** (confirmed working)
+  - Rounding rule: Integer MB (floor)
+  - OOM detection via cgroups v2 memory.events counter
+  - Results file: `results_g3_full.json`
+- **Baseline Fix** (2026-01-08):
+  - **Problem**: Baseline mesurait le pic du load multi-worker, pas le pic des queries
+  - **Impact**: Sur gros datasets, baseline faussement élevé → skip de niveaux RAM valides
+  - **Fix**: `gradient.py:_measure_baseline()` reset `memory.peak` après load, puis exécute warmup query
+  - **Fichier**: `src/basetype_benchmark/runner/ram/gradient.py` lignes 541-595
 - Any deviations from the paper/spec: None yet
 
