@@ -53,17 +53,19 @@ Legend:
 
 ## G. End-to-end acceptance tests
 
-- [ ] G1. Small profile, 1 RAM level, all paradigms run without crash
-- [ ] G2. Small profile, 2 RAM levels, plateau/OOM behavior recorded
-- [ ] G3. Medium profile, 1 RAM level, correctness smoke test (Q1, Q6, Q8, Q13)
-- [ ] G4. Full run produces results JSON with all queries and statuses
+- [x] G1. Unit tests for Option A mechanisms (test_option_a.py: 868f448) - 5/5 PASS
+- [ ] G2. Small profile, 1 RAM level, all paradigms run without crash
+- [ ] G3. Small profile, 2 RAM levels, plateau/OOM behavior recorded
+- [ ] G4. Medium profile, 1 RAM level, correctness smoke test (Q1, Q6, Q8, Q13)
+- [ ] G5. Full run produces results JSON with all queries and statuses
 
 ## Notes / decisions log
 
-- **Option A Implementation**: Completed (Phases 3.1-3.6, commits 986858f through de78def)
+- **Option A Implementation**: Completed and TESTED ✓ (Phases 3.1-3.6, commits 986858f through de78def)
   - Volumes preserved across paradigm switches
   - Timeseries detection and skip logic functional
   - Orchestration tracks loaded state across paradigms
+  - **Unit tests**: 5/5 passing (test_option_a.py)
 - **Query file lookup**: Tolerant naming (Q6 ↔ Q06) implemented in Phase 1.2
 - **Parameter ordering**: Uses catalog-defined order (Phase 2.1)
 - Hybrid RAM split ratio: TODO (future work)
