@@ -133,6 +133,7 @@ class BenchmarkOrchestrator:
         """
         self.configs = configs
         self.isolation = IsolationManager(compose_file=compose_file)
+        self._timeseries_loaded = False  # Track if TS loaded (Option A)
 
     def run_full_benchmark(
         self,
@@ -160,6 +161,9 @@ class BenchmarkOrchestrator:
         results = BenchmarkResults()
         results.config = scenario.to_benchmark_config()
         results.start_time = datetime.now()
+
+        # Reset state for new benchmark run (Option A)
+        self._timeseries_loaded = False
 
         # Get queries if not specified
         queries = scenario.queries
@@ -359,12 +363,33 @@ class BenchmarkOrchestrator:
         if not loader.check_connection():
             raise RuntimeError(f"Cannot connect to {paradigm} database")
 
+        # Determine if we should keep timeseries (Option A)
+        keep_ts = self._should_keep_timeseries(paradigm)
+
         # Clear and load
-        loader.clear_database()
+        loader.clear_database(keep_timeseries=keep_ts)
         result = loader.load_all(data_dir)
 
         if not result.success:
             raise RuntimeError(f"Data loading failed: {result.errors}")
+
+        # Mark timeseries as loaded if this paradigm loaded it
+        if result.timeseries_loaded > 0:
+            self._timeseries_loaded = True
+
+    def _should_keep_timeseries(self, paradigm: str) -> bool:
+        """Determine if timeseries should be kept during clear.
+
+        Option A: Keep timeseries if already loaded by previous paradigm.
+
+        Args:
+            paradigm: Current paradigm being loaded
+
+        Returns:
+            True if timeseries should be preserved
+        """
+        uses_timescale = paradigm in ("P1", "P2", "M2", "O2")
+        return self._timeseries_loaded and uses_timescale
 
     def _run_gradient(
         self,
