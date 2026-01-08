@@ -221,7 +221,7 @@ class OxigraphLoader(BaseLoader):
             content = f.read()
 
         response = client.post(
-            self.store_endpoint,
+            f"{self.store_endpoint}?default",
             content=content,
             headers={"Content-Type": "text/turtle"},
         )
@@ -292,7 +292,7 @@ class OxigraphLoader(BaseLoader):
         client = self._get_client()
 
         response = client.post(
-            self.store_endpoint,
+            f"{self.store_endpoint}?default",
             content=data,
             headers={"Content-Type": "application/n-triples"},
         )
