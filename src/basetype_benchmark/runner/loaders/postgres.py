@@ -157,6 +157,36 @@ class PostgresLoader(BaseLoader):
         )
         return cur.fetchone()[0]
 
+    def _is_timeseries_populated(self) -> bool:
+        """Check if timeseries table has data.
+
+        Returns:
+            True if timeseries table exists and has rows
+        """
+        try:
+            with psycopg.connect(self.config.dsn) as conn:
+                with conn.cursor() as cur:
+                    if not self._table_exists(cur, "timeseries"):
+                        return False
+                    cur.execute("SELECT EXISTS(SELECT 1 FROM timeseries LIMIT 1)")
+                    return cur.fetchone()[0]
+        except Exception:
+            return False
+
+    def _count_timeseries_rows(self) -> int:
+        """Count rows in timeseries table.
+
+        Returns:
+            Row count, or 0 if error
+        """
+        try:
+            with psycopg.connect(self.config.dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM timeseries")
+                    return cur.fetchone()[0]
+        except Exception:
+            return 0
+
     def load_all(
         self,
         data_dir: Path,
@@ -202,9 +232,14 @@ class PostgresLoader(BaseLoader):
             # Phase 4: Timeseries (la plus lourde)
             ts_file = data_dir / "timeseries.csv"
             if ts_file.exists():
-                result.timeseries_loaded = self._load_timeseries(
-                    ts_file, workers, progress_callback
-                )
+                # Skip if timeseries already populated (Option A optimization)
+                if self._is_timeseries_populated():
+                    print("⏭️  Timeseries already loaded, skipping (Option A)")
+                    result.timeseries_loaded = self._count_timeseries_rows()
+                else:
+                    result.timeseries_loaded = self._load_timeseries(
+                        ts_file, workers, progress_callback
+                    )
 
         except Exception as e:
             result.add_error(str(e))

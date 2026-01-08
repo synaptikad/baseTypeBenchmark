@@ -553,6 +553,11 @@ class MemgraphLoader(BaseLoader):
         # Créer le schema timeseries si nécessaire
         pg_loader.ensure_timeseries_schema()
 
+        # Skip if already populated (Option A)
+        if pg_loader._is_timeseries_populated():
+            print("⏭️  Timeseries already loaded for M2, skipping")
+            return pg_loader._count_timeseries_rows()
+
         total_count = self._count_csv_rows(csv_file)
         self._emit_progress(callback, LoadPhase.TIMESERIES, 0, total_count)
 
