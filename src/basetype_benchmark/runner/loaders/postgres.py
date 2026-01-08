@@ -99,20 +99,28 @@ class PostgresLoader(BaseLoader):
         except Exception:
             return False
 
-    def clear_database(self) -> bool:
-        """Vide toutes les tables (ignore if tables don't exist)."""
+    def clear_database(self, keep_timeseries: bool = False) -> bool:
+        """Vide toutes les tables (ignore if tables don't exist).
+
+        Args:
+            keep_timeseries: If True, preserve timeseries table for Option A
+
+        Returns:
+            True if successful
+        """
         try:
             with psycopg.connect(self.config.dsn) as conn:
                 with conn.cursor() as cur:
                     # Desactive les FK temporairement
                     cur.execute("SET session_replication_role = replica")
 
-                    # Truncate timeseries (ignore if not exists)
-                    cur.execute(
-                        "TRUNCATE TABLE timeseries CASCADE"
-                        if self._table_exists(cur, "timeseries")
-                        else "SELECT 1"
-                    )
+                    # Truncate timeseries (only if not keeping)
+                    if not keep_timeseries:
+                        cur.execute(
+                            "TRUNCATE TABLE timeseries CASCADE"
+                            if self._table_exists(cur, "timeseries")
+                            else "SELECT 1"
+                        )
 
                     # Truncate edges (ignore if not exists)
                     cur.execute(
