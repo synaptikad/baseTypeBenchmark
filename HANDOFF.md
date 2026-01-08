@@ -315,25 +315,33 @@ python -m src.basetype_benchmark.runner benchmark \
 
 ---
 
-### PRIORITÉ 1: G4 - Medium Profile Testing
+### ✅ G4/G5 - Medium Profile & Full Query Testing - COMPLETE (2026-01-08)
 
-**Objectif**: Correctness smoke test avec medium dataset
+**G4 - Medium Profile Smoke Test**:
+- Dataset: medium-2d (9,144 nodes, 11,891 edges, 4,800 timeseries)
+- Queries: Q1, Q6, Q8, Q13
+- Results: Q8 ✅ (1 row), Q13 ✅ (12 rows), Q1/Q6 (0 rows - param mismatch with generated IDs)
 
-**Actions**:
-```bash
-# Test with medium profile
-python -m src.basetype_benchmark.runner benchmark \
-  -s data/generated/medium-2d \
-  -e data/exports \
-  -p P1,P2 \
-  --queries Q1,Q6,Q8,Q13 \
-  --ram 16 \
-  --runs 1
-```
+**G5 - Full 23-Query Run**:
+- Results file: `results_g5_full.json`
+- Summary:
+  | Paradigm | OK | ERROR | Notes |
+  |----------|-----|-------|-------|
+  | P1 | 16/23 | 7 | Q14-Q17 (JSONB), Q20-Q21 (CTE) |
+  | P2 | 16/23 | 7 | Q15,Q18,Q20-Q22 |
+  | M2 | 9/23 | 14 | Cypher/hybrid issues |
+  | O2 | 1/23 | 22 | SPARQL VALUES issues |
 
-**Acceptance**:
-- Queries return correct results on larger dataset
-- Performance metrics reasonable
+**Bug #5 Fixed**: SQL comment placeholder conversion
+- Problem: `$N` placeholders in SQL comments were converted to `%s`
+- Symptom: "query has 4 placeholders but 3 params"
+- Fix: Strip SQL comments before conversion + expand repeated params
+- File: `src/basetype_benchmark/runner/runners/postgres.py:_convert_params()`
+
+**Known Issues**:
+- golden_answers.yaml parameters don't match generated dataset IDs (e.g., `meter_main_1` vs `eq_mainmeter_1`)
+- O2 VALUES injection needs per-query handling
+- Some queries are IMPOSSIBLE by design for certain paradigms
 
 ---
 
@@ -397,17 +405,26 @@ docker exec benchmark-timescale psql -U postgres -d benchmark \
 **Complété cette session**:
 - [x] G3 RAM Gradient Testing - 5 paradigmes testés avec 3 niveaux RAM
 - [x] Fix baseline measurement (commit 2bcd21b) - mesure query peak, pas load peak
+- [x] **G4 Medium profile testing** - medium-2d dataset, Q1/Q6/Q8/Q13
+- [x] **G5 Full run** - 23 queries, 4 paradigmes, results_g5_full.json
+- [x] **Bug #5 Fix** - SQL comment placeholder conversion (postgres.py)
 - [x] Documentation HANDOFF et todotracker à jour
 
 **Prochaines priorités**:
-1. [ ] **G4**: Medium profile testing (générer dataset medium-2d d'abord)
-2. [ ] **G5**: Full run avec tous les queries et statuses
+1. [ ] **Commit Bug #5 fix**: `git add && git commit` (postgres.py changes)
+2. [ ] **Fix remaining query issues**:
+   - O2: SPARQL VALUES injection per-query handling
+   - M2: Cypher syntax errors in hybrid queries
+   - P2: Q20-Q22 CTE/schema issues
 3. [ ] **H1-H6**: Write queries extension (Phase 6 du playbook)
 
-**Containers**: Recréés avec volumes frais (après corruption OOM tests)
+**Known Limitations**:
+- golden_answers.yaml uses hardcoded IDs (`meter_main_1`) that don't match generated datasets (`eq_mainmeter_1`)
+- For accurate correctness testing, need dataset-aware parameter generation or golden dataset
+
+**Containers**: Stopped after G5 run
 ```bash
-docker ps --filter "name=benchmark"
-# benchmark-timescale, benchmark-memgraph, benchmark-oxigraph should be healthy
+docker compose -f docker/docker-compose.yml up -d  # to restart
 ```
 
 **Commits récents**:

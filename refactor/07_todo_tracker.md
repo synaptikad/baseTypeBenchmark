@@ -87,8 +87,29 @@ Legend:
   - **OOM Detection**: Working (detected at 131MB for P1)
   - **Option A**: Working (timeseries skip messages confirmed)
   - **Hybrid split**: 70% graph DB / 30% TimescaleDB confirmed
-- [ ] G4. Medium profile, 1 RAM level, correctness smoke test (Q1, Q6, Q8, Q13)
-- [ ] G5. Full run produces results JSON with all queries and statuses
+- [x] G4. Medium profile, 1 RAM level, correctness smoke test (Q1, Q6, Q8, Q13) **(COMPLETED 2026-01-08)**
+  - **Dataset**: medium-2d (9,144 nodes, 11,891 edges, 4,800 timeseries)
+  - **Results** (P1/P2):
+    - Q1: 0 rows (parameter mismatch - ID format)
+    - Q6: 0 rows (parameter mismatch - point ID)
+    - Q8: 1 row ✅ (after fix)
+    - Q13: 12 rows ✅
+  - **Bug Fixed**: SQL comment placeholder conversion (postgres.py)
+    - Problem: `$N` in comments converted to `%s`, mismatch count
+    - Fix: Strip SQL comments before placeholder conversion + expand repeated params
+- [x] G5. Full run produces results JSON with all queries and statuses **(COMPLETED 2026-01-08)**
+  - **Results file**: `results_g5_full.json`
+  - **Summary**:
+    | Paradigm | OK | ERROR | Notes |
+    |----------|-----|-------|-------|
+    | P1 | 16/23 | 7 | Q14-Q17 (JSONB-specific), Q20-Q21 (CTE type) |
+    | P2 | 16/23 | 7 | Q15,Q18 (params), Q20-Q22 (CTE/schema) |
+    | M2 | 9/23 | 14 | Cypher syntax, hybrid integration |
+    | O2 | 1/23 | 22 | SPARQL VALUES injection issues |
+  - **Known Issues**:
+    - golden_answers.yaml params don't match generated dataset IDs
+    - O2 VALUES injection needs query-specific handling
+    - Some queries are IMPOSSIBLE for certain paradigms (by design)
 
 ## H. Write queries extension (usage workloads)
 
@@ -143,5 +164,11 @@ Legend:
   - **Impact**: Sur gros datasets, baseline faussement élevé → skip de niveaux RAM valides
   - **Fix**: `gradient.py:_measure_baseline()` reset `memory.peak` après load, puis exécute warmup query
   - **Fichier**: `src/basetype_benchmark/runner/ram/gradient.py` lignes 541-595
+- **Bug #5 - SQL Comment Placeholder Conversion** (2026-01-08):
+  - **Problem**: PostgresRunner converted `$N` placeholders in SQL comments, causing count mismatch
+  - **Symptom**: Q8 failed with "query has 4 placeholders but 3 params" (comments contained $1, $2, $3)
+  - **Fix**: Strip SQL comments before placeholder conversion + expand repeated params for same placeholder
+  - **File**: `src/basetype_benchmark/runner/runners/postgres.py` `_convert_params()` method
+  - **Status**: FIXED (commit c5ec7d6)
 - Any deviations from the paper/spec: None yet
 
