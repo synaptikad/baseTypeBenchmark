@@ -17,13 +17,13 @@ categories:
     queries: [Q6]
   hybrid:
     description: "Sélection graph + agrégation timeseries"
-    queries: [Q7, Q8, Q9, Q10, Q11, Q12, Q13]
+    queries: [Q7, Q8, Q9, Q12, Q13]
   jsonb_specific:
     description: "Requêtes exploitant les propriétés JSONB (P2=NATIVE)"
     queries: [Q14, Q15, Q16, Q17, Q18, Q19]
   graph_native:
     description: "Algorithmes graphe natifs (M1/M2=NATIVE)"
-    queries: [Q20, Q21, Q22, Q23]
+    queries: [Q10, Q11, Q20, Q21, Q22, Q23]
 
 # ===========================================================================
 # QUERIES
@@ -400,7 +400,7 @@ queries:
 
   Q10:
     name: "Security Access Analysis"
-    category: hybrid
+    category: graph_native
     intention: |
       Pour un bâtiment, lister les équipements de sécurité (badges, caméras)
       par espace avec leur couverture.
@@ -434,7 +434,7 @@ queries:
 
   Q11:
     name: "IT Infrastructure Impact"
-    category: hybrid
+    category: graph_native
     intention: |
       Trouver les serveurs dépendant d'une alimentation spécifique (UPS, circuit).
     use_case: "Planification maintenance, analyse risque"
