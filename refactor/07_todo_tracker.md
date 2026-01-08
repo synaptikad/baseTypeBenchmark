@@ -113,12 +113,16 @@ Legend:
 
 ## H. Write queries extension (usage workloads)
 
-- [ ] H1. Extend `queries/catalog.yaml` with QW1-QW3 (+ statuses per paradigm)
-- [ ] H2. Implement QW1 (timeseries append) and report rows_written + throughput
-- [ ] H3. Implement QW2 (metadata update) with P2 JSONB as NATIVE (P1 optional)
-- [ ] H4. Implement QW3 (relation mutation) for P1/P2 + M2 (O2 SPARQL UPDATE or mark IMPOSSIBLE)
-- [ ] H5. Runner supports `write_workload` category path resolution and write reporting fields
-- [ ] H6. Extended acceptance: small profile, 1 RAM level, READ+WRITE
+- [x] H1. Extend `queries/catalog.yaml` with QW1-QW3 (+ statuses per paradigm) **(DONE commit 547337d)**
+- [x] H2. Implement QW1 (timeseries append) and report rows_written + throughput **(DONE - P1/P2 UNNEST batch insert)**
+- [x] H3. Implement QW2 (metadata update) with P2 JSONB as NATIVE (P1 optional) **(DONE - P2 nodes.data jsonb_set)**
+- [x] H4. Implement QW3 (relation mutation) for P1/P2 + M2 (O2 SPARQL UPDATE or mark IMPOSSIBLE) **(DONE - SQL/Cypher)**
+- [x] H5. Runner supports `write_workload` category path resolution and write reporting fields **(DONE - config.py, gradient.py, postgres.py)**
+- [x] H6. Extended acceptance: small profile, 1 RAM level, READ+WRITE **(DONE 2026-01-08)**
+  - **Results**:
+    - P1: QW1 ✅ (4.2ms), QW3 ✅ (0.8ms) - QW2 N/A (no JSONB)
+    - P2: QW1 ✅ (3.6ms), QW2 ✅ (1.2ms), QW3 ✅ (0.6ms)
+  - **Bug Fixed during test**: QW2 table name (p2.points → nodes)
 
 ## Notes / decisions log
 
@@ -170,5 +174,14 @@ Legend:
   - **Fix**: Strip SQL comments before placeholder conversion + expand repeated params for same placeholder
   - **File**: `src/basetype_benchmark/runner/runners/postgres.py` `_convert_params()` method
   - **Status**: FIXED (commit c5ec7d6)
+- **Phase 6 - Write Workloads**: ✅ COMPLETE (2026-01-08)
+  - **QW1** (Timeseries Append): Batch INSERT via UNNEST, P1/P2 compatible
+  - **QW2** (Metadata Update): JSONB update, P2-only (P1 lacks JSONB column)
+  - **QW3** (Relation Mutation): INSERT ON CONFLICT (SQL), MERGE (Cypher)
+  - **Runner changes**:
+    - Added WRITE_WORKLOAD to QueryCategory enum
+    - gradient.py: Skip param tuple conversion for write_workload
+    - postgres.py: Handle INSERT/UPDATE with rowcount (no fetchall)
+  - **Commit**: 547337d
 - Any deviations from the paper/spec: None yet
 
