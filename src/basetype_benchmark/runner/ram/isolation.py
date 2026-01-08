@@ -168,6 +168,9 @@ class IsolationManager:
     def stop_paradigm(self, paradigm: str) -> None:
         """Stop and remove containers for a paradigm.
 
+        Note: Volumes are preserved to support Option A (shared TimescaleDB).
+        Use docker volume prune manually if cleanup is needed.
+
         Args:
             paradigm: P1, P2, M1, M2, or O2
         """
@@ -322,7 +325,7 @@ class IsolationManager:
         cmd = [
             "docker", "compose",
             "-f", str(self.compose_file),
-            "down", "-v", "--remove-orphans",
+            "down", "--remove-orphans",  # Removed -v flag to preserve volumes (Option A)
         ]
 
         subprocess.run(cmd, capture_output=True, text=True)
