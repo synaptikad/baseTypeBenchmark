@@ -571,6 +571,38 @@ class RAMGradientExecutor:
 
         return get_runner(self.paradigm, config)
 
+    def _find_query_file(self, base_dir: Path, query_id: str, ext: str) -> Path | None:
+        """Find query file with tolerant naming (Q6 or Q06).
+
+        Args:
+            base_dir: Directory to search in
+            query_id: Query ID (e.g., "Q6" or "Q06")
+            ext: File extension (e.g., "sql", "cypher", "sparql")
+
+        Returns:
+            Path to query file, or None if not found
+        """
+        # Try exact match first
+        exact = base_dir / f"{query_id}.{ext}"
+        if exact.exists():
+            return exact
+
+        # Try zero-padded version (Q6 → Q06)
+        if query_id.startswith("Q") and len(query_id) == 2:
+            padded = f"Q{query_id[1:].zfill(2)}"
+            padded_path = base_dir / f"{padded}.{ext}"
+            if padded_path.exists():
+                return padded_path
+
+        # Try unpadded version (Q06 → Q6)
+        if query_id.startswith("Q") and len(query_id) == 3:
+            unpadded = f"Q{int(query_id[1:])}"
+            unpadded_path = base_dir / f"{unpadded}.{ext}"
+            if unpadded_path.exists():
+                return unpadded_path
+
+        return None
+
     def _load_query_files(self, query_id: str) -> dict[str, str]:
         """Load query file(s) for execution based on paradigm and category.
 
@@ -590,10 +622,14 @@ class RAMGradientExecutor:
         if self.paradigm in ("P1", "P2", "M1"):
             ext_map = {"P1": "sql", "P2": "sql", "M1": "cypher"}
             ext = ext_map[self.paradigm]
-            query_file = queries_dir / self.paradigm.lower() / f"{query_id}.{ext}"
+            query_file = self._find_query_file(
+                queries_dir / self.paradigm.lower(),
+                query_id,
+                ext
+            )
 
-            if not query_file.exists():
-                raise GradientError(f"Query file not found: {query_file}")
+            if query_file is None:
+                raise GradientError(f"Query file not found for {query_id} in {self.paradigm}")
 
             text = query_file.read_text(encoding="utf-8")
             cleaned = strip_query_comments(text, ext)
@@ -604,11 +640,15 @@ class RAMGradientExecutor:
             ext = "cypher" if self.paradigm == "M2" else "sparql"
 
             if category == "graph_only":
-                # Q1-Q5: Load from graph/ subdirectory
-                query_file = queries_dir / self.paradigm.lower() / "graph" / f"{query_id}.{ext}"
+                # Q1-Q5, Q10-Q11: Load from graph/ subdirectory
+                query_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower() / "graph",
+                    query_id,
+                    ext
+                )
 
-                if not query_file.exists():
-                    raise GradientError(f"Query file not found: {query_file}")
+                if query_file is None:
+                    raise GradientError(f"Query file not found for {query_id} in {self.paradigm}/graph")
 
                 text = query_file.read_text(encoding="utf-8")
                 cleaned = strip_query_comments(text, ext)
@@ -616,9 +656,13 @@ class RAMGradientExecutor:
 
             elif category == "timeseries_pure":
                 # Q6: Load from ts/ subdirectory (SQL)
-                query_file = queries_dir / self.paradigm.lower() / "ts" / f"{query_id}.sql"
+                query_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower() / "ts",
+                    query_id,
+                    "sql"
+                )
 
-                if not query_file.exists():
+                if query_file is None:
                     # Graceful fallback
                     self._console.print(
                         f"[yellow]Warning: Query file not found: {query_file}[/yellow]"
@@ -630,16 +674,24 @@ class RAMGradientExecutor:
                 return {"query": cleaned}
 
             elif category == "hybrid":
-                # Q7-Q13: Load BOTH graph and ts files
-                graph_file = queries_dir / self.paradigm.lower() / "graph" / f"{query_id}.{ext}"
-                ts_file = queries_dir / self.paradigm.lower() / "ts" / f"{query_id}.sql"
+                # Q7-Q9, Q12-Q13: Load BOTH graph and ts files
+                graph_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower() / "graph",
+                    query_id,
+                    ext
+                )
+                ts_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower() / "ts",
+                    query_id,
+                    "sql"
+                )
 
-                if not graph_file.exists() or not ts_file.exists():
+                if graph_file is None or ts_file is None:
                     missing = []
-                    if not graph_file.exists():
-                        missing.append(str(graph_file))
-                    if not ts_file.exists():
-                        missing.append(str(ts_file))
+                    if graph_file is None:
+                        missing.append(f"{query_id}.{ext} in graph/")
+                    if ts_file is None:
+                        missing.append(f"{query_id}.sql in ts/")
                     raise GradientError(f"Hybrid query files not found: {', '.join(missing)}")
 
                 graph_text = graph_file.read_text(encoding="utf-8")
