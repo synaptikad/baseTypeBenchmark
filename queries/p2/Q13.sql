@@ -16,7 +16,7 @@ WITH office_points AS (
     JOIN nodes p ON p.id = e_hp.target_id AND p.node_type = 'Point'
     WHERE s.node_type = 'Space'
       AND s.data->>'building_id' = $1
-      AND s.data->>'space_type' LIKE 'office%'
+      AND s.data->>'space_type' LIKE 'office%%'
       AND p.data->>'quantity' IN ('temperature', 'co2')
 ),
 office_hours_data AS (

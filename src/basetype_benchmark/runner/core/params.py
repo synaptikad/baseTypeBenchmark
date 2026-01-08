@@ -328,8 +328,8 @@ class GoldenAnswersLoader:
         if self._data is None:
             return param_set
 
-        queries = self._data.get("queries", {})
-        query_data = queries.get(query_id, {})
+        answers = self._data.get("answers", {})
+        query_data = answers.get(query_id, {})
         params_data = query_data.get("parameters", {})
 
         for name, value in params_data.items():
@@ -346,9 +346,9 @@ class GoldenAnswersLoader:
         if self._data is None:
             return None
 
-        queries = self._data.get("queries", {})
-        query_data = queries.get(query_id, {})
-        return query_data.get("expected_results")
+        answers = self._data.get("answers", {})
+        query_data = answers.get(query_id, {})
+        return query_data.get("expected", {}).get("rows")
 
     def get_expected_count(self, query_id: str) -> Optional[int]:
         """Get expected row count."""
@@ -357,9 +357,9 @@ class GoldenAnswersLoader:
         if self._data is None:
             return None
 
-        queries = self._data.get("queries", {})
-        query_data = queries.get(query_id, {})
-        return query_data.get("expected_count")
+        answers = self._data.get("answers", {})
+        query_data = answers.get(query_id, {})
+        return query_data.get("expected", {}).get("row_count")
 
     def _infer_type(self, value: Any) -> str:
         """Infer parameter type from value."""

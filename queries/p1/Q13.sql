@@ -11,7 +11,7 @@ WITH office_points AS (
     JOIN edges e_hp ON e_hp.source_id = eq.id AND e_hp.rel_type = 'HAS_POINT'
     JOIN points p ON p.id = e_hp.target_id
     WHERE s.building_id = $1
-      AND s.space_type LIKE 'office%'
+      AND s.space_type LIKE 'office%%'
       AND p.quantity IN ('temperature', 'co2')
 ),
 office_hours_data AS (

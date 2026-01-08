@@ -67,7 +67,7 @@ class PostgresRunner(BaseRunner):
     def execute(
         self,
         query: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | tuple | None = None,
         timeout_seconds: float = 300.0,
     ) -> RunResult:
         """Execute a SQL query.
@@ -205,20 +205,27 @@ class PostgresRunner(BaseRunner):
         except Exception:
             return None
 
-    def _convert_params(self, params: dict[str, Any], query: str) -> tuple[str, tuple | dict]:
-        """Convert parameter dict and query to format suitable for psycopg.
+    def _convert_params(self, params: dict[str, Any] | tuple, query: str) -> tuple[str, tuple | dict]:
+        """Convert parameter dict/tuple and query to format suitable for psycopg.
 
         psycopg3 supports positional (%s) and named (%(name)s) params.
         PostgreSQL native $1, $2 style must be converted to %s.
 
         Args:
-            params: Parameter dictionary
+            params: Parameter dictionary or tuple (if already ordered)
             query: Query string (to detect param style)
 
         Returns:
             Tuple of (converted_query, converted_params)
         """
         import re
+
+        # If params is already a tuple, use it directly for positional binding
+        if isinstance(params, tuple):
+            if "$1" in query:
+                converted_query = re.sub(r'\$(\d+)', '%s', query)
+                return converted_query, params
+            return query, params
 
         # If query uses %(name)s style, return as-is
         if "%(" in query:
@@ -229,21 +236,18 @@ class PostgresRunner(BaseRunner):
             # Convert $1, $2, ... to %s in query
             converted_query = re.sub(r'\$(\d+)', '%s', query)
 
-            # Extract positional params in order
+            # Extract positional params in order from dict keys
+            # NOTE: For proper ordering, caller should pass ordered tuple
+            # This fallback uses dict key order which may be incorrect
             result = []
+            keys = list(params.keys())
             for i in range(1, 100):  # Reasonable upper limit
                 placeholder = f"${i}"
                 if placeholder not in query:
                     break
-                # Find param by name (assuming keys like "1", "2" or param names)
-                param_key = str(i)
-                if param_key in params:
-                    result.append(params[param_key])
-                else:
-                    # Try to find by order in dict
-                    keys = list(params.keys())
-                    if i - 1 < len(keys):
-                        result.append(params[keys[i - 1]])
+                # Use dict key order (may not be correct!)
+                if i - 1 < len(keys):
+                    result.append(params[keys[i - 1]])
             return converted_query, tuple(result)
 
         # Default: return query and params as-is (no params or unknown style)

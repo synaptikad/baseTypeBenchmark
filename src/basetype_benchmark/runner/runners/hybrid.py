@@ -78,6 +78,45 @@ class HybridRunner:
         self.ts = ts_runner
         self.paradigm = paradigm
 
+    def execute(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        timeout_seconds: float = 300.0,
+    ) -> RunResult:
+        """Execute a query - auto-detects query type and routes appropriately.
+
+        This method is required for compatibility with the benchmark framework.
+        It automatically detects whether the query is:
+        - Graph-only (Cypher/SPARQL) → routes to graph runner
+        - Timeseries-only (SQL) → routes to timeseries runner
+        - Hybrid queries are not supported via this method; use execute_hybrid()
+
+        Args:
+            query: Query string (Cypher, SPARQL, or SQL)
+            params: Query parameters
+            timeout_seconds: Timeout
+
+        Returns:
+            RunResult from appropriate runner
+        """
+        # Simple detection based on query content
+        query_lower = query.lower().strip()
+
+        # Detect Cypher (M2)
+        if any(keyword in query_lower[:100] for keyword in ['match ', 'create ', 'merge ', 'return ']):
+            return self.graph.execute(query, params, timeout_seconds)
+
+        # Detect SPARQL (O2)
+        if any(keyword in query_lower[:100] for keyword in ['select ', 'construct ', 'describe ', 'ask ', 'prefix ']):
+            # Check if it's SPARQL or SQL
+            if 'where' in query_lower and '{' in query:
+                # SPARQL has WHERE { ... } patterns
+                return self.graph.execute(query, params, timeout_seconds)
+
+        # Default: SQL query → timeseries
+        return self.ts.execute(query, params, timeout_seconds)
+
     def execute_hybrid(
         self,
         graph_query: str,
@@ -311,6 +350,35 @@ class HybridRunner:
         """Close both connections."""
         self.graph.close()
         self.ts.close()
+
+    def get_query_plan(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict | None:
+        """Get query plan - routes to appropriate runner.
+
+        Args:
+            query: Query string
+            params: Query parameters
+
+        Returns:
+            Query plan if supported, None otherwise
+        """
+        # Detect query type using same logic as execute()
+        query_lower = query.lower().strip()
+
+        # Cypher query
+        if any(keyword in query_lower[:100] for keyword in ['match ', 'create ', 'merge ', 'return ']):
+            return self.graph.get_query_plan(query, params)
+
+        # SPARQL query
+        if any(keyword in query_lower[:100] for keyword in ['select ', 'construct ', 'describe ', 'ask ', 'prefix ']):
+            if 'where' in query_lower and '{' in query:
+                return self.graph.get_query_plan(query, params)
+
+        # SQL query
+        return self.ts.get_query_plan(query, params)
 
     def __enter__(self) -> "HybridRunner":
         """Context manager entry."""

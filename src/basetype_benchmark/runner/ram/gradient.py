@@ -448,16 +448,36 @@ class RAMGradientExecutor:
                     end=""
                 )
 
+            # Get query definition and files
+            query_def = self._catalog.get_query(query_id)
+            query_files = self._load_query_files(query_id)
+
             for variant_id in range(self.n_variants):
                 params = self._get_variant_params(query_id, variant_id)
 
+                # Convert params to ordered tuple for P1/P2 (SQL positional binding)
+                if self.paradigm in ("P1", "P2"):
+                    from ..core.query_utils import get_ordered_params
+                    params = get_ordered_params(params, query_def.parameter_order)
+
                 for run_id in range(self.n_runs):
                     try:
-                        result = runner.execute(
-                            self._get_query_text(query_id),
-                            params,
-                            self.timeout,
-                        )
+                        # Execute based on query category
+                        if query_def.category == "hybrid" and self.paradigm in ("M2", "O2"):
+                            # Hybrid execution: two-phase (graph + timeseries)
+                            result = runner.execute_hybrid(
+                                query_files["graph_query"],
+                                query_files["ts_query"],
+                                params,
+                                float(self.timeout),
+                            )
+                        else:
+                            # Single-phase execution
+                            result = runner.execute(
+                                query_files["query"],
+                                params,
+                                float(self.timeout),
+                            )
 
                         query_stats.runs.append(QueryRunResult(
                             query_id=query_id,
@@ -551,34 +571,104 @@ class RAMGradientExecutor:
 
         return get_runner(self.paradigm, config)
 
-    def _get_query_text(self, query_id: str) -> str:
-        """Get query text for execution.
+    def _load_query_files(self, query_id: str) -> dict[str, str]:
+        """Load query file(s) for execution based on paradigm and category.
 
-        Loads from queries/{paradigm}/{query_id}.{ext}
-        For hybrid paradigms (M2, O2), loads from queries/{paradigm}/graph/
+        Returns:
+            Dictionary with keys:
+            - "query": Single query text (for non-hybrid)
+            - "graph_query": Graph phase query (for hybrid)
+            - "ts_query": Timeseries phase query (for hybrid)
         """
+        from ..core.query_utils import strip_query_comments
+
+        query_def = self._catalog.get_query(query_id)
+        category = query_def.category
         queries_dir = Path(__file__).parents[4] / "queries"
 
-        # Map paradigm to directory and extension
-        paradigm_lower = self.paradigm.lower()
-        if self.paradigm in ("P1", "P2"):
-            query_file = queries_dir / paradigm_lower / f"{query_id}.sql"
-        elif self.paradigm == "M1":
-            query_file = queries_dir / "m1" / f"{query_id}.cypher"
-        elif self.paradigm == "M2":
-            query_file = queries_dir / "m2" / "graph" / f"{query_id}.cypher"
-        elif self.paradigm == "O2":
-            query_file = queries_dir / "o2" / "graph" / f"{query_id}.sparql"
+        # Single-file paradigms: P1, P2, M1
+        if self.paradigm in ("P1", "P2", "M1"):
+            ext_map = {"P1": "sql", "P2": "sql", "M1": "cypher"}
+            ext = ext_map[self.paradigm]
+            query_file = queries_dir / self.paradigm.lower() / f"{query_id}.{ext}"
+
+            if not query_file.exists():
+                raise GradientError(f"Query file not found: {query_file}")
+
+            text = query_file.read_text(encoding="utf-8")
+            cleaned = strip_query_comments(text, ext)
+            return {"query": cleaned}
+
+        # Hybrid paradigms: M2, O2 - route by category
+        elif self.paradigm in ("M2", "O2"):
+            ext = "cypher" if self.paradigm == "M2" else "sparql"
+
+            if category == "graph_only":
+                # Q1-Q5: Load from graph/ subdirectory
+                query_file = queries_dir / self.paradigm.lower() / "graph" / f"{query_id}.{ext}"
+
+                if not query_file.exists():
+                    raise GradientError(f"Query file not found: {query_file}")
+
+                text = query_file.read_text(encoding="utf-8")
+                cleaned = strip_query_comments(text, ext)
+                return {"query": cleaned}
+
+            elif category == "timeseries_pure":
+                # Q6: Load from ts/ subdirectory (SQL)
+                query_file = queries_dir / self.paradigm.lower() / "ts" / f"{query_id}.sql"
+
+                if not query_file.exists():
+                    # Graceful fallback
+                    self._console.print(
+                        f"[yellow]Warning: Query file not found: {query_file}[/yellow]"
+                    )
+                    return {"query": f"-- Query {query_id} not implemented for {self.paradigm}"}
+
+                text = query_file.read_text(encoding="utf-8")
+                cleaned = strip_query_comments(text, "sql")
+                return {"query": cleaned}
+
+            elif category == "hybrid":
+                # Q7-Q13: Load BOTH graph and ts files
+                graph_file = queries_dir / self.paradigm.lower() / "graph" / f"{query_id}.{ext}"
+                ts_file = queries_dir / self.paradigm.lower() / "ts" / f"{query_id}.sql"
+
+                if not graph_file.exists() or not ts_file.exists():
+                    missing = []
+                    if not graph_file.exists():
+                        missing.append(str(graph_file))
+                    if not ts_file.exists():
+                        missing.append(str(ts_file))
+                    raise GradientError(f"Hybrid query files not found: {', '.join(missing)}")
+
+                graph_text = graph_file.read_text(encoding="utf-8")
+                ts_text = ts_file.read_text(encoding="utf-8")
+
+                return {
+                    "graph_query": strip_query_comments(graph_text, ext),
+                    "ts_query": strip_query_comments(ts_text, "sql"),
+                }
+
+            else:
+                # Unknown category
+                raise GradientError(f"Unknown category '{category}' for {query_id}")
+
         else:
             raise GradientError(f"Unknown paradigm: {self.paradigm}")
 
-        if not query_file.exists():
-            raise GradientError(f"Query file not found: {query_file}")
+    def _get_query_text(self, query_id: str) -> str:
+        """Get query text for execution (backward compatibility).
 
-        return query_file.read_text(encoding="utf-8")
+        DEPRECATED: Use _load_query_files() instead.
+        """
+        files = self._load_query_files(query_id)
+        return files.get("query", "")
 
     def _get_default_params(self, query_id: str) -> dict[str, Any]:
         """Get default parameters for a query from golden_answers.yaml."""
+        from ..core.query_utils import normalize_param_keys
+
         if not hasattr(self, "_golden_answers"):
             golden_path = Path(__file__).parents[4] / "queries" / "golden_answers.yaml"
             if golden_path.exists():
@@ -596,6 +686,15 @@ class RAMGradientExecutor:
         # Merge with default parameters
         defaults = self._golden_answers.get("default_parameters", {})
         merged = {**defaults, **params}
+
+        # Normalize parameter key casing based on paradigm
+        if self.paradigm in ("M1", "M2"):
+            # Cypher uses lowercase parameter names
+            merged = normalize_param_keys(merged, target_case="lower")
+        elif self.paradigm == "O2":
+            # SPARQL uses camelCase parameter names
+            merged = normalize_param_keys(merged, target_case="camel")
+        # P1/P2 SQL: positional parameters, case doesn't matter for keys
 
         return merged
 

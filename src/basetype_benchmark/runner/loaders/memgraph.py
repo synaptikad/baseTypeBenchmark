@@ -200,13 +200,21 @@ class MemgraphLoader(BaseLoader):
                     # Always switch back to transactional mode
                     self._set_storage_mode(session, "IN_MEMORY_TRANSACTIONAL")
 
-            # Phase 4: Timeseries (M2 only, vers TimescaleDB)
-            if self.paradigm == "M2":
-                ts_file = data_dir / "timeseries.csv"
-                if ts_file.exists() and self.timescale_config:
+            # Phase 4: Timeseries
+            ts_file = data_dir / "timeseries.csv"
+            if ts_file.exists():
+                if self.paradigm == "M2" and self.timescale_config:
+                    # M2: Load to TimescaleDB
                     result.timeseries_loaded = self._load_timeseries_m2(
                         ts_file, workers, progress_callback
                     )
+                elif self.paradigm == "M1":
+                    # M1: Load as daily chunk nodes in Memgraph
+                    driver = self._get_driver()
+                    with driver.session() as session:
+                        result.timeseries_loaded = self._load_timeseries_m1(
+                            session, ts_file, workers, progress_callback
+                        )
 
         except Exception as e:
             result.add_error(str(e))
@@ -421,8 +429,98 @@ class MemgraphLoader(BaseLoader):
         return loaded
 
     # =========================================================================
-    # TIMESERIES (M2 only)
+    # TIMESERIES
     # =========================================================================
+
+    def _load_timeseries_m1(
+        self,
+        session: Session,
+        csv_file: Path,
+        workers: int,
+        callback: ProgressCallback | None,
+    ) -> int:
+        """Charge les timeseries comme daily chunk nodes (M1 seulement).
+
+        Modèle de données:
+        - Un node TimeseriesChunk par (point_id, date)
+        - Properties: point_id, date, values[], timestamps[]
+        - Relation: (Point)-[:HAS_CHUNK]->(TimeseriesChunk)
+        """
+        from collections import defaultdict
+        from datetime import datetime
+
+        total_count = self._count_csv_rows(csv_file)
+        self._emit_progress(callback, LoadPhase.TIMESERIES, 0, total_count)
+
+        start = time.time()
+
+        # Group timeseries by (point_id, date)
+        chunks = defaultdict(lambda: {"timestamps": [], "values": []})
+
+        with open(csv_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Parse timestamp (format: "2024-01-15T08:00:00Z")
+                ts_str = row["time"]
+                value = float(row["value"])
+                point_id = row["point_id"]
+
+                # Extract date (YYYY-MM-DD)
+                date = ts_str[:10]
+
+                # Group by (point_id, date)
+                key = (point_id, date)
+                chunks[key]["timestamps"].append(ts_str)
+                chunks[key]["values"].append(value)
+
+        # Create TimeseriesChunk nodes
+        loaded = 0
+        batch_size = 1000
+        chunk_rows = []
+
+        for (point_id, date), data in chunks.items():
+            chunk_rows.append({
+                "point_id": point_id,
+                "date": date,
+                "timestamps": data["timestamps"],
+                "values": data["values"],
+            })
+
+            if len(chunk_rows) >= batch_size:
+                self._create_ts_chunks(session, chunk_rows)
+                loaded += len(chunk_rows)
+
+                elapsed = time.time() - start
+                rate = loaded / elapsed if elapsed > 0 else 0
+                self._emit_progress(callback, LoadPhase.TIMESERIES, loaded, total_count, rate)
+
+                chunk_rows = []
+
+        # Load remaining chunks
+        if chunk_rows:
+            self._create_ts_chunks(session, chunk_rows)
+            loaded += len(chunk_rows)
+
+        elapsed = time.time() - start
+        rate = loaded / elapsed if elapsed > 0 else 0
+        self._emit_progress(callback, LoadPhase.TIMESERIES, total_count, total_count, rate)
+
+        return total_count
+
+    def _create_ts_chunks(self, session: Session, chunks: list[dict]) -> None:
+        """Create TimeseriesChunk nodes and link to Points."""
+        query = """
+        UNWIND $chunks AS chunk
+        MATCH (p:Point {id: chunk.point_id})
+        CREATE (ts:TimeseriesChunk {
+            point_id: chunk.point_id,
+            date: chunk.date,
+            timestamps: chunk.timestamps,
+            values: chunk.values
+        })
+        CREATE (p)-[:HAS_CHUNK]->(ts)
+        """
+        session.run(query, chunks=chunks)
 
     def _load_timeseries_m2(
         self,

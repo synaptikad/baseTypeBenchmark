@@ -82,6 +82,16 @@ class QueryDefinition(BaseModel):
                 return getattr(p.format, dialect, None)
         return None
 
+    @property
+    def parameter_order(self) -> list[str]:
+        """Get parameter names in their defined order.
+
+        Returns:
+            List of parameter names in the order they appear in the catalog.
+            This order is used for positional parameter binding in SQL.
+        """
+        return [p.name for p in self.parameters]
+
 
 class CategoryDefinition(BaseModel):
     """Query category definition."""

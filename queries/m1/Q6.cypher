@@ -1,16 +1,31 @@
 // Q6: Hourly Aggregation
-// Status: IMPOSSIBLE pour M1 (Memgraph Standalone)
-// Raison: M1 n'a pas de moteur timeseries intégré.
-//         Les agrégations temporelles (time_bucket, AVG, MIN, MAX par heure)
-//         ne sont pas supportées nativement.
+// Paramètres: $point_id, $date_start, $date_end
+// Intention: Agrégation horaire des valeurs pour un point donné
 //
-// Alternative: Utiliser M2 (Memgraph + TimescaleDB externe)
-//
-// Paramètres attendus:
-//   $point_id: ID du point de mesure
-//   $date_start: Début de période (Unix timestamp ms)
-//   $date_end: Fin de période (Unix timestamp ms)
-//
-// Cette query retourne toujours un résultat vide pour M1.
+// Modèle M1: Utilise TimeseriesChunk nodes avec arrays de timestamps/values
+// Déroule (UNWIND) les arrays et agrège par heure
 
-RETURN "IMPOSSIBLE: M1 ne supporte pas les agrégations timeseries" AS error;
+MATCH (p:Point {id: $point_id})-[:HAS_CHUNK]->(chunk:TimeseriesChunk)
+WHERE chunk.date >= substring($date_start, 0, 10)
+  AND chunk.date <= substring($date_end, 0, 10)
+
+// Dérouler les arrays de timestamps et values
+UNWIND range(0, size(chunk.timestamps) - 1) AS idx
+WITH chunk.timestamps[idx] AS timestamp,
+     chunk.values[idx] AS value
+
+// Extraire l'heure (format: "2024-01-15T08:00:00Z" -> "2024-01-15 08")
+WITH substring(timestamp, 0, 13) AS hour,
+     value
+
+// Filtrer par plage de temps
+WHERE timestamp >= $date_start AND timestamp <= $date_end
+
+// Agréger par heure
+RETURN
+    hour + ':00:00' AS time_bucket,
+    avg(value) AS avg_value,
+    min(value) AS min_value,
+    max(value) AS max_value,
+    count(value) AS sample_count
+ORDER BY time_bucket;
