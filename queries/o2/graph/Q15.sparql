@@ -14,7 +14,7 @@ WHERE {
         btb:id ?equipment_id ;
         btb:name ?name ;
         btb:equipmentType ?equipment_type ;
-        btb:warrantyEnd ?warranty_end .
+        btb:metadataWarrantyEnd ?warranty_end .
 
     FILTER(?warranty_end >= ?ref_date)
     FILTER(?warranty_end <= ?ref_date + xsd:dayTimeDuration(CONCAT("P", STR(?days_ahead), "D")))
