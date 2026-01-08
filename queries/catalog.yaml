@@ -24,6 +24,9 @@ categories:
   graph_native:
     description: "Algorithmes graphe natifs (M1/M2=NATIVE)"
     queries: [Q10, Q11, Q20, Q21, Q22, Q23]
+  write_workload:
+    description: "Workloads d'écriture (ingestion, mutation)"
+    queries: [QW1, QW2, QW3]
 
 # ===========================================================================
 # QUERIES
@@ -941,6 +944,143 @@ queries:
       M1: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
       M2: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
       O2: {status: DEGRADED, note: "Property path avec limite partiel"}
+
+  # -------------------------------------------------------------------------
+  # WRITE WORKLOADS (QW1-QW3)
+  # -------------------------------------------------------------------------
+
+  QW1:
+    name: "Timeseries Append"
+    category: write_workload
+    intention: |
+      Simuler l'ingestion continue de nouvelles mesures IoT.
+      Append-only sur la table timeseries (usage middleware/gateway).
+    use_case: "Ingestion capteurs, gateway IoT, middleware temps réel"
+    parameters:
+      - name: POINT_IDS
+        type: array_string
+        description: "Liste d'IDs de points pour l'insertion batch"
+        format:
+          sql: "%(point_ids)s"
+          cypher: "$point_ids"
+        example: "['point_1', 'point_2', 'point_3']"
+      - name: TIMESTAMPS
+        type: array_timestamp
+        description: "Liste de timestamps correspondants"
+        format:
+          sql: "%(timestamps)s"
+          cypher: "$timestamps"
+        example: "['2024-01-15T10:00:00Z', '2024-01-15T10:00:01Z']"
+      - name: VALUES
+        type: array_float
+        description: "Liste de valeurs mesurées"
+        format:
+          sql: "%(values)s"
+          cypher: "$values"
+        example: "[21.5, 22.0, 21.8]"
+    write_mode: append
+    result_schema:
+      columns:
+        - {name: rows_written, type: integer, description: "Nombre de lignes insérées"}
+      metrics:
+        - rows_written
+        - throughput_rows_per_sec
+    paradigm_status:
+      P1: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
+      P2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
+      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB, TS dans Memgraph (chunked)"}
+      M2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
+      O2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
+
+  QW2:
+    name: "Metadata Update"
+    category: write_workload
+    intention: |
+      Mettre à jour des métadonnées/tags sur un équipement ou point.
+      Représente les opérations de calibration, tagging, catégorisation.
+    use_case: "Calibration capteur, mise à jour tags, modification propriétés"
+    parameters:
+      - name: NODE_ID
+        type: string
+        description: "ID du node à mettre à jour"
+        format:
+          sql: "%(node_id)s"
+          cypher: "$node_id"
+          sparql: "?nodeId"
+        example: "eq_mainmeter_1"
+      - name: TAG_KEY
+        type: string
+        description: "Clé du tag à ajouter/modifier"
+        format:
+          sql: "%(tag_key)s"
+          cypher: "$tag_key"
+          sparql: "?tagKey"
+        example: "calibration_status"
+      - name: TAG_VALUE
+        type: string
+        description: "Valeur du tag"
+        format:
+          sql: "%(tag_value)s"
+          cypher: "$tag_value"
+          sparql: "?tagValue"
+        example: "verified"
+    write_mode: update
+    result_schema:
+      columns:
+        - {name: rows_updated, type: integer, description: "Nombre de lignes modifiées"}
+      metrics:
+        - rows_written
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB properties dans P1"}
+      P2: {status: NATIVE, note: "UPDATE nodes SET data = jsonb_set(...)"}
+      M1: {status: NATIVE, note: "SET node.tag_key = tag_value"}
+      M2: {status: NATIVE, note: "SET node.tag_key = tag_value"}
+      O2: {status: DEGRADED, note: "DELETE/INSERT triple (pas de vrai UPDATE)"}
+
+  QW3:
+    name: "Relation Mutation"
+    category: write_workload
+    intention: |
+      Ajouter ou supprimer une relation entre équipements.
+      Représente les reconfigurations structurelles rares.
+    use_case: "Reconfiguration électrique, déplacement équipement, réorganisation"
+    parameters:
+      - name: SOURCE_ID
+        type: string
+        description: "ID nœud source de la relation"
+        format:
+          sql: "%(source_id)s"
+          cypher: "$source_id"
+          sparql: "?sourceId"
+        example: "eq_mainmeter_1"
+      - name: TARGET_ID
+        type: string
+        description: "ID nœud cible de la relation"
+        format:
+          sql: "%(target_id)s"
+          cypher: "$target_id"
+          sparql: "?targetId"
+        example: "eq_submeter_new"
+      - name: REL_TYPE
+        type: string
+        description: "Type de relation à créer"
+        format:
+          sql: "%(rel_type)s"
+          cypher: "$rel_type"
+          sparql: "?relType"
+        example: "FEEDS"
+    write_mode: insert
+    result_schema:
+      columns:
+        - {name: rows_inserted, type: integer, description: "Nombre de relations créées"}
+      metrics:
+        - rows_written
+    paradigm_status:
+      P1: {status: NATIVE, note: "INSERT INTO edges (source_id, target_id, rel_type)"}
+      P2: {status: NATIVE, note: "INSERT INTO edges (source_id, target_id, rel_type)"}
+      M1: {status: NATIVE, note: "MERGE (a)-[r:REL_TYPE]->(b)"}
+      M2: {status: NATIVE, note: "MERGE (a)-[r:REL_TYPE]->(b)"}
+      O2: {status: DEGRADED, note: "INSERT DATA triple (nécessite URI construction)"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

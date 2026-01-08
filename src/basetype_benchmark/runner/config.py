@@ -29,12 +29,13 @@ class EngineType(str, Enum):
 
 
 class QueryCategory(str, Enum):
-    """Categories de queries (catalog.yaml:11-26)."""
+    """Categories de queries (catalog.yaml:11-29)."""
     GRAPH_ONLY = "graph_only"           # Q1-Q5
     TIMESERIES_PURE = "timeseries_pure" # Q6
     HYBRID = "hybrid"                   # Q7-Q13
     JSONB_SPECIFIC = "jsonb_specific"   # Q14-Q19
     GRAPH_NATIVE = "graph_native"       # Q20-Q23
+    WRITE_WORKLOAD = "write_workload"   # QW1-QW3
 
 
 class ParadigmStatus(str, Enum):

@@ -461,6 +461,40 @@ answers:
       - Hop 2: temp_sensor_1_2 (via space_1_2)
       Total: 6 nœuds atteignables en 3 hops max
 
+  # ---------------------------------------------------------------------------
+  # WRITE WORKLOADS (QW1-QW3)
+  # ---------------------------------------------------------------------------
+
+  QW1:
+    name: "Timeseries Append"
+    parameters:
+      point_ids: ["point_eq_vav_175_discharge_temp", "point_eq_vav_176_zone_temp"]
+      timestamps: ["2024-01-17T00:00:00Z", "2024-01-17T00:00:00Z"]
+      values: [21.5, 22.0]
+    expected:
+      rows_written: 2
+    notes: "Insert 2 timeseries rows into shared Timescale"
+
+  QW2:
+    name: "Metadata Update"
+    parameters:
+      node_id: "eq_mainmeter_1"
+      tag_key: "calibration_status"
+      tag_value: "verified"
+    expected:
+      rows_updated: 1
+    notes: "Update JSONB data on a node (P2 only)"
+
+  QW3:
+    name: "Relation Mutation"
+    parameters:
+      source_id: "eq_mainmeter_1"
+      target_id: "eq_submeter_100"
+      rel_type: "FEEDS"
+    expected:
+      rows_inserted: 1
+    notes: "Insert a new FEEDS edge between equipment"
+
 # ===========================================================================
 # VALIDATION RULES
 # ===========================================================================
@@ -468,6 +502,7 @@ validation:
   cross_paradigm_queries: [Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q13]
   p2_only_queries: [Q14, Q15, Q16, Q17, Q18, Q19]
   graph_native_queries: [Q20, Q21, Q22, Q23]
+  write_workloads: [QW1, QW2, QW3]
   tolerance:
     float_precision: 0.01
     row_count_exact: true

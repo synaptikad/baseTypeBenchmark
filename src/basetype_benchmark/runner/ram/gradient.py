@@ -19,7 +19,7 @@ from typing import Any, Callable, Literal
 
 from rich.console import Console
 
-from ..config import EngineType
+from ..config import EngineType, QueryCategory
 from ..core.catalog import QueryCatalog
 from ..monitoring import (
     MetricsSampler,
@@ -458,7 +458,8 @@ class RAMGradientExecutor:
                 params = self._get_variant_params(query_id, variant_id)
 
                 # Convert params to ordered tuple for P1/P2 (SQL positional binding)
-                if self.paradigm in ("P1", "P2"):
+                # Skip for write_workload which uses named placeholders %(name)s
+                if self.paradigm in ("P1", "P2") and query_def.category != QueryCategory.WRITE_WORKLOAD:
                     from ..core.query_utils import get_ordered_params
                     params = get_ordered_params(params, query_def.parameter_order)
 
@@ -660,11 +661,20 @@ class RAMGradientExecutor:
         if self.paradigm in ("P1", "P2", "M1"):
             ext_map = {"P1": "sql", "P2": "sql", "M1": "cypher"}
             ext = ext_map[self.paradigm]
-            query_file = self._find_query_file(
-                queries_dir / self.paradigm.lower(),
-                query_id,
-                ext
-            )
+
+            # Check for write_workload category - look in write/ subdirectory
+            if category == QueryCategory.WRITE_WORKLOAD:
+                query_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower() / "write",
+                    query_id,
+                    ext
+                )
+            else:
+                query_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower(),
+                    query_id,
+                    ext
+                )
 
             if query_file is None:
                 raise GradientError(f"Query file not found for {query_id} in {self.paradigm}")
@@ -742,6 +752,21 @@ class RAMGradientExecutor:
                     "graph_query": strip_query_comments(graph_text, ext),
                     "ts_query": strip_query_comments(ts_text, "sql"),
                 }
+
+            elif category == QueryCategory.WRITE_WORKLOAD:
+                # Write workloads: look in write/ subdirectory
+                query_file = self._find_query_file(
+                    queries_dir / self.paradigm.lower() / "write",
+                    query_id,
+                    ext
+                )
+
+                if query_file is None:
+                    raise GradientError(f"Query file not found for {query_id} in {self.paradigm}/write")
+
+                text = query_file.read_text(encoding="utf-8")
+                cleaned = strip_query_comments(text, ext)
+                return {"query": cleaned}
 
             else:
                 # Unknown category

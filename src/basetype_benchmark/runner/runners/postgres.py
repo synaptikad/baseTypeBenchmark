@@ -113,15 +113,22 @@ class PostgresRunner(BaseRunner):
             else:
                 cursor = conn.execute(query)
 
-            # Fetch results
-            rows = cursor.fetchall()
+            # Fetch results (handle write queries that don't return rows)
+            try:
+                rows = cursor.fetchall()
+                row_count = len(rows)
+            except psycopg.ProgrammingError:
+                # INSERT/UPDATE/DELETE don't return rows - use rowcount
+                rows = []
+                row_count = cursor.rowcount if cursor.rowcount >= 0 else 0
+
             duration_ms = (time.perf_counter() - start) * 1000
 
             return RunResult(
                 rows=rows,
                 duration_ms=duration_ms,
                 status=RunStatus.SUCCESS,
-                row_count=len(rows),
+                row_count=row_count,
             )
 
         except psycopg.OperationalError as e:
