@@ -123,8 +123,15 @@ class OxigraphLoader(BaseLoader):
     # PUBLIC INTERFACE
     # =========================================================================
 
-    def clear_database(self) -> bool:
-        """Vide la base Oxigraph."""
+    def clear_database(self, keep_timeseries: bool = False) -> bool:
+        """Vide la base Oxigraph.
+
+        Args:
+            keep_timeseries: If True, preserve TimescaleDB data (O2)
+
+        Returns:
+            True if successful
+        """
         try:
             client = self._get_client()
             # DROP ALL via SPARQL Update
@@ -133,6 +140,13 @@ class OxigraphLoader(BaseLoader):
                 content="DROP ALL",
                 headers={"Content-Type": "application/sparql-update"},
             )
+
+            # O2: Also clear TimescaleDB structure (but optionally keep timeseries)
+            if self.timescale_config:
+                from .postgres import PostgresLoader
+                pg_loader = PostgresLoader(self.timescale_config, paradigm="P1")
+                pg_loader.clear_database(keep_timeseries=keep_timeseries)
+
             return response.status_code in (200, 204)
         except Exception as e:
             print(f"Error clearing database: {e}")
