@@ -111,12 +111,16 @@ Legend:
   - Fix applied: Q15 warranty predicate (btb:warrantyEnd → btb:metadataWarrantyEnd)
   - Audit complete: Q14-Q19 other properties correct
   - Runner category support: jsonb_specific/graph_native now working (commit 914b421)
-- **Bug #4 - O2 SPARQL Parameter Binding**: ✅ FIXED (2026-01-08, commit 96a38ea)
+- **Bug #4 - O2 SPARQL Parameter Binding**: ✅ FIXED & VALIDATED (2026-01-08)
   - **Problem**: Naive string replacement corrupted SPARQL variables (HTTP 400 errors on Q1/Q15)
   - **Solution**: VALUES injection mechanism (`VALUES ?meterId { "value" }` after WHERE {)
-  - **Files modified**: oxigraph.py (+147/-35), Q1.sparql (-2), Q15.sparql (-3)
-  - **Documentation**: [15_values_injection_solution.md](15_values_injection_solution.md)
-  - **Status**: Ready for validation testing (Q1, Q15, Q16)
+  - **Implementation**: commit 96a38ea (oxigraph.py +147/-35, Q1.sparql -2, Q15.sparql -3)
+  - **Validation**: commit fecf8a3 (tested on live Oxigraph, 23,570 triples)
+    * Q1 (single param): 73 results, 34.23ms ✅
+    * Q15 (multi params): SUCCESS, 44.89ms ✅
+    * Q16 (no params): 159 results, 37.68ms ✅
+  - **Documentation**: [15_values_injection_solution.md](15_values_injection_solution.md), [16_bug4_validation_report.md](16_bug4_validation_report.md)
+  - **Status**: PRODUCTION READY
 - Hybrid RAM split ratio: TODO (future work)
 - Rounding rule: TODO (future work)
 - Any deviations from the paper/spec: None yet

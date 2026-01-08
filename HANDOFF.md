@@ -253,13 +253,18 @@ Ce document fait le point sur l'implémentation de **l'Option A** (Timescale par
    - Fix: POST `/store?default` → triples dans graphe par défaut
    - Résultat: Q16 fonctionne (159 résultats)
 
-4. **SPARQL Parameter Binding** (commit 96a38ea) ✅ **FIXED**
+4. **SPARQL Parameter Binding** (commit 96a38ea) ✅ **FIXED & VALIDATED**
    - Problème: Substitution naïve `query.replace("?key", value)` corrompt variables SPARQL
    - Symptôme: Q1, Q15 échouent (HTTP 400 parse errors), Q16 OK (pas de params)
    - Fix: VALUES injection → `VALUES ?meterId { "meter_main_1" }` après WHERE {
    - Résultat: Binding conforme SPARQL 1.1, type-safe (date, dateTime, int, etc.)
    - Documentation: `refactor/15_values_injection_solution.md`
-   - Status: **Ready for validation testing**
+   - Validation (commit fecf8a3):
+     * Q1: 73 results, 34.23ms, SUCCESS ✅
+     * Q15: 0 results (data), 44.89ms, SUCCESS ✅
+     * Q16: 159 results, 37.68ms, SUCCESS ✅
+     * Tested on live Oxigraph (23,570 triples)
+   - Status: **PRODUCTION READY** (see `refactor/16_bug4_validation_report.md`)
 
 ---
 
