@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal
 from rich.console import Console
 
 from ..config import EngineType
+from ..core.catalog import QueryCatalog
 from ..monitoring import (
     MetricsSampler,
     MultiContainerSampler,
@@ -273,6 +274,7 @@ class RAMGradientExecutor:
 
         self._docker = DockerClient()
         self._console = Console()
+        self._catalog = QueryCatalog()  # Fix Bug #4: Initialize catalog
 
     def run_gradient(
         self,
@@ -639,8 +641,11 @@ class RAMGradientExecutor:
         elif self.paradigm in ("M2", "O2"):
             ext = "cypher" if self.paradigm == "M2" else "sparql"
 
-            if category == "graph_only":
-                # Q1-Q5, Q10-Q11: Load from graph/ subdirectory
+            if category in ("graph_only", "graph_native", "jsonb_specific"):
+                # Q1-Q5, Q10-Q11: graph_only
+                # Q20-Q23: graph_native
+                # Q14-Q19: jsonb_specific (O2 has SPARQL implementations)
+                # All load from graph/ subdirectory
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "graph",
                     query_id,
