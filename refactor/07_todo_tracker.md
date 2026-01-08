@@ -37,6 +37,14 @@ Legend:
 - [x] D2. Warmup uses ordered params for SQL (optional) (Phase 2.1: dc448da - catalog-based ordering)
 - [ ] D3. Hybrid runner behavior correct when graph returns empty point_ids
 - [ ] D4. UNIMPLEMENTED/IMPOSSIBLE queries are recorded, not fatal
+- [x] D5. Support jsonb_specific/graph_native categories for M2/O2 (commit 914b421)
+- [x] D6. Fix Turtle syntax in O2 exporter ontology (commit 4356334)
+- [x] D7. O2 loader targets default graph with ?default param (commit ff0a0ae)
+- [x] D8. O2 param substitution breaks SPARQL syntax (CRITICAL - FIXED commit 96a38ea)
+  - **Fix applied**: Replaced naive `query.replace("?key", value)` with VALUES injection
+  - **Method**: Injects `VALUES (?var) { (val) }` after WHERE { clause
+  - **Benefits**: SPARQL 1.1 compliant, preserves query variables, type-safe
+  - See: [15_values_injection_solution.md](15_values_injection_solution.md) for full documentation
 
 ## E. RDF/SPARQL alignment (O2)
 
@@ -98,11 +106,17 @@ Legend:
   - Bug #2: MultiContainerSampler type handling (gradient.py)
   - Bug #3: ERROR vs OOM message distinction (scenario.py)
   - See: `refactor/10_hotfix_applied.md` and `HOTFIX_RUNNER_BUGS.md`
-- **Phase 4 - RDF/SPARQL Alignment**: ✅ MOSTLY COMPLETE (2026-01-08)
+- **Phase 4 - RDF/SPARQL Alignment**: ✅ COMPLETE (2026-01-08)
   - Vocabulary: btb: namespace already correct (no Brick confusion)
   - Fix applied: Q15 warranty predicate (btb:warrantyEnd → btb:metadataWarrantyEnd)
   - Audit complete: Q14-Q19 other properties correct
-  - Known issue: Runner doesn't support jsonb_specific category for O2 (pre-existing bug, outside Phase 4 scope)
+  - Runner category support: jsonb_specific/graph_native now working (commit 914b421)
+- **Bug #4 - O2 SPARQL Parameter Binding**: ✅ FIXED (2026-01-08, commit 96a38ea)
+  - **Problem**: Naive string replacement corrupted SPARQL variables (HTTP 400 errors on Q1/Q15)
+  - **Solution**: VALUES injection mechanism (`VALUES ?meterId { "value" }` after WHERE {)
+  - **Files modified**: oxigraph.py (+147/-35), Q1.sparql (-2), Q15.sparql (-3)
+  - **Documentation**: [15_values_injection_solution.md](15_values_injection_solution.md)
+  - **Status**: Ready for validation testing (Q1, Q15, Q16)
 - Hybrid RAM split ratio: TODO (future work)
 - Rounding rule: TODO (future work)
 - Any deviations from the paper/spec: None yet

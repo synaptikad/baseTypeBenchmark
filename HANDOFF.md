@@ -236,6 +236,33 @@ Ce document fait le point sur l'implémentation de **l'Option A** (Timescale par
 
 ---
 
+### 🐛 Runner Bugs Fixed (2026-01-08 Post-Phase 4)
+
+**4 bugs découverts et fixés** lors du debug O2:
+
+1. **Runner categories** (commit 914b421)
+   - Problème: `jsonb_specific` et `graph_native` non supportés pour M2/O2
+   - Fix: Ajout support dans gradient.py (traite comme graph_only)
+
+2. **Turtle syntax** (commit 4356334)
+   - Problème: `btb: a owl:Ontology` invalide (préfixe seul)
+   - Fix: Utilise IRI complète `<http://basetype.benchmark/ontology#>`
+
+3. **Loader graph targeting** (commit ff0a0ae)
+   - Problème: POST `/store` sans `?default` → triples dans graphes nommés
+   - Fix: POST `/store?default` → triples dans graphe par défaut
+   - Résultat: Q16 fonctionne (159 résultats)
+
+4. **SPARQL Parameter Binding** (commit 96a38ea) ✅ **FIXED**
+   - Problème: Substitution naïve `query.replace("?key", value)` corrompt variables SPARQL
+   - Symptôme: Q1, Q15 échouent (HTTP 400 parse errors), Q16 OK (pas de params)
+   - Fix: VALUES injection → `VALUES ?meterId { "meter_main_1" }` après WHERE {
+   - Résultat: Binding conforme SPARQL 1.1, type-safe (date, dateTime, int, etc.)
+   - Documentation: `refactor/15_values_injection_solution.md`
+   - Status: **Ready for validation testing**
+
+---
+
 ### PRIORITÉ 1: G3 - RAM Gradient Testing (Next Phase)
 
 **Objectif**: Valider plateau/OOM behavior avec 2-3 RAM levels
