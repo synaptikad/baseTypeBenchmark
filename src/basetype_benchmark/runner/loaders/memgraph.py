@@ -116,8 +116,15 @@ class MemgraphLoader(BaseLoader):
     # PUBLIC INTERFACE
     # =========================================================================
 
-    def clear_database(self) -> bool:
-        """Vide la base Memgraph."""
+    def clear_database(self, keep_timeseries: bool = False) -> bool:
+        """Vide la base Memgraph.
+
+        Args:
+            keep_timeseries: If True, preserve TimescaleDB data (M2 only)
+
+        Returns:
+            True if successful
+        """
         try:
             driver = self._get_driver()
             with driver.session() as session:
@@ -144,6 +151,12 @@ class MemgraphLoader(BaseLoader):
                         session.run(f"DROP INDEX ON :{node_type}({prop})")
                     except Exception:
                         pass  # Index may not exist
+
+            # M2: Also clear TimescaleDB structure (but optionally keep timeseries)
+            if self.paradigm == "M2" and self.timescale_config:
+                from .postgres import PostgresLoader
+                pg_loader = PostgresLoader(self.timescale_config, paradigm="P1")
+                pg_loader.clear_database(keep_timeseries=keep_timeseries)
 
             return True
         except Exception as e:
