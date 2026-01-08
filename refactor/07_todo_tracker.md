@@ -11,30 +11,30 @@ Legend:
 
 ## A. Boot and orchestration
 
-- [ ] A1. Docker compose health: `timescale`, `memgraph`, `oxigraph` start and are healthy
-- [ ] A2. `IsolationManager` does not delete volumes (remove `down -v`)
+- [x] A1. Docker compose health: `timescale`, `memgraph`, `oxigraph` start and are healthy (Phase 0)
+- [x] A2. `IsolationManager` does not delete volumes (remove `down -v`) (Phase 3.1: 986858f)
 - [ ] A3. RAM limit updates apply correctly to container(s) at runtime
 - [ ] A4. Hybrid RAM split applied deterministically (document ratio and rounding)
 
 ## B. Option A shared Timescale
 
-- [ ] B1. Load timeseries once per dataset run (scenario-level flag)
-- [ ] B2. PostgresLoader.clear_database supports `keep_timeseries=True`
-- [ ] B3. P1/P2 do not truncate timeseries when switching paradigms
-- [ ] B4. M2/O2 loaders skip timeseries load when already present
-- [ ] B5. Regression: timeseries row count does not increase across paradigms
+- [x] B1. Load timeseries once per dataset run (scenario-level flag) (Phase 3.6: 986858f)
+- [x] B2. PostgresLoader.clear_database supports `keep_timeseries=True` (Phase 3.2: 0255089)
+- [x] B3. P1/P2 do not truncate timeseries when switching paradigms (Phase 3.2+3.6)
+- [x] B4. M2/O2 loaders skip timeseries load when already present (Phase 3.5: 058615c)
+- [x] B5. Regression: timeseries row count does not increase across paradigms (Phase 3.5: detection logic)
 
 ## C. Query catalog and file alignment
 
-- [ ] C1. Rename hybrid TS files (Q06 -> Q6 etc) or implement tolerant lookup
-- [ ] C2. Fix catalog categories: Q10/Q11 to graph_only
+- [x] C1. Rename hybrid TS files (Q06 -> Q6 etc) or implement tolerant lookup (Phase 1.2: bc729a6 - tolerant lookup)
+- [x] C2. Fix catalog categories: Q10/Q11 to graph_only (Phase 1.1: 290630e)
 - [ ] C3. Ensure every NATIVE query has a file for the paradigm
 - [ ] C4. Ensure every hybrid query has both graph+ts files
 
 ## D. Runner correctness fixes
 
 - [ ] D1. Escape literal `%` in PostgresRunner (LIKE patterns)
-- [ ] D2. Warmup uses ordered params for SQL (optional)
+- [x] D2. Warmup uses ordered params for SQL (optional) (Phase 2.1: dc448da - catalog-based ordering)
 - [ ] D3. Hybrid runner behavior correct when graph returns empty point_ids
 - [ ] D4. UNIMPLEMENTED/IMPOSSIBLE queries are recorded, not fatal
 
@@ -60,8 +60,14 @@ Legend:
 
 ## Notes / decisions log
 
-- Hybrid RAM split ratio:
-- Rounding rule:
-- RDF vocabulary decision:
-- Any deviations from the paper/spec:
+- **Option A Implementation**: Completed (Phases 3.1-3.6, commits 986858f through de78def)
+  - Volumes preserved across paradigm switches
+  - Timeseries detection and skip logic functional
+  - Orchestration tracks loaded state across paradigms
+- **Query file lookup**: Tolerant naming (Q6 ↔ Q06) implemented in Phase 1.2
+- **Parameter ordering**: Uses catalog-defined order (Phase 2.1)
+- Hybrid RAM split ratio: TODO (future work)
+- Rounding rule: TODO (future work)
+- RDF vocabulary decision: TODO (Phase 4 - deferred)
+- Any deviations from the paper/spec: None yet
 
