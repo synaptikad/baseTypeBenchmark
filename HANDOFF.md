@@ -392,15 +392,32 @@ docker exec benchmark-timescale psql -U postgres -d benchmark \
 
 ## ✅ Checklist pour Prochaine Session
 
-Avant de continuer:
+### État au 2026-01-08 (fin de session)
 
-1. [x] Lire `refactor/03_implementation_playbook.md` Phase 5
-2. [x] ~~Vérifier dataset existe~~ **Dataset supprimé (obsolète), sera régénéré par test e2e**
-3. [x] **HOTFIX APPLIED** (2026-01-08): 3 critical runner bugs fixed - see `refactor/10_hotfix_applied.md`
-4. [x] Test script created: `test_option_a_e2e.py` for automated validation
-5. [ ] **NEXT**: Execute Phase 5.3 validation (P1→P2→M2→O2) via `test_option_a_e2e.py`
-6. [ ] Mettre à jour `refactor/07_todo_tracker.md` avec résultats
+**Complété cette session**:
+- [x] G3 RAM Gradient Testing - 5 paradigmes testés avec 3 niveaux RAM
+- [x] Fix baseline measurement (commit 2bcd21b) - mesure query peak, pas load peak
+- [x] Documentation HANDOFF et todotracker à jour
+
+**Prochaines priorités**:
+1. [ ] **G4**: Medium profile testing (générer dataset medium-2d d'abord)
+2. [ ] **G5**: Full run avec tous les queries et statuses
+3. [ ] **H1-H6**: Write queries extension (Phase 6 du playbook)
+
+**Containers**: Recréés avec volumes frais (après corruption OOM tests)
+```bash
+docker ps --filter "name=benchmark"
+# benchmark-timescale, benchmark-memgraph, benchmark-oxigraph should be healthy
+```
+
+**Commits récents**:
+```bash
+git log --oneline -5
+# 2bcd21b Fix baseline measurement: reset memory.peak after load
+# e05e8f8 Doc: Update HANDOFF and todotracker for bug #4 fix
+# 96a38ea Fix Oxigraph runner SPARQL parameter binding
+```
 
 ---
 
-**Résumé**: Phases 0-3 du playbook sont **COMPLÈTES et TESTÉES**. Continuer avec Phase 5 (tests d'acceptation) selon ordre du playbook. Phase 4 optionnelle (O2 uniquement).
+**Résumé**: G3 RAM Gradient ✅ COMPLETE. Baseline fix appliqué. Prochaine étape: G4 medium profile ou H1 write queries.
