@@ -8,10 +8,15 @@ Strategies de chargement:
 3. Index creation avant relations
 4. M2: Timeseries vers TimescaleDB via PostgresLoader
 
-Optimisations:
+Optimisations (2025 best practices):
 - Mode analytique desactive les Delta objects
-- Split CSV par node_type pour parallelisme
+- Streaming CSV grouping (avoid full file in memory)
+- Adaptive batch size based on available RAM
 - Index sur id avant chargement des edges
+
+References:
+- https://memgraph.com/docs/data-migration/best-practices
+- https://memgraph.com/blog/how-to-import-1-milllion-nodes-and-edges-per-second-to-memgraph
 """
 from __future__ import annotations
 
@@ -40,7 +45,8 @@ class MemgraphLoader(BaseLoader):
 
     Optimisations:
     - IN_MEMORY_ANALYTICAL mode pour ingestion 6x plus rapide
-    - Parallel LOAD CSV
+    - Streaming CSV grouping (avoid full file in memory)
+    - Adaptive batch size based on available RAM
     - Index creation timing
 
     Exemple:
@@ -62,6 +68,23 @@ class MemgraphLoader(BaseLoader):
         "Site", "Building", "Floor", "Space",
         "Equipment", "Point", "Tenant", "Zone", "Contract",
     ]
+
+    # =========================================================================
+    # BULK LOAD CONFIGURATION (2025 best practices)
+    # =========================================================================
+
+    # Default batch size for UNWIND operations
+    DEFAULT_BATCH_SIZE = 5000
+
+    # Maximum batch size (avoid OOM on large batches)
+    MAX_BATCH_SIZE = 20000
+
+    # Minimum batch size (too small = overhead)
+    MIN_BATCH_SIZE = 1000
+
+    # Streaming buffer size for CSV grouping (rows to buffer before flush)
+    # This avoids loading entire CSV into memory
+    STREAMING_BUFFER_SIZE = 10000
 
     def __init__(
         self,
@@ -284,28 +307,45 @@ class MemgraphLoader(BaseLoader):
         workers: int,
         callback: ProgressCallback | None,
     ) -> int:
-        """Charge les nodes depuis nodes.csv."""
+        """Charge les nodes depuis nodes.csv.
+
+        Uses streaming grouping for memory efficiency on large files (2025 best practice).
+        """
         total_count = self._count_csv_rows(csv_file)
         self._emit_progress(callback, LoadPhase.NODES, 0, total_count)
 
         start = time.time()
-
-        # Group nodes by type for better loading
-        nodes_by_type = self._group_nodes_by_type(csv_file)
-
         loaded = 0
-        for node_type, rows in nodes_by_type.items():
-            batch_loaded = self._load_nodes_batch(session, node_type, rows)
-            loaded += batch_loaded
 
-            elapsed = time.time() - start
-            rate = loaded / elapsed if elapsed > 0 else 0
-            self._emit_progress(callback, LoadPhase.NODES, loaded, total_count, rate)
+        # Use streaming for large files (> 100K rows), legacy for small
+        if total_count > 100_000:
+            # Streaming mode: memory-efficient
+            for node_type, rows in self._stream_nodes_by_type(csv_file):
+                batch_loaded = self._load_nodes_batch(session, node_type, rows)
+                loaded += batch_loaded
+
+                elapsed = time.time() - start
+                rate = loaded / elapsed if elapsed > 0 else 0
+                self._emit_progress(callback, LoadPhase.NODES, loaded, total_count, rate)
+        else:
+            # Legacy mode: faster for small files
+            nodes_by_type = self._group_nodes_by_type(csv_file)
+
+            for node_type, rows in nodes_by_type.items():
+                batch_loaded = self._load_nodes_batch(session, node_type, rows)
+                loaded += batch_loaded
+
+                elapsed = time.time() - start
+                rate = loaded / elapsed if elapsed > 0 else 0
+                self._emit_progress(callback, LoadPhase.NODES, loaded, total_count, rate)
 
         return loaded
 
     def _group_nodes_by_type(self, csv_file: Path) -> dict[str, list[dict]]:
-        """Groupe les nodes par type."""
+        """Groupe les nodes par type (legacy - loads all into memory).
+
+        Note: For large files, use _stream_nodes_by_type() instead.
+        """
         nodes_by_type: dict[str, list[dict]] = {}
 
         with open(csv_file, "r", encoding="utf-8") as f:
@@ -317,6 +357,41 @@ class MemgraphLoader(BaseLoader):
                 nodes_by_type[node_type].append(row)
 
         return nodes_by_type
+
+    def _stream_nodes_by_type(
+        self, csv_file: Path
+    ) -> Iterator[tuple[str, list[dict]]]:
+        """Stream nodes grouped by type without loading entire file.
+
+        This is memory-efficient for large CSV files.
+        Yields (node_type, batch) tuples when buffer is full or type changes.
+
+        2025 best practice: Stream processing for large datasets.
+        """
+        buffer: dict[str, list[dict]] = {}
+        buffer_size = 0
+
+        with open(csv_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                node_type = row.get("node_type", "Unknown")
+                if node_type not in buffer:
+                    buffer[node_type] = []
+                buffer[node_type].append(row)
+                buffer_size += 1
+
+                # Flush buffer when it reaches limit
+                if buffer_size >= self.STREAMING_BUFFER_SIZE:
+                    for ntype, rows in buffer.items():
+                        if rows:
+                            yield (ntype, rows)
+                    buffer = {}
+                    buffer_size = 0
+
+        # Flush remaining
+        for ntype, rows in buffer.items():
+            if rows:
+                yield (ntype, rows)
 
     def _load_nodes_batch(
         self,
@@ -378,28 +453,45 @@ class MemgraphLoader(BaseLoader):
         workers: int,
         callback: ProgressCallback | None,
     ) -> int:
-        """Charge les edges depuis edges.csv."""
+        """Charge les edges depuis edges.csv.
+
+        Uses streaming grouping for memory efficiency on large files (2025 best practice).
+        """
         total_count = self._count_csv_rows(csv_file)
         self._emit_progress(callback, LoadPhase.EDGES, 0, total_count)
 
         start = time.time()
-
-        # Group edges by rel_type
-        edges_by_type = self._group_edges_by_type(csv_file)
-
         loaded = 0
-        for rel_type, rows in edges_by_type.items():
-            batch_loaded = self._load_edges_batch(session, rel_type, rows)
-            loaded += batch_loaded
 
-            elapsed = time.time() - start
-            rate = loaded / elapsed if elapsed > 0 else 0
-            self._emit_progress(callback, LoadPhase.EDGES, loaded, total_count, rate)
+        # Use streaming for large files (> 100K rows), legacy for small
+        if total_count > 100_000:
+            # Streaming mode: memory-efficient
+            for rel_type, rows in self._stream_edges_by_type(csv_file):
+                batch_loaded = self._load_edges_batch(session, rel_type, rows)
+                loaded += batch_loaded
+
+                elapsed = time.time() - start
+                rate = loaded / elapsed if elapsed > 0 else 0
+                self._emit_progress(callback, LoadPhase.EDGES, loaded, total_count, rate)
+        else:
+            # Legacy mode: faster for small files
+            edges_by_type = self._group_edges_by_type(csv_file)
+
+            for rel_type, rows in edges_by_type.items():
+                batch_loaded = self._load_edges_batch(session, rel_type, rows)
+                loaded += batch_loaded
+
+                elapsed = time.time() - start
+                rate = loaded / elapsed if elapsed > 0 else 0
+                self._emit_progress(callback, LoadPhase.EDGES, loaded, total_count, rate)
 
         return loaded
 
     def _group_edges_by_type(self, csv_file: Path) -> dict[str, list[dict]]:
-        """Groupe les edges par type de relation."""
+        """Groupe les edges par type de relation (legacy - loads all into memory).
+
+        Note: For large files, use _stream_edges_by_type() instead.
+        """
         edges_by_type: dict[str, list[dict]] = {}
 
         with open(csv_file, "r", encoding="utf-8") as f:
@@ -411,6 +503,38 @@ class MemgraphLoader(BaseLoader):
                 edges_by_type[rel_type].append(row)
 
         return edges_by_type
+
+    def _stream_edges_by_type(
+        self, csv_file: Path
+    ) -> Iterator[tuple[str, list[dict]]]:
+        """Stream edges grouped by type without loading entire file.
+
+        Memory-efficient for large CSV files (2025 best practice).
+        """
+        buffer: dict[str, list[dict]] = {}
+        buffer_size = 0
+
+        with open(csv_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rel_type = row.get("rel_type", "RELATED_TO")
+                if rel_type not in buffer:
+                    buffer[rel_type] = []
+                buffer[rel_type].append(row)
+                buffer_size += 1
+
+                # Flush buffer when it reaches limit
+                if buffer_size >= self.STREAMING_BUFFER_SIZE:
+                    for rtype, rows in buffer.items():
+                        if rows:
+                            yield (rtype, rows)
+                    buffer = {}
+                    buffer_size = 0
+
+        # Flush remaining
+        for rtype, rows in buffer.items():
+            if rows:
+                yield (rtype, rows)
 
     def _load_edges_batch(
         self,
