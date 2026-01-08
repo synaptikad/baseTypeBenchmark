@@ -468,32 +468,35 @@ answers:
   QW1:
     name: "Timeseries Append"
     parameters:
-      point_ids: ["point_eq_vav_175_discharge_temp", "point_eq_vav_176_zone_temp"]
+      # IDs from golden.py dataset (not generated dataset)
+      point_ids: ["point_submeter_1_energy", "point_temp_sensor_1_1_temp"]
       timestamps: ["2024-01-17T00:00:00Z", "2024-01-17T00:00:00Z"]
-      values: [21.5, 22.0]
+      values: [250.0, 21.5]
     expected:
       rows_written: 2
-    notes: "Insert 2 timeseries rows into shared Timescale"
+    notes: "Insert 2 timeseries rows into shared Timescale (uses golden dataset IDs)"
 
   QW2:
     name: "Metadata Update"
     parameters:
-      node_id: "eq_mainmeter_1"
+      # ID from golden.py: meter_main_1 (MainMeter)
+      node_id: "meter_main_1"
       tag_key: "calibration_status"
       tag_value: "verified"
     expected:
       rows_updated: 1
-    notes: "Update JSONB data on a node (P2 only)"
+    notes: "Update JSONB data on a node (P2 only, uses golden dataset ID)"
 
   QW3:
     name: "Relation Mutation"
     parameters:
-      source_id: "eq_mainmeter_1"
-      target_id: "eq_submeter_100"
+      # IDs from golden.py: meter_main_1 exists, orphan_1 has no relations
+      source_id: "meter_main_1"
+      target_id: "orphan_1"
       rel_type: "FEEDS"
     expected:
       rows_inserted: 1
-    notes: "Insert a new FEEDS edge between equipment"
+    notes: "Insert a new FEEDS edge to orphan equipment (uses golden dataset IDs)"
 
 # ===========================================================================
 # VALIDATION RULES

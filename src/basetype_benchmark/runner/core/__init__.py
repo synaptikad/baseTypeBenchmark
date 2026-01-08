@@ -23,6 +23,11 @@ from .params import (
     get_query_parameters,
     get_binder,
 )
+from .validator import (
+    GoldenValidator,
+    ValidationResult,
+    get_golden_validator,
+)
 
 __all__ = [
     # Catalog
@@ -46,4 +51,8 @@ __all__ = [
     "get_golden_loader",
     "get_query_parameters",
     "get_binder",
+    # Validator
+    "GoldenValidator",
+    "ValidationResult",
+    "get_golden_validator",
 ]

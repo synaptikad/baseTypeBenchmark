@@ -646,6 +646,87 @@ def export_to_dicts(dataset: GoldenDataset) -> Dict[str, Any]:
     }
 
 
+def export_to_parquet(output_dir) -> None:
+    """
+    Export golden dataset to parquet files for benchmark loading.
+
+    Creates the same file structure as the dataset generator:
+    - nodes.parquet
+    - edges.parquet
+    - timeseries.parquet
+
+    Args:
+        output_dir: Path to output directory (will be created if needed)
+    """
+    from pathlib import Path
+    import pandas as pd
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset = GoldenDataset()
+
+    # Nodes DataFrame - flatten structure for parquet
+    nodes_data = []
+    for n in dataset.nodes:
+        row = {
+            'id': n.id,
+            'type': n.type,
+            'name': n.name,
+        }
+        # Add properties as top-level columns
+        row.update(n.properties)
+        # Store complex fields as JSON strings for parquet compatibility
+        if n.capabilities:
+            row['capabilities'] = json.dumps(n.capabilities)
+        if n.metadata:
+            row['metadata'] = json.dumps(n.metadata)
+        if n.tags:
+            row['tags'] = json.dumps(n.tags)
+        if n.protocol:
+            row['protocol'] = json.dumps(n.protocol)
+        if n.calibration:
+            row['calibration'] = json.dumps(n.calibration)
+        if n.range_info:
+            row['range_info'] = json.dumps(n.range_info)
+        nodes_data.append(row)
+
+    nodes_df = pd.DataFrame(nodes_data)
+    nodes_df.to_parquet(output_dir / "nodes.parquet", index=False)
+
+    # Edges DataFrame
+    edges_data = []
+    for e in dataset.edges:
+        row = {
+            'source_id': e.source_id,
+            'target_id': e.target_id,
+            'rel_type': e.rel_type,
+        }
+        row.update(e.properties)
+        edges_data.append(row)
+
+    edges_df = pd.DataFrame(edges_data)
+    edges_df.to_parquet(output_dir / "edges.parquet", index=False)
+
+    # Timeseries DataFrame
+    ts_data = []
+    for t in dataset.timeseries:
+        ts_data.append({
+            'point_id': t.point_id,
+            'ts': t.timestamp,
+            'value': t.value,
+            'quality': 100  # Default quality
+        })
+
+    ts_df = pd.DataFrame(ts_data)
+    ts_df.to_parquet(output_dir / "timeseries.parquet", index=False)
+
+    print(f"Exported golden dataset to {output_dir}")
+    print(f"  - nodes.parquet: {len(nodes_df)} rows")
+    print(f"  - edges.parquet: {len(edges_df)} rows")
+    print(f"  - timeseries.parquet: {len(ts_df)} rows")
+
+
 # ===========================================================================
 # MAIN
 # ===========================================================================
