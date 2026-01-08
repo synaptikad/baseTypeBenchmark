@@ -295,7 +295,7 @@ class O2Extractor(BaseExtractor):
 # Ontologie BaseType Benchmark V3
 # ============================================================
 
-btb: a owl:Ontology ;
+<http://basetype.benchmark/ontology#> a owl:Ontology ;
     rdfs:label "BaseType Benchmark Ontology" ;
     rdfs:comment "Ontologie pour le benchmark de systèmes d'information bâtimentaires" .
 
