@@ -242,11 +242,52 @@ class PostgresRunner(BaseRunner):
         """
         import re
 
+        def strip_sql_comments(sql: str) -> str:
+            """Remove SQL comments (-- style) before placeholder conversion."""
+            lines = []
+            for line in sql.split('\n'):
+                # Remove -- comments (keep everything before --)
+                if '--' in line:
+                    line = line.split('--')[0]
+                lines.append(line)
+            return '\n'.join(lines)
+
+        def convert_positional_to_psycopg(sql: str, param_values: list) -> tuple[str, tuple]:
+            """Convert PostgreSQL $N placeholders to psycopg %s format.
+
+            Handles cases where the same placeholder ($1) is used multiple times
+            by building a param list that repeats values as needed.
+
+            Args:
+                sql: Query with $N style placeholders (comments already stripped)
+                param_values: List of values in order [value_for_$1, value_for_$2, ...]
+
+            Returns:
+                Tuple of (converted_query, param_tuple)
+            """
+            # Find all $N occurrences in order of appearance
+            placeholders_in_order = re.findall(r'\$(\d+)', sql)
+
+            # Build param list matching each %s placeholder
+            expanded_params = []
+            for placeholder_num in placeholders_in_order:
+                idx = int(placeholder_num) - 1  # $1 -> index 0
+                if idx < len(param_values):
+                    expanded_params.append(param_values[idx])
+
+            # Replace all $N with %s
+            converted = re.sub(r'\$(\d+)', '%s', sql)
+            return converted, tuple(expanded_params)
+
         # If params is already a tuple, use it directly for positional binding
         if isinstance(params, tuple):
             if "$1" in query:
-                converted_query = re.sub(r'\$(\d+)', '%s', query)
-                return converted_query, params
+                # Strip comments to avoid converting placeholders in comments
+                clean_query = strip_sql_comments(query)
+                converted_query, expanded_params = convert_positional_to_psycopg(
+                    clean_query, list(params)
+                )
+                return converted_query, expanded_params
             return query, params
 
         # If query uses %(name)s style, return as-is
@@ -255,10 +296,11 @@ class PostgresRunner(BaseRunner):
 
         # If query uses $1, $2 style (PostgreSQL native), convert to psycopg format
         if "$1" in query:
-            # Convert $1, $2, ... to %s in query
-            converted_query = re.sub(r'\$(\d+)', '%s', query)
+            # Strip comments to avoid converting placeholders in comments
+            clean_query = strip_sql_comments(query)
 
             # Get parameter order from catalog if available
+            param_values = []
             if query_id:
                 try:
                     from ..core.catalog import get_catalog
@@ -267,24 +309,26 @@ class PostgresRunner(BaseRunner):
                     if query_def and query_def.parameter_order:
                         # Use catalog-defined parameter order
                         param_order = query_def.parameter_order
-                        result = [params.get(p) for p in param_order if p in params]
-                        return converted_query, tuple(result)
+                        param_values = [params.get(p) for p in param_order if p in params]
                 except Exception:
                     pass  # Fall through to fallback
 
-            # Fallback: Extract positional params in order from dict keys
-            # NOTE: For proper ordering, caller should pass ordered tuple or query_id
-            # This fallback uses dict key order which may be incorrect
-            result = []
-            keys = list(params.keys())
-            for i in range(1, 100):  # Reasonable upper limit
-                placeholder = f"${i}"
-                if placeholder not in query:
-                    break
-                # Use dict key order (may not be correct!)
-                if i - 1 < len(keys):
-                    result.append(params[keys[i - 1]])
-            return converted_query, tuple(result)
+            # Fallback if no catalog lookup or no params found
+            if not param_values:
+                keys = list(params.keys())
+                for i in range(1, 100):  # Reasonable upper limit
+                    placeholder = f"${i}"
+                    if placeholder not in query:
+                        break
+                    # Use dict key order (may not be correct!)
+                    if i - 1 < len(keys):
+                        param_values.append(params[keys[i - 1]])
+
+            # Convert with proper handling of repeated placeholders
+            converted_query, expanded_params = convert_positional_to_psycopg(
+                clean_query, param_values
+            )
+            return converted_query, expanded_params
 
         # Default: return query and params as-is (no params or unknown style)
         return query, params
