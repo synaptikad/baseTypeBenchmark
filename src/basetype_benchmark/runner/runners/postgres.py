@@ -69,6 +69,7 @@ class PostgresRunner(BaseRunner):
         query: str,
         params: dict[str, Any] | tuple | None = None,
         timeout_seconds: float = 300.0,
+        query_id: str | None = None,
     ) -> RunResult:
         """Execute a SQL query.
 
@@ -76,6 +77,7 @@ class PostgresRunner(BaseRunner):
             query: SQL query string
             params: Query parameters (optional)
             timeout_seconds: Maximum execution time
+            query_id: Optional query ID for catalog lookup (for parameter ordering)
 
         Returns:
             RunResult with rows, timing, and status
@@ -92,7 +94,7 @@ class PostgresRunner(BaseRunner):
             # Execute query
             if params:
                 # Convert dict params and query to psycopg format
-                converted_query, converted_params = self._convert_params(params, query)
+                converted_query, converted_params = self._convert_params(params, query, query_id)
                 cursor = conn.execute(converted_query, converted_params)
             else:
                 cursor = conn.execute(query)
@@ -205,7 +207,12 @@ class PostgresRunner(BaseRunner):
         except Exception:
             return None
 
-    def _convert_params(self, params: dict[str, Any] | tuple, query: str) -> tuple[str, tuple | dict]:
+    def _convert_params(
+        self,
+        params: dict[str, Any] | tuple,
+        query: str,
+        query_id: str | None = None,
+    ) -> tuple[str, tuple | dict]:
         """Convert parameter dict/tuple and query to format suitable for psycopg.
 
         psycopg3 supports positional (%s) and named (%(name)s) params.
@@ -214,6 +221,7 @@ class PostgresRunner(BaseRunner):
         Args:
             params: Parameter dictionary or tuple (if already ordered)
             query: Query string (to detect param style)
+            query_id: Optional query ID for catalog lookup (parameter ordering)
 
         Returns:
             Tuple of (converted_query, converted_params)
@@ -236,8 +244,22 @@ class PostgresRunner(BaseRunner):
             # Convert $1, $2, ... to %s in query
             converted_query = re.sub(r'\$(\d+)', '%s', query)
 
-            # Extract positional params in order from dict keys
-            # NOTE: For proper ordering, caller should pass ordered tuple
+            # Get parameter order from catalog if available
+            if query_id:
+                try:
+                    from ..core.catalog import get_catalog
+                    catalog = get_catalog()
+                    query_def = catalog.get_query(query_id)
+                    if query_def and query_def.parameter_order:
+                        # Use catalog-defined parameter order
+                        param_order = query_def.parameter_order
+                        result = [params.get(p) for p in param_order if p in params]
+                        return converted_query, tuple(result)
+                except Exception:
+                    pass  # Fall through to fallback
+
+            # Fallback: Extract positional params in order from dict keys
+            # NOTE: For proper ordering, caller should pass ordered tuple or query_id
             # This fallback uses dict key order which may be incorrect
             result = []
             keys = list(params.keys())
