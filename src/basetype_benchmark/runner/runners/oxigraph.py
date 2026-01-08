@@ -84,8 +84,8 @@ class OxigraphRunner(BaseRunner):
         try:
             client = self._get_client()
 
-            # Substitute parameters into query
-            sparql = self._substitute_params(query, params or {})
+            # Inject VALUES clause for parameter binding
+            sparql = self._inject_values_clause(query, params or {})
 
             # Execute query
             response = client.post(
@@ -194,43 +194,130 @@ class OxigraphRunner(BaseRunner):
         """
         return None
 
-    def _substitute_params(self, query: str, params: dict[str, Any]) -> str:
-        """Substitute parameters into SPARQL query.
-
-        SPARQL doesn't have standard parameterized queries, so we do
-        string substitution. Uses $param_name or ?param_name syntax.
+    def _format_sparql_value(self, value: Any, param_type: str | None = None) -> str:
+        """Format Python value as SPARQL literal.
 
         Args:
-            query: SPARQL query with placeholders
-            params: Parameters to substitute
+            value: Python value to format
+            param_type: Optional type hint ("string", "integer", "timestamp", etc.)
 
         Returns:
-            Query with substituted values
+            SPARQL-formatted literal
         """
-        result = query
+        import re
+        from datetime import datetime, date
 
-        for key, value in params.items():
-            # Format value based on type
+        if value is None:
+            return "UNDEF"
+
+        # Date-only string (YYYY-MM-DD format) → xsd:date
+        if isinstance(value, str) and re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+            return f'"{value}"^^xsd:date'
+
+        # Timestamp: "2024-06-01T00:00:00"^^xsd:dateTime
+        if param_type == "timestamp" or (param_type is None and isinstance(value, datetime)):
             if isinstance(value, str):
-                # Escape and quote string
-                escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-                formatted = f'"{escaped}"'
-            elif isinstance(value, bool):
-                formatted = "true" if value else "false"
-            elif isinstance(value, (int, float)):
-                formatted = str(value)
-            elif isinstance(value, list):
-                # For lists, create a VALUES block substitution
-                # This is a special case - caller should handle
-                formatted = str(value)
-            else:
-                formatted = f'"{value}"'
+                try:
+                    dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    return f'"{dt.isoformat()}"^^xsd:dateTime'
+                except ValueError:
+                    pass
+            elif isinstance(value, datetime):
+                return f'"{value.isoformat()}"^^xsd:dateTime'
 
-            # Replace $key and ?key placeholders
-            result = result.replace(f"${key}", formatted)
-            result = result.replace(f"?{key}", formatted)
+        # Date: "2024-06-01"^^xsd:date
+        if param_type == "date" or (param_type is None and isinstance(value, date)):
+            if isinstance(value, str):
+                return f'"{value}"^^xsd:date'
+            elif isinstance(value, date):
+                return f'"{value.isoformat()}"^^xsd:date'
 
-        return result
+        # Integer: 123 (no quotes)
+        if param_type == "integer" or (param_type is None and isinstance(value, int) and not isinstance(value, bool)):
+            return str(value)
+
+        # Float: 3.14 (no quotes)
+        if param_type == "float" or (param_type is None and isinstance(value, float)):
+            return str(value)
+
+        # Boolean: true/false
+        if param_type == "boolean" or isinstance(value, bool):
+            return "true" if value else "false"
+
+        # Default: string literal with escaping
+        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _inject_values_clause(
+        self,
+        query: str,
+        params: dict[str, Any],
+    ) -> str:
+        """Inject VALUES clause for parameter binding in SPARQL.
+
+        Uses VALUES (?var1 ?var2) { (val1 val2) } pattern injected after WHERE {
+        to bind parameters without corrupting SPARQL variables.
+
+        Args:
+            query: SPARQL query text
+            params: Parameters dict (keys normalized to camelCase for SPARQL)
+
+        Returns:
+            Query with VALUES clause injected
+
+        Raises:
+            ValueError: If WHERE clause missing or duplicate VALUES detected
+        """
+        if not params:
+            return query
+
+        import re
+
+        # Step 1: Check for existing VALUES clauses that conflict
+        for key in params.keys():
+            if re.search(rf"VALUES\s+\?{key}\s*\{{", query, re.IGNORECASE):
+                raise ValueError(
+                    f"Query already contains VALUES clause for ?{key}. "
+                    f"Remove hardcoded VALUES to use dynamic parameter binding."
+                )
+
+        # Step 2: Format values (assume simple types, no catalog lookup for now)
+        # Keys are already normalized to camelCase by gradient.py
+        formatted_values = {}
+        for var_name, value in params.items():
+            # Infer type from value (catalog lookup can be added later)
+            formatted_values[var_name] = self._format_sparql_value(value, param_type=None)
+
+        # Step 3: Build VALUES clause
+        if len(formatted_values) == 1:
+            # Single parameter: VALUES ?var { value }
+            var_name = list(formatted_values.keys())[0]
+            var_value = list(formatted_values.values())[0]
+            values_clause = f"VALUES ?{var_name} {{ {var_value} }}"
+        else:
+            # Multiple parameters: VALUES (?var1 ?var2) { (val1 val2) }
+            vars_str = " ".join(f"?{v}" for v in formatted_values.keys())
+            vals_str = " ".join(formatted_values.values())
+            values_clause = f"VALUES ({vars_str}) {{ ({vals_str}) }}"
+
+        # Step 4: Inject after WHERE {
+        pattern = r"(WHERE\s*\{)"
+
+        if not re.search(pattern, query, re.IGNORECASE):
+            raise ValueError(
+                f"Cannot inject VALUES: query must contain WHERE {{ clause"
+            )
+
+        # Insert VALUES clause after WHERE { (only first occurrence)
+        injected_query = re.sub(
+            pattern,
+            rf"\1\n    {values_clause}",
+            query,
+            count=1,
+            flags=re.IGNORECASE
+        )
+
+        return injected_query
 
     def _parse_sparql_json(self, json_result: dict) -> list[dict[str, Any]]:
         """Parse SPARQL JSON results format to list of dicts.

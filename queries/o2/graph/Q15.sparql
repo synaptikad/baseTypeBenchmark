@@ -7,9 +7,6 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 SELECT ?equipment_id ?name ?equipment_type ?warranty_end
        (xsd:integer(?warranty_end - ?ref_date) AS ?days_remaining)
 WHERE {
-    VALUES ?ref_date { "2024-06-01"^^xsd:date }
-    VALUES ?days_ahead { 90 }
-
     ?eq a btb:Equipment ;
         btb:id ?equipment_id ;
         btb:name ?name ;
