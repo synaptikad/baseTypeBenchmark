@@ -204,6 +204,14 @@ class BenchmarkOrchestrator:
                     paradigm=paradigm,
                 ))
 
+        # Cleanup: Stop all containers after benchmark completes
+        console.print("\n[dim]Stopping all containers...[/dim]")
+        for paradigm in scenario.paradigms:
+            try:
+                self.isolation.stop_paradigm(paradigm)
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to stop {paradigm}: {e}[/yellow]")
+
         results.end_time = datetime.now()
 
         # Export results
@@ -298,9 +306,12 @@ class BenchmarkOrchestrator:
                     results.levels.append(level_result)
 
             finally:
-                # 5. Stop containers
-                console.print(f"  [dim]Stopping containers...[/dim]")
-                self.isolation.stop_paradigm(paradigm)
+                # 5. Stop containers (unless next paradigm shares TimescaleDB)
+                if self._should_keep_containers_running(paradigm, scenario.paradigms):
+                    console.print(f"  [dim]Keeping containers running for Option A...[/dim]")
+                else:
+                    console.print(f"  [dim]Stopping containers...[/dim]")
+                    self.isolation.stop_paradigm(paradigm)
 
         finally:
             # 6. Cleanup exports (disk optimization)
@@ -312,6 +323,47 @@ class BenchmarkOrchestrator:
         console.print(f"  [green]RAM viable: {results.ram_viable_mb} MB[/green]")
 
         return results
+
+    def _should_keep_containers_running(
+        self,
+        current_paradigm: str,
+        all_paradigms: list[str]
+    ) -> bool:
+        """Check if containers should stay running for next paradigm.
+
+        Returns True if:
+        - Current paradigm uses TimescaleDB (P1, P2, M2, O2)
+        - Next paradigm in queue also uses TimescaleDB
+        - This enables Option A (shared TimescaleDB across paradigms)
+
+        Args:
+            current_paradigm: Current paradigm that just finished
+            all_paradigms: Full list of paradigms in execution order
+
+        Returns:
+            True if containers should stay running, False otherwise
+        """
+        # TimescaleDB paradigms that can share state via Option A
+        # Note: P1 excluded because it has incompatible schema with P2
+        # Only P2→M2→O2 can share (all use P2-style schema)
+        timescale_paradigms = {"P2", "M2", "O2"}
+
+        # Only relevant if current paradigm uses TimescaleDB
+        if current_paradigm not in timescale_paradigms:
+            return False
+
+        # Check if there's a next paradigm
+        try:
+            current_idx = all_paradigms.index(current_paradigm)
+        except ValueError:
+            return False
+
+        if current_idx >= len(all_paradigms) - 1:
+            return False  # Last paradigm, safe to stop
+
+        # Check if next paradigm also uses TimescaleDB
+        next_paradigm = all_paradigms[current_idx + 1]
+        return next_paradigm in timescale_paradigms
 
     def _export_paradigm(
         self,

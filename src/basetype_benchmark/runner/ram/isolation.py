@@ -139,9 +139,16 @@ class IsolationManager:
 
         container_set = PARADIGM_CONTAINERS[paradigm]
 
-        # Stop any currently running paradigm
+        # Stop any currently running paradigm (unless they share TimescaleDB)
         if self._current_paradigm:
-            self.stop_paradigm(self._current_paradigm)
+            # Check if both paradigms use TimescaleDB (Option A shared state)
+            timescale_paradigms = {"P1", "P2", "M2", "O2"}
+            current_uses_ts = self._current_paradigm in timescale_paradigms
+            next_uses_ts = paradigm in timescale_paradigms
+
+            # Only stop if they don't share TimescaleDB
+            if not (current_uses_ts and next_uses_ts):
+                self.stop_paradigm(self._current_paradigm)
 
         # Clean volumes if requested
         if clean_volumes:
