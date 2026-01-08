@@ -83,6 +83,10 @@ class PostgresLoader(BaseLoader):
         self.config = config
         self.paradigm = paradigm
 
+        # Schema isolation for Option A (addendum.md section 1)
+        self.ts_schema = "ts"  # Shared timeseries schema
+        self.struct_schema = "p1" if paradigm == "P1" else "p2"  # Paradigm-specific structural schema
+
         # Detecte timescaledb-parallel-copy
         self._parallel_copy_bin = shutil.which("timescaledb-parallel-copy")
 
@@ -100,10 +104,15 @@ class PostgresLoader(BaseLoader):
             return False
 
     def clear_database(self, keep_timeseries: bool = False) -> bool:
-        """Vide toutes les tables (ignore if tables don't exist).
+        """Clear database using schema isolation strategy.
+
+        Strategy (addendum.md section 1):
+        - DROP CASCADE structural schema (p1 or p2), then CREATE empty schema
+        - Truncate ts.timeseries only if NOT keeping (Option A optimization)
+        - Recreate structural tables via ensure_structural_schema()
 
         Args:
-            keep_timeseries: If True, preserve timeseries table for Option A
+            keep_timeseries: If True, preserve ts.timeseries for Option A
 
         Returns:
             True if successful
@@ -111,70 +120,71 @@ class PostgresLoader(BaseLoader):
         try:
             with psycopg.connect(self.config.dsn) as conn:
                 with conn.cursor() as cur:
-                    # Desactive les FK temporairement
-                    cur.execute("SET session_replication_role = replica")
+                    # 1. DROP CASCADE structural schema (removes all tables/indexes/FKs)
+                    cur.execute(f"DROP SCHEMA IF EXISTS {self.struct_schema} CASCADE;")
 
-                    # Truncate timeseries (only if not keeping)
+                    # 2. CREATE empty structural schema
+                    cur.execute(f"CREATE SCHEMA {self.struct_schema};")
+
+                    # 3. Truncate timeseries only if NOT keeping (Option A)
                     if not keep_timeseries:
-                        cur.execute(
-                            "TRUNCATE TABLE timeseries CASCADE"
-                            if self._table_exists(cur, "timeseries")
-                            else "SELECT 1"
-                        )
-
-                    # Truncate edges (ignore if not exists)
-                    cur.execute(
-                        "TRUNCATE TABLE edges CASCADE"
-                        if self._table_exists(cur, "edges")
-                        else "SELECT 1"
-                    )
-
-                    if self.paradigm == "P1":
-                        # Truncate toutes les tables P1
-                        for table in reversed(self.P1_TABLES):
-                            if self._table_exists(cur, table):
-                                cur.execute(f"TRUNCATE TABLE {table} CASCADE")
-                    else:
-                        # P2: une seule table nodes
-                        if self._table_exists(cur, "nodes"):
-                            cur.execute("TRUNCATE TABLE nodes CASCADE")
-
-                    # Reactive les FK
-                    cur.execute("SET session_replication_role = DEFAULT")
+                        # Check if ts schema and table exist before truncating
+                        cur.execute("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM information_schema.tables
+                                WHERE table_schema = %s AND table_name = 'timeseries'
+                            )
+                        """, (self.ts_schema,))
+                        if cur.fetchone()[0]:
+                            cur.execute(f"TRUNCATE TABLE {self.ts_schema}.timeseries;")
 
                 conn.commit()
-            return True
+
+            # 4. Recreate structural tables
+            return self.ensure_structural_schema()
+
         except Exception as e:
             print(f"Error clearing database: {e}")
             return False
 
-    def _table_exists(self, cur, table_name: str) -> bool:
-        """Check if a table exists in the database."""
+    def _table_exists(self, cur, table_name: str, schema: str = "public") -> bool:
+        """Check if a table exists in the specified schema.
+
+        Args:
+            cur: Database cursor
+            table_name: Name of the table
+            schema: Schema name (default: "public")
+
+        Returns:
+            True if table exists
+        """
         cur.execute(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name = %s)",
-            (table_name,)
+            "WHERE table_schema = %s AND table_name = %s)",
+            (schema, table_name)
         )
         return cur.fetchone()[0]
 
     def _is_timeseries_populated(self) -> bool:
-        """Check if timeseries table has data.
+        """Check if ts.timeseries table has data (Option A detection).
 
         Returns:
-            True if timeseries table exists and has rows
+            True if ts.timeseries table exists and has rows
         """
         try:
             with psycopg.connect(self.config.dsn) as conn:
                 with conn.cursor() as cur:
-                    if not self._table_exists(cur, "timeseries"):
+                    # Check if ts.timeseries exists
+                    if not self._table_exists(cur, "timeseries", schema=self.ts_schema):
                         return False
-                    cur.execute("SELECT EXISTS(SELECT 1 FROM timeseries LIMIT 1)")
+                    # Check if table has data
+                    cur.execute(f"SELECT EXISTS(SELECT 1 FROM {self.ts_schema}.timeseries LIMIT 1)")
                     return cur.fetchone()[0]
         except Exception:
             return False
 
     def _count_timeseries_rows(self) -> int:
-        """Count rows in timeseries table.
+        """Count rows in ts.timeseries table.
 
         Returns:
             Row count, or 0 if error
@@ -182,7 +192,7 @@ class PostgresLoader(BaseLoader):
         try:
             with psycopg.connect(self.config.dsn) as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM timeseries")
+                    cur.execute(f"SELECT COUNT(*) FROM {self.ts_schema}.timeseries")
                     return cur.fetchone()[0]
         except Exception:
             return 0
@@ -207,10 +217,20 @@ class PostgresLoader(BaseLoader):
         result = LoadResult(engine=self.paradigm)
 
         try:
-            # Phase 1: Schema (required)
-            self._emit_progress(progress_callback, LoadPhase.SCHEMA, 0, 1)
-            self._load_schema(data_dir)
-            self._emit_progress(progress_callback, LoadPhase.SCHEMA, 1, 1)
+            # Phase 0: Ensure schemas exist (Option A schema isolation)
+            self._emit_progress(progress_callback, LoadPhase.SCHEMA, 0, 2)
+
+            # Step 1: Ensure timeseries schema (shared by all paradigms)
+            if not self.ensure_timeseries_schema():
+                result.add_error("Failed to create ts schema")
+                return result
+            self._emit_progress(progress_callback, LoadPhase.SCHEMA, 1, 2)
+
+            # Step 2: Ensure structural schema (paradigm-specific)
+            if not self.ensure_structural_schema():
+                result.add_error(f"Failed to create {self.struct_schema} schema")
+                return result
+            self._emit_progress(progress_callback, LoadPhase.SCHEMA, 2, 2)
 
             # Phase 2: Nodes
             if self.paradigm == "P1":
@@ -388,10 +408,11 @@ class PostgresLoader(BaseLoader):
         callback: ProgressCallback | None,
     ) -> int:
         """Charge avec timescaledb-parallel-copy (optimal)."""
+        # Note: timescaledb-parallel-copy requires schema-qualified table name
         cmd = [
             self._parallel_copy_bin,
             "--connection", self.config.dsn,
-            "--table", "timeseries",
+            "--table", f"{self.ts_schema}.timeseries",  # schema-qualified
             "--file", str(csv_file),
             "--workers", str(workers),
             "--batch-size", "10000",
@@ -471,9 +492,9 @@ class PostgresLoader(BaseLoader):
 
                 with psycopg.connect(self.config.dsn) as conn:
                     with conn.cursor() as cur:
-                        # Binary COPY pour performance
+                        # Binary COPY pour performance (ts.timeseries schema-qualified)
                         with cur.copy(
-                            "COPY timeseries (time, point_id, value) "
+                            f"COPY {self.ts_schema}.timeseries (time, point_id, value) "
                             "FROM STDIN (FORMAT BINARY)"
                         ) as copy:
                             for row in self._read_timeseries_csv(chunk_file):
@@ -537,8 +558,9 @@ class PostgresLoader(BaseLoader):
                     # Skip header
                     f.readline()
 
+                    # Use ts.timeseries schema-qualified name
                     with cur.copy(
-                        "COPY timeseries (time, point_id, value) "
+                        f"COPY {self.ts_schema}.timeseries (time, point_id, value) "
                         "FROM STDIN WITH (FORMAT csv)"
                     ) as copy:
                         while True:
@@ -566,55 +588,226 @@ class PostgresLoader(BaseLoader):
         return total_count
 
     # =========================================================================
-    # SCHEMA LOADING
+    # SCHEMA MANAGEMENT (Option A with schema isolation)
     # =========================================================================
-
-    def _load_schema(self, data_dir: Path) -> bool:
-        """Load schema SQL file to create tables.
-
-        Looks for schema_p1.sql or schema_p2.sql in data_dir.
-        """
-        schema_file = data_dir / f"schema_{self.paradigm.lower()}.sql"
-        if not schema_file.exists():
-            raise FileNotFoundError(
-                f"Schema file not found: {schema_file}. "
-                f"Run export first to generate schema."
-            )
-
-        with psycopg.connect(self.config.dsn) as conn:
-            with conn.cursor() as cur:
-                # Read and execute schema SQL
-                sql = schema_file.read_text(encoding="utf-8")
-                cur.execute(sql)
-            conn.commit()
-
-        return True
+    # Note: _load_schema() removed - we now use ensure_timeseries_schema()
+    # and ensure_structural_schema() which implement schema isolation.
 
     def ensure_timeseries_schema(self) -> bool:
-        """Create timeseries table and hypertable if they don't exist.
+        """Create ts schema and timeseries hypertable if they don't exist.
 
-        Used by M2/O2 loaders that delegate timeseries to TimescaleDB.
+        This sets up the shared timeseries infrastructure for Option A.
+        All paradigms (P1, P2, M2, O2) share this ts.timeseries table.
+
+        Returns:
+            True if successful
         """
-        schema_sql = """
+        schema_sql = f"""
+        -- Create ts schema for shared timeseries
+        CREATE SCHEMA IF NOT EXISTS {self.ts_schema};
+
+        -- Enable TimescaleDB extension
         CREATE EXTENSION IF NOT EXISTS timescaledb;
 
-        CREATE TABLE IF NOT EXISTS timeseries (
+        -- Create timeseries hypertable in ts schema
+        CREATE TABLE IF NOT EXISTS {self.ts_schema}.timeseries (
             time TIMESTAMPTZ NOT NULL,
             point_id VARCHAR(64) NOT NULL,
             value DOUBLE PRECISION NOT NULL
         );
 
-        SELECT create_hypertable('timeseries', 'time', if_not_exists => TRUE);
+        -- Convert to hypertable (idempotent with if_not_exists)
+        SELECT create_hypertable('{self.ts_schema}.timeseries', 'time', if_not_exists => TRUE);
 
-        CREATE INDEX IF NOT EXISTS idx_timeseries_point ON timeseries(point_id, time DESC);
+        -- Create performance index
+        CREATE INDEX IF NOT EXISTS idx_timeseries_point_time
+            ON {self.ts_schema}.timeseries (point_id, time DESC);
         """
 
-        with psycopg.connect(self.config.dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(schema_sql)
-            conn.commit()
+        try:
+            with psycopg.connect(self.config.dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(schema_sql)
+                conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error creating {self.ts_schema} schema: {e}")
+            return False
 
-        return True
+    def ensure_structural_schema(self) -> bool:
+        """Create paradigm-specific structural schema and tables.
+
+        Creates p1 or p2 schema based on self.paradigm with appropriate tables:
+        - P1: Relational tables (sites, buildings, edges without properties, etc.)
+        - P2: JSONB-enriched tables (nodes with data JSONB, edges with properties JSONB)
+
+        Returns:
+            True if successful
+        """
+        try:
+            with psycopg.connect(self.config.dsn) as conn:
+                with conn.cursor() as cur:
+                    # Create structural schema
+                    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self.struct_schema};")
+
+                    if self.paradigm == "P1":
+                        # P1: Relational tables (NO JSONB properties)
+                        schema_sql = f"""
+                        -- Sites
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.sites (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            address VARCHAR(512)
+                        );
+
+                        -- Buildings
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.buildings (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            site_id VARCHAR(64) REFERENCES {self.struct_schema}.sites(id),
+                            address VARCHAR(512),
+                            gross_area_m2 FLOAT
+                        );
+
+                        -- Floors
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.floors (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            building_id VARCHAR(64) REFERENCES {self.struct_schema}.buildings(id),
+                            floor_type VARCHAR(32),
+                            level_index INTEGER
+                        );
+
+                        -- Spaces
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.spaces (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            floor_id VARCHAR(64) REFERENCES {self.struct_schema}.floors(id),
+                            building_id VARCHAR(64) REFERENCES {self.struct_schema}.buildings(id),
+                            space_type VARCHAR(64),
+                            area_m2 FLOAT,
+                            capacity INTEGER
+                        );
+
+                        -- Equipment
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.equipment (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            equipment_type VARCHAR(64) NOT NULL,
+                            domain VARCHAR(32) NOT NULL,
+                            building_id VARCHAR(64) REFERENCES {self.struct_schema}.buildings(id),
+                            floor_id VARCHAR(64) REFERENCES {self.struct_schema}.floors(id),
+                            space_id VARCHAR(64) REFERENCES {self.struct_schema}.spaces(id)
+                        );
+
+                        -- Points
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.points (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            quantity VARCHAR(32) NOT NULL,
+                            unit VARCHAR(32) NOT NULL,
+                            equipment_id VARCHAR(64) REFERENCES {self.struct_schema}.equipment(id),
+                            building_id VARCHAR(64) REFERENCES {self.struct_schema}.buildings(id),
+                            frequency VARCHAR(32)
+                        );
+
+                        -- Tenants
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.tenants (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            contract_start DATE,
+                            contract_end DATE
+                        );
+
+                        -- Zones
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.zones (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            zone_type VARCHAR(32),
+                            description TEXT
+                        );
+
+                        -- Contracts
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.contracts (
+                            id VARCHAR(64) PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            contract_type VARCHAR(32),
+                            start_date DATE,
+                            end_date DATE,
+                            provider VARCHAR(255)
+                        );
+
+                        -- Edges (NO properties column for P1)
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.edges (
+                            id SERIAL PRIMARY KEY,
+                            source_id VARCHAR(64) NOT NULL,
+                            target_id VARCHAR(64) NOT NULL,
+                            rel_type VARCHAR(32) NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_edges_source ON {self.struct_schema}.edges(source_id);
+                        CREATE INDEX IF NOT EXISTS idx_edges_target ON {self.struct_schema}.edges(target_id);
+                        CREATE INDEX IF NOT EXISTS idx_edges_rel_type ON {self.struct_schema}.edges(rel_type);
+                        CREATE INDEX IF NOT EXISTS idx_edges_source_rel ON {self.struct_schema}.edges(source_id, rel_type);
+                        CREATE INDEX IF NOT EXISTS idx_edges_target_rel ON {self.struct_schema}.edges(target_id, rel_type);
+                        """
+                        cur.execute(schema_sql)
+
+                    else:  # P2
+                        # P2: JSONB-enriched tables
+                        schema_sql = f"""
+                        -- Nodes (all types in one table with JSONB data)
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.nodes (
+                            id VARCHAR(64) PRIMARY KEY,
+                            node_type VARCHAR(32) NOT NULL,
+                            name VARCHAR(255) NOT NULL,
+                            data JSONB NOT NULL DEFAULT '{{}}'
+                        );
+
+                        -- Index de base
+                        CREATE INDEX IF NOT EXISTS idx_nodes_type ON {self.struct_schema}.nodes(node_type);
+                        CREATE INDEX IF NOT EXISTS idx_nodes_data_gin ON {self.struct_schema}.nodes USING GIN (data);
+
+                        -- Index pour queries fréquentes (Q1-Q5)
+                        CREATE INDEX IF NOT EXISTS idx_nodes_equipment_type ON {self.struct_schema}.nodes((data->>'equipment_type')) WHERE node_type = 'Equipment';
+                        CREATE INDEX IF NOT EXISTS idx_nodes_building_id ON {self.struct_schema}.nodes((data->>'building_id'));
+                        CREATE INDEX IF NOT EXISTS idx_nodes_domain ON {self.struct_schema}.nodes((data->>'domain')) WHERE node_type = 'Equipment';
+                        CREATE INDEX IF NOT EXISTS idx_nodes_quantity ON {self.struct_schema}.nodes((data->>'quantity')) WHERE node_type = 'Point';
+                        CREATE INDEX IF NOT EXISTS idx_nodes_space_type ON {self.struct_schema}.nodes((data->>'space_type')) WHERE node_type = 'Space';
+                        CREATE INDEX IF NOT EXISTS idx_nodes_floor_id ON {self.struct_schema}.nodes((data->>'floor_id'));
+                        CREATE INDEX IF NOT EXISTS idx_nodes_equipment_id ON {self.struct_schema}.nodes((data->>'equipment_id')) WHERE node_type = 'Point';
+                        CREATE INDEX IF NOT EXISTS idx_nodes_space_id ON {self.struct_schema}.nodes((data->>'space_id')) WHERE node_type = 'Equipment';
+
+                        -- Index pour JSONB arrays (Q16, Q17)
+                        CREATE INDEX IF NOT EXISTS idx_nodes_tags ON {self.struct_schema}.nodes USING GIN ((data->'tags'));
+                        CREATE INDEX IF NOT EXISTS idx_nodes_capabilities ON {self.struct_schema}.nodes USING GIN ((data->'capabilities'));
+
+                        -- Index pour nested JSONB (Q14, Q15, Q18)
+                        CREATE INDEX IF NOT EXISTS idx_nodes_protocol_type ON {self.struct_schema}.nodes((data->'protocol'->>'type')) WHERE data->'protocol' IS NOT NULL;
+                        CREATE INDEX IF NOT EXISTS idx_nodes_protocol_device ON {self.struct_schema}.nodes((data->'protocol'->>'device_id')) WHERE data->'protocol' IS NOT NULL;
+                        CREATE INDEX IF NOT EXISTS idx_nodes_warranty ON {self.struct_schema}.nodes((data->'metadata'->>'warranty_end')) WHERE data->'metadata' IS NOT NULL;
+                        CREATE INDEX IF NOT EXISTS idx_nodes_calibration_next ON {self.struct_schema}.nodes((data->'calibration'->>'next_date')) WHERE data->'calibration' IS NOT NULL;
+
+                        -- Edges (WITH properties JSONB for P2)
+                        CREATE TABLE IF NOT EXISTS {self.struct_schema}.edges (
+                            id SERIAL PRIMARY KEY,
+                            source_id VARCHAR(64) NOT NULL,
+                            target_id VARCHAR(64) NOT NULL,
+                            rel_type VARCHAR(32) NOT NULL,
+                            properties JSONB DEFAULT '{{}}'
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_edges_source ON {self.struct_schema}.edges(source_id);
+                        CREATE INDEX IF NOT EXISTS idx_edges_target ON {self.struct_schema}.edges(target_id);
+                        CREATE INDEX IF NOT EXISTS idx_edges_rel_type ON {self.struct_schema}.edges(rel_type);
+                        CREATE INDEX IF NOT EXISTS idx_edges_source_rel ON {self.struct_schema}.edges(source_id, rel_type);
+                        CREATE INDEX IF NOT EXISTS idx_edges_target_rel ON {self.struct_schema}.edges(target_id, rel_type);
+                        """
+                        cur.execute(schema_sql)
+
+                conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error creating {self.struct_schema} schema: {e}")
+            return False
 
     # =========================================================================
     # HELPERS
@@ -626,17 +819,23 @@ class PostgresLoader(BaseLoader):
         table: str,
         csv_file: Path,
     ) -> int:
-        """COPY un CSV vers une table avec colonnes explicites du header."""
+        """COPY un CSV vers une table avec colonnes explicites du header.
+
+        Uses schema-qualified table names (e.g., p1.sites, p2.nodes).
+        """
         # Lire le header pour obtenir les noms de colonnes
         with open(csv_file, "r", encoding="utf-8") as f:
             header_line = f.readline().strip()
         columns = header_line.split(",")
         columns_sql = ", ".join(columns)
 
+        # Schema-qualify table name for structural tables
+        qualified_table = f"{self.struct_schema}.{table}"
+
         with open(csv_file, "rb") as f:
             with conn.cursor() as cur:
                 with cur.copy(
-                    f"COPY {table} ({columns_sql}) FROM STDIN WITH (FORMAT csv, HEADER true)"
+                    f"COPY {qualified_table} ({columns_sql}) FROM STDIN WITH (FORMAT csv, HEADER true)"
                 ) as copy:
                     while True:
                         chunk = f.read(1024 * 1024)

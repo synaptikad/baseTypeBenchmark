@@ -53,14 +53,28 @@ class PostgresRunner(BaseRunner):
         self.config = config
         self._conn: psycopg.Connection | None = None
 
+        # Schema isolation for Option A (addendum.md section 1)
+        # Set search_path so queries automatically resolve to correct schema
+        paradigm_lower = paradigm.lower()
+        self.search_path = f"{paradigm_lower}, ts, public"
+
     def _get_connection(self) -> psycopg.Connection:
-        """Get or create database connection."""
+        """Get or create database connection with schema-specific search_path."""
         if self._conn is None or self._conn.closed:
             self._conn = psycopg.connect(
                 self.config.dsn,
                 row_factory=dict_row,
                 autocommit=True,
             )
+
+            # Set search_path for schema isolation (Option A)
+            # This makes queries like "SELECT * FROM edges" resolve to:
+            # - p1.edges for P1 paradigm
+            # - p2.edges for P2 paradigm
+            # - ts.timeseries for both (shared)
+            with self._conn.cursor() as cur:
+                cur.execute(f"SET search_path TO {self.search_path};")
+
             self._connected = True
         return self._conn
 

@@ -142,6 +142,7 @@ class IsolationManager:
         # Stop any currently running paradigm (unless they share TimescaleDB)
         if self._current_paradigm:
             # Check if both paradigms use TimescaleDB (Option A shared state)
+            # WITH schema isolation: all paradigms can share ts.timeseries
             timescale_paradigms = {"P1", "P2", "M2", "O2"}
             current_uses_ts = self._current_paradigm in timescale_paradigms
             next_uses_ts = paradigm in timescale_paradigms

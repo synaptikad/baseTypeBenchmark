@@ -344,9 +344,9 @@ class BenchmarkOrchestrator:
             True if containers should stay running, False otherwise
         """
         # TimescaleDB paradigms that can share state via Option A
-        # Note: P1 excluded because it has incompatible schema with P2
-        # Only P2→M2→O2 can share (all use P2-style schema)
-        timescale_paradigms = {"P2", "M2", "O2"}
+        # WITH schema isolation: P1, P2, M2, O2 can all share ts.timeseries
+        # P1 and P2 use separate structural schemas (p1/p2) to avoid conflicts
+        timescale_paradigms = {"P1", "P2", "M2", "O2"}
 
         # Only relevant if current paradigm uses TimescaleDB
         if current_paradigm not in timescale_paradigms:
