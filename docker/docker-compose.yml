@@ -52,8 +52,10 @@ services:
     mem_limit: ${MEMORY_LIMIT:-8g}
     memswap_limit: ${MEMORY_LIMIT:-8g}
     healthcheck:
-      # Oxigraph minimal image - disable healthcheck, verify via runner
-      disable: true
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7878/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   timescaledb_data:

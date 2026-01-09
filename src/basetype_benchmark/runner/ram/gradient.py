@@ -824,8 +824,11 @@ class RAMGradientExecutor:
             if params:
                 # Filter out None values - queries should handle missing params gracefully
                 params = {k: v for k, v in params.items() if v is not None}
-                # Normalize and return dynamic params
-                if self.paradigm in ("M1", "M2"):
+                # Normalize parameter keys based on paradigm
+                # P1/P2: lowercase for named %(name)s placeholders
+                # M1/M2: lowercase for $name Cypher params
+                # O2: camelCase for SPARQL ?var bindings
+                if self.paradigm in ("P1", "P2", "M1", "M2"):
                     params = normalize_param_keys(params, target_case="lower")
                 elif self.paradigm == "O2":
                     params = normalize_param_keys(params, target_case="camel")
@@ -851,13 +854,13 @@ class RAMGradientExecutor:
         merged = {**defaults, **params}
 
         # Normalize parameter key casing based on paradigm
-        if self.paradigm in ("M1", "M2"):
-            # Cypher uses lowercase parameter names
+        # P1/P2: lowercase for named %(name)s placeholders
+        # M1/M2: lowercase for $name Cypher params
+        # O2: camelCase for SPARQL ?var bindings
+        if self.paradigm in ("P1", "P2", "M1", "M2"):
             merged = normalize_param_keys(merged, target_case="lower")
         elif self.paradigm == "O2":
-            # SPARQL uses camelCase parameter names
             merged = normalize_param_keys(merged, target_case="camel")
-        # P1/P2 SQL: positional parameters, case doesn't matter for keys
 
         return merged
 

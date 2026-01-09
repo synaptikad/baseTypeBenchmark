@@ -34,8 +34,8 @@ VENV_BTB = PROJECT_DIR / ".venv" / "bin" / "btb-runner"
 CONFIG_DIR = PROJECT_DIR / "config"
 DATA_DIR = Path(os.environ.get("BTB_DATA_DIR", PROJECT_DIR / "data"))
 GENERATED_DIR = DATA_DIR / "generated"
-EXPORT_DIR = DATA_DIR / "exports"
 RESULTS_DIR = DATA_DIR / "results"
+# Note: Exports are now on-demand in temporary directories during benchmark
 
 PROFILES = ["small", "medium", "large", "xlarge"]
 DURATIONS = ["2d", "1w", "1m", "6m", "1y"]
@@ -136,21 +136,20 @@ def menu_dataset():
             console.print()
 
         console.print("[cyan]1[/cyan]. Generate new")
-        console.print("[cyan]2[/cyan]. Export to paradigms")
-        console.print("[cyan]3[/cyan]. Delete")
+        console.print("[cyan]2[/cyan]. Delete")
+        console.print()
+        console.print("[dim]Note: Export is done on-demand during benchmark[/dim]")
         console.print()
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
-        choice = Prompt.ask("", choices=["1", "2", "3", "b"], default="1", show_choices=False)
+        choice = Prompt.ask("", choices=["1", "2", "b"], default="1", show_choices=False)
 
         if choice == "b":
             return
         elif choice == "1":
             generate_dataset()
         elif choice == "2":
-            export_dataset()
-        elif choice == "3":
             delete_dataset()
 
 
@@ -195,59 +194,6 @@ def generate_dataset():
     wait()
 
 
-def export_dataset():
-    header("Export to Paradigms")
-
-    datasets = list_dirs(GENERATED_DIR)
-    datasets = [d for d in datasets if (d / "nodes.parquet").exists()]
-
-    if not datasets:
-        console.print("[yellow]No datasets. Generate one first.[/yellow]")
-        wait()
-        return
-
-    console.print("[bold]Select dataset:[/bold]")
-    idx = select_from_list(datasets)
-    if idx is None:
-        return
-    source = datasets[idx]
-
-    console.print("\n[bold]Export to:[/bold]")
-    console.print("  [cyan]a[/cyan]. All paradigms")
-    for i, p in enumerate(PARADIGMS, 1):
-        console.print(f"  [cyan]{i}[/cyan]. {p} only")
-    console.print()
-
-    choice = Prompt.ask("", default="a")
-
-    if choice == "a":
-        targets = PARADIGMS
-    elif choice.isdigit() and 1 <= int(choice) <= len(PARADIGMS):
-        targets = [PARADIGMS[int(choice) - 1]]
-    else:
-        return
-
-    console.print(f"\n[yellow]Export {source.name} → {', '.join(targets)}?[/yellow]")
-    if not Confirm.ask("", default=True):
-        return
-
-    for p in targets:
-        console.print(f"\n[bold]Exporting {p}...[/bold]")
-        output_dir = EXPORT_DIR / p.lower() / source.name
-
-        if p in ("P1", "P2"):
-            mod = "src.basetype_benchmark.exporters.p1_extractor" if p == "P1" else "src.basetype_benchmark.exporters.p2_extractor"
-        elif p in ("M1", "M2"):
-            mod = "src.basetype_benchmark.exporters.m1m2_extractor"
-        else:
-            mod = "src.basetype_benchmark.exporters.o2_extractor"
-
-        run_cmd([str(VENV_PYTHON), "-m", mod, "--input", str(source), "--output", str(output_dir)])
-
-    console.print(f"\n[green]Export complete.[/green]")
-    wait()
-
-
 def delete_dataset():
     header("Delete Dataset")
 
@@ -258,19 +204,46 @@ def delete_dataset():
         return
 
     console.print("[bold]Select to delete:[/bold]")
-    idx = select_from_list(datasets)
-    if idx is None:
+    # Display options with sizes
+    for i, d in enumerate(datasets, 1):
+        console.print(f"  [cyan]{i}[/cyan]. {d.name} ({dir_size(d)})")
+    console.print(f"  [cyan]{len(datasets) + 1}[/cyan]. [red]DELETE ALL[/red]")
+    console.print()
+    choice = IntPrompt.ask("Select", default=1)
+    if not (1 <= choice <= len(datasets) + 1):
         return
+    idx = choice - 1
 
-    target = datasets[idx]
-    console.print(f"\n[red]Delete {target.name}?[/red]")
-    if Confirm.ask("", default=False):
+    if idx == len(datasets):
+        # Delete ALL selected
+        console.print(f"\n[bold red]WARNING: This will delete ALL {len(datasets)} datasets![/bold red]")
+        console.print("[yellow]This action cannot be undone.[/yellow]\n")
+        if not Confirm.ask("[red]Are you sure you want to delete ALL datasets?[/red]", default=False):
+            return
+        console.print("\n[bold red]FINAL CONFIRMATION[/bold red]")
+        if not Confirm.ask("[red]Type 'y' again to confirm deletion of ALL datasets[/red]", default=False):
+            console.print("[green]Cancelled.[/green]")
+            wait()
+            return
+        # Delete all
+        for target in datasets:
+            shutil.rmtree(target)
+        console.print(f"[green]Deleted {len(datasets)} datasets.[/green]")
+    else:
+        # Single dataset deletion
+        target = datasets[idx]
+        console.print(f"\n[bold red]WARNING: Delete '{target.name}'?[/bold red]")
+        console.print("[yellow]This action cannot be undone.[/yellow]\n")
+        if not Confirm.ask("[red]Are you sure?[/red]", default=False):
+            console.print("[green]Cancelled.[/green]")
+            wait()
+            return
+        console.print("\n[bold red]FINAL CONFIRMATION[/bold red]")
+        if not Confirm.ask(f"[red]Type 'y' again to confirm deletion of '{target.name}'[/red]", default=False):
+            console.print("[green]Cancelled.[/green]")
+            wait()
+            return
         shutil.rmtree(target)
-        # Also delete exports
-        for p in PARADIGMS:
-            export_path = EXPORT_DIR / p.lower() / target.name
-            if export_path.exists():
-                shutil.rmtree(export_path)
         console.print("[green]Deleted.[/green]")
     wait()
 
@@ -339,55 +312,63 @@ def run_benchmark(mode: str, datasets: list[Path]):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    if mode == "1":
-        # Quick
-        output = RESULTS_DIR / f"quick_{timestamp}.json"
-        console.print(f"\n[yellow]Quick test: P1+M1, 3 runs, 32-16-8 GB[/yellow]")
-        if Confirm.ask("Start?", default=True):
-            btb("benchmark", "-s", str(source), "-e", str(EXPORT_DIR), "-o", str(output),
-                "-p", "P1,M1", "--ram", "32,16,8", "--runs", "3")
+    # Use temporary directory for exports (on-demand, cleaned after use)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="btb_export_") as tmp_export:
+        tmp_export_path = Path(tmp_export)
+        console.print(f"[dim]Temporary export dir: {tmp_export_path}[/dim]\n")
 
-    elif mode == "2":
-        # Standard
-        output = RESULTS_DIR / f"standard_{timestamp}.json"
-        console.print(f"\n[yellow]Standard: All paradigms, 10 runs, 64-32-16-8 GB[/yellow]")
-        if Confirm.ask("Start?", default=True):
-            btb("benchmark", "-s", str(source), "-e", str(EXPORT_DIR), "-o", str(output),
-                "-p", "P1,P2,M1,M2,O2", "--ram", "64,32,16,8", "--runs", "10")
+        if mode == "1":
+            # Quick
+            output = RESULTS_DIR / f"quick_{timestamp}.json"
+            console.print(f"\n[yellow]Quick test: P1+M1, 3 runs, 32-16-8 GB[/yellow]")
+            if Confirm.ask("Start?", default=True):
+                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
+                    "-p", "P1,M1", "--ram", "32,16,8", "--runs", "3", "--cleanup")
 
-    elif mode == "3":
-        # RAM gradient
-        console.print("\n[bold]Paradigm:[/bold]")
-        for i, p in enumerate(PARADIGMS, 1):
-            console.print(f"  [cyan]{i}[/cyan]. {p}")
-        console.print()
-        idx = IntPrompt.ask("Select", default=3)
-        paradigm = PARADIGMS[idx - 1] if 1 <= idx <= len(PARADIGMS) else "M1"
+        elif mode == "2":
+            # Standard
+            output = RESULTS_DIR / f"standard_{timestamp}.json"
+            console.print(f"\n[yellow]Standard: All paradigms, 10 runs, 64-32-16-8 GB[/yellow]")
+            if Confirm.ask("Start?", default=True):
+                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
+                    "-p", "P1,P2,M1,M2,O2", "--ram", "64,32,16,8", "--runs", "10", "--cleanup")
 
-        ram = Prompt.ask("RAM levels (GB)", default="64,48,32,24,16,12,8,4")
+        elif mode == "3":
+            # RAM gradient
+            console.print("\n[bold]Paradigm:[/bold]")
+            for i, p in enumerate(PARADIGMS, 1):
+                console.print(f"  [cyan]{i}[/cyan]. {p}")
+            console.print()
+            idx = IntPrompt.ask("Select", default=3)
+            paradigm = PARADIGMS[idx - 1] if 1 <= idx <= len(PARADIGMS) else "M1"
 
-        output = RESULTS_DIR / f"gradient_{paradigm}_{timestamp}.json"
-        console.print(f"\n[yellow]RAM gradient: {paradigm}, levels={ram}[/yellow]")
-        if Confirm.ask("Start?", default=True):
-            btb("benchmark", "-s", str(source), "-e", str(EXPORT_DIR), "-o", str(output),
-                "-p", paradigm, "--ram", ram, "--runs", "5")
+            ram = Prompt.ask("RAM levels (GB)", default="64,48,32,24,16,12,8,4")
 
-    elif mode == "4":
-        # Custom
-        console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
-        paradigms = Prompt.ask("Select", default="ALL")
-        if paradigms.upper() == "ALL":
-            paradigms = "P1,P2,M1,M2,O2"
-        console.print("[bold]RAM levels (GB):[/bold] 128, 64, 32, 16, 8, 4, 2, 1, 0.5")
-        ram = Prompt.ask("Select", default="128,64,32,16,8,4,2,1,0.5")
-        runs = IntPrompt.ask("Runs", default=5)
+            output = RESULTS_DIR / f"gradient_{paradigm}_{timestamp}.json"
+            console.print(f"\n[yellow]RAM gradient: {paradigm}, levels={ram}[/yellow]")
+            if Confirm.ask("Start?", default=True):
+                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
+                    "-p", paradigm, "--ram", ram, "--runs", "5", "--cleanup")
 
-        output = RESULTS_DIR / f"custom_{timestamp}.json"
-        console.print(f"\n[yellow]Custom: {paradigms}, RAM={ram}, runs={runs}[/yellow]")
-        if Confirm.ask("Start?", default=True):
-            btb("benchmark", "-s", str(source), "-e", str(EXPORT_DIR), "-o", str(output),
-                "-p", paradigms, "--ram", ram, "--runs", str(runs))
+        elif mode == "4":
+            # Custom
+            console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
+            paradigms = Prompt.ask("Select", default="ALL")
+            if paradigms.upper() == "ALL":
+                paradigms = "P1,P2,M1,M2,O2"
+            console.print("[bold]RAM levels (GB):[/bold] 128, 64, 32, 16, 8, 4, 2, 1, 0.5")
+            ram = Prompt.ask("Select", default="128,64,32,16,8,4,2,1,0.5")
+            runs = IntPrompt.ask("Runs", default=5)
 
+            output = RESULTS_DIR / f"custom_{timestamp}.json"
+            console.print(f"\n[yellow]Custom: {paradigms}, RAM={ram}, runs={runs}[/yellow]")
+            if Confirm.ask("Start?", default=True):
+                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
+                    "-p", paradigms, "--ram", ram, "--runs", str(runs), "--cleanup")
+
+    # Temporary directory auto-cleaned on exit
+    console.print("[dim]Export directory cleaned.[/dim]")
     wait()
 
 
@@ -560,7 +541,6 @@ def show_system_info():
 
 def main():
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     while True:
