@@ -1,40 +1,41 @@
 # Q20: Shortest HVAC Path
 # Status: DEGRADED pour O2 (pas de shortestPath natif)
 # Note: Retourne UN chemin, pas garanti le plus court
+# Params: equipmentId (source), spaceId (target)
 PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?path_index ?node_id ?node_type ?node_name
 WHERE {
     # Chemin de longueur 1
     {
-        ?start btb:id ?startId ; btb:feeds|btb:serves ?end .
-        ?end btb:id ?endId .
+        ?start btb:id ?equipmentId ; btb:feeds|btb:serves ?end .
+        ?end btb:id ?spaceId .
         BIND(0 AS ?path_index)
-        BIND(?startId AS ?node_id)
+        BIND(?equipmentId AS ?node_id)
     }
     UNION
     {
-        ?start btb:id ?startId ; btb:feeds|btb:serves ?end .
-        ?end btb:id ?endId .
+        ?start btb:id ?equipmentId ; btb:feeds|btb:serves ?end .
+        ?end btb:id ?spaceId .
         BIND(1 AS ?path_index)
-        BIND(?endId AS ?node_id)
+        BIND(?spaceId AS ?node_id)
     }
     UNION
     # Chemin de longueur 2
     {
-        ?start btb:id ?startId ; btb:feeds|btb:serves ?mid .
+        ?start btb:id ?equipmentId ; btb:feeds|btb:serves ?mid .
         ?mid btb:feeds|btb:serves ?end .
-        ?end btb:id ?endId .
+        ?end btb:id ?spaceId .
         ?mid btb:id ?midId .
         FILTER NOT EXISTS { ?start btb:feeds|btb:serves ?end }
         BIND(0 AS ?path_index)
-        BIND(?startId AS ?node_id)
+        BIND(?equipmentId AS ?node_id)
     }
     UNION
     {
-        ?start btb:id ?startId ; btb:feeds|btb:serves ?mid .
+        ?start btb:id ?equipmentId ; btb:feeds|btb:serves ?mid .
         ?mid btb:feeds|btb:serves ?end .
-        ?end btb:id ?endId .
+        ?end btb:id ?spaceId .
         ?mid btb:id ?midId .
         FILTER NOT EXISTS { ?start btb:feeds|btb:serves ?end }
         BIND(1 AS ?path_index)
@@ -42,13 +43,13 @@ WHERE {
     }
     UNION
     {
-        ?start btb:id ?startId ; btb:feeds|btb:serves ?mid .
+        ?start btb:id ?equipmentId ; btb:feeds|btb:serves ?mid .
         ?mid btb:feeds|btb:serves ?end .
-        ?end btb:id ?endId .
+        ?end btb:id ?spaceId .
         ?mid btb:id ?midId .
         FILTER NOT EXISTS { ?start btb:feeds|btb:serves ?end }
         BIND(2 AS ?path_index)
-        BIND(?endId AS ?node_id)
+        BIND(?spaceId AS ?node_id)
     }
 
     # Recuperer les infos du noeud

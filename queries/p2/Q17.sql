@@ -14,6 +14,6 @@ WHERE eq.node_type = 'Equipment'
   AND eq.data->>'domain' = 'HVAC'
   AND EXISTS (
       SELECT 1 FROM jsonb_array_elements_text(eq.data->'capabilities') AS cap
-      WHERE cap = %(capability)s
+      WHERE cap = $1
   )
 ORDER BY eq.data->>'equipment_type', eq.id;

@@ -821,7 +821,8 @@ class RAMGradientExecutor:
         if hasattr(self, "_sampled_params") and self._sampled_params:
             from ..core.param_sampler import get_params_for_query
             params = get_params_for_query(query_id, self._sampled_params)
-            if params:
+            # Note: params can be {} for queries without parameters - that's valid
+            if params is not None:
                 # Filter out None values - queries should handle missing params gracefully
                 params = {k: v for k, v in params.items() if v is not None}
                 # Normalize parameter keys based on paradigm
@@ -849,9 +850,14 @@ class RAMGradientExecutor:
         query_data = answers.get(query_id, {})
         params = query_data.get("parameters", {})
 
-        # Merge with default parameters
+        # Get expected parameter names from catalog
+        query_def = self._catalog.get_query(query_id)
+        expected_param_names = set(p.upper() for p in query_def.parameter_order) if query_def else set()
+
+        # Only merge default_parameters for params actually used by this query
         defaults = self._golden_answers.get("default_parameters", {})
-        merged = {**defaults, **params}
+        filtered_defaults = {k: v for k, v in defaults.items() if k.upper() in expected_param_names}
+        merged = {**filtered_defaults, **params}
 
         # Normalize parameter key casing based on paradigm
         # P1/P2: lowercase for named %(name)s placeholders
