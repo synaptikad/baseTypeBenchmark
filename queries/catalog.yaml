@@ -851,7 +851,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif explore tout avant filtrage"}
       M1: {status: NATIVE, note: "shortestPath() natif Cypher"}
       M2: {status: NATIVE, note: "shortestPath() natif Cypher"}
-      O2: {status: DEGRADED, note: "Property path SPARQL limité"}
+      O2: {status: IMPOSSIBLE, note: "No shortestPath in SPARQL, UNION-based workaround too slow"}
 
   Q21:
     name: "Electrical Resilience"
