@@ -115,7 +115,15 @@ class HybridRunner:
                 return self.graph.execute(query, params, timeout_seconds)
 
         # Default: SQL query → timeseries
-        return self.ts.execute(query, params, timeout_seconds)
+        # Convert camelCase params to snake_case for SQL
+        if params:
+            import re
+            def camel_to_snake(name: str) -> str:
+                return re.sub(r'([a-z])([A-Z])', r'\1_\2', name).lower()
+            ts_params = {camel_to_snake(k): v for k, v in params.items()}
+        else:
+            ts_params = params
+        return self.ts.execute(query, ts_params, timeout_seconds)
 
     def execute_hybrid(
         self,
