@@ -1,6 +1,7 @@
 // Q7: Drift Top-20
 // Paramètres: $building_id, $date_start, $date_end
 // Intention: Top 20 des points température avec plus grande variance (drift)
+// Memgraph: stDev non supporté, calcul manuel de variance
 
 // Trouver tous les points température du bâtiment
 MATCH (b:Building {id: $building_id})<-[:LOCATED_IN*1..4]-(eq:Equipment)-[:HAS_POINT]->(p:Point)
@@ -11,24 +12,30 @@ MATCH (p)-[:HAS_CHUNK]->(chunk:TimeseriesChunk)
 WHERE chunk.date >= substring($date_start, 0, 10)
   AND chunk.date <= substring($date_end, 0, 10)
 
-// Dérouler les valeurs
+// Dérouler les valeurs et calculer stats
 UNWIND chunk.values AS value
 
-// Calculer variance par point (approximation via stdev)
+// Agrégation par point: moyenne, somme carrés, count
 WITH p.id AS point_id,
      p.name AS point_name,
-     collect(value) AS values
+     avg(value) AS mean_value,
+     sum(value * value) AS sum_sq,
+     sum(value) AS sum_val,
+     count(value) AS sample_count
 
-WITH point_id, point_name,
-     avg(values) AS mean_value,
-     stDev(values) AS drift
+// Variance = E[X²] - E[X]² = sum_sq/n - (sum_val/n)²
+WITH point_id, point_name, mean_value, sample_count,
+     CASE WHEN sample_count > 1
+          THEN sqrt((sum_sq / sample_count) - (mean_value * mean_value))
+          ELSE 0.0
+     END AS drift
 
-// Top 20 par variance
+// Top 20 par variance (drift)
 RETURN
     point_id,
     point_name,
     mean_value,
     drift,
-    size(values) AS sample_count
+    sample_count
 ORDER BY drift DESC
 LIMIT 20;

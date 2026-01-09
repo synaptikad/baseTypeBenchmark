@@ -5,23 +5,50 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?path_index ?node_id ?node_type ?node_name
 WHERE {
-    VALUES ?start_id { "ahu_1" }
-    VALUES ?end_id { "space_1_1" }
-
     # Chemin de longueur 1
     {
-        ?start btb:id ?start_id ; btb:feeds|btb:serves ?end .
-        ?end btb:id ?end_id .
-        VALUES (?path_index ?node_id) { (0 ?start_id) (1 ?end_id) }
+        ?start btb:id ?startId ; btb:feeds|btb:serves ?end .
+        ?end btb:id ?endId .
+        BIND(0 AS ?path_index)
+        BIND(?startId AS ?node_id)
+    }
+    UNION
+    {
+        ?start btb:id ?startId ; btb:feeds|btb:serves ?end .
+        ?end btb:id ?endId .
+        BIND(1 AS ?path_index)
+        BIND(?endId AS ?node_id)
     }
     UNION
     # Chemin de longueur 2
     {
-        ?start btb:id ?start_id ; btb:feeds|btb:serves ?mid .
+        ?start btb:id ?startId ; btb:feeds|btb:serves ?mid .
         ?mid btb:feeds|btb:serves ?end .
-        ?end btb:id ?end_id .
-        VALUES (?path_index ?node_id) { (0 ?start_id) (1 ?mid) (2 ?end_id) }
+        ?end btb:id ?endId .
+        ?mid btb:id ?midId .
         FILTER NOT EXISTS { ?start btb:feeds|btb:serves ?end }
+        BIND(0 AS ?path_index)
+        BIND(?startId AS ?node_id)
+    }
+    UNION
+    {
+        ?start btb:id ?startId ; btb:feeds|btb:serves ?mid .
+        ?mid btb:feeds|btb:serves ?end .
+        ?end btb:id ?endId .
+        ?mid btb:id ?midId .
+        FILTER NOT EXISTS { ?start btb:feeds|btb:serves ?end }
+        BIND(1 AS ?path_index)
+        BIND(?midId AS ?node_id)
+    }
+    UNION
+    {
+        ?start btb:id ?startId ; btb:feeds|btb:serves ?mid .
+        ?mid btb:feeds|btb:serves ?end .
+        ?end btb:id ?endId .
+        ?mid btb:id ?midId .
+        FILTER NOT EXISTS { ?start btb:feeds|btb:serves ?end }
+        BIND(2 AS ?path_index)
+        BIND(?endId AS ?node_id)
     }
 
     # Recuperer les infos du noeud

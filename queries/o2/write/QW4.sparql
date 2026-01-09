@@ -1,0 +1,19 @@
+# QW4: Maintenance Event Append
+# Équivalent O2 - Création d'un nœud MaintenanceEvent lié
+# Paramètres: ?equipmentId, ?eventId, ?eventDate, ?eventType, ?technician
+#
+# Note: RDF n'a pas de listes natives, on crée des nœuds séparés avec relations
+# Le pattern est: Equipment -[:HAS_MAINTENANCE_EVENT]-> MaintenanceEvent
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+INSERT DATA {
+    ?eventUri a btb:MaintenanceEvent ;
+              btb:id ?eventId ;
+              btb:date ?eventDate ;
+              btb:eventType ?eventType ;
+              btb:technician ?technician .
+
+    ?equipmentUri btb:hasMaintenanceEvent ?eventUri .
+}

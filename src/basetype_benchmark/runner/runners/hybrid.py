@@ -268,26 +268,48 @@ class HybridRunner:
         self,
         query: str,
         params: dict[str, Any],
-        point_ids: list[str],
+        point_ids: list[str] | dict[str, list[str]],
         timeout_seconds: float,
     ) -> RunResult:
         """Execute timeseries phase with injected point_ids.
 
         Args:
-            query: SQL query with point_ids placeholder
-            params: Original parameters
-            point_ids: List of point IDs from graph phase
+            query: SQL query with %(name)s placeholders
+            params: Original parameters (DATE_START, DATE_END, CO2_FACTOR, etc.)
+            point_ids: Either a single list of IDs or a dict mapping quantity to IDs
+                       (e.g., {"energy": [...], "temperature": [...], "occupancy": [...]})
             timeout_seconds: Timeout
 
         Returns:
             RunResult from timeseries query
         """
-        # Merge params with point_ids
-        ts_params = {**params, "point_ids": point_ids}
+        from ..core.query_utils import normalize_param_keys
 
-        # Handle different placeholder styles
-        # PostgreSQL: $1, $2 or %(name)s
-        # We'll normalize to use the format the PostgresRunner expects
+        # Build params dict for named placeholders %(name)s
+        # SQL uses lowercase_snake param names, so normalize keys
+        ts_params = normalize_param_keys(params, target_case="lower")
+
+        # Handle different point_ids formats
+        if isinstance(point_ids, dict):
+            # Q12: multiple point_id lists by quantity
+            # Map quantity names to SQL param names
+            quantity_to_param = {
+                "energy": "energy_point_ids",
+                "temperature": "temp_point_ids",
+                "occupancy": "occ_point_ids",
+                "co2": "co2_point_ids",
+            }
+            # Initialize all possible point_id lists to empty arrays
+            # (in case some quantities don't exist in the dataset)
+            for param_name in quantity_to_param.values():
+                ts_params[param_name] = []
+            # Then populate with actual values
+            for quantity, ids in point_ids.items():
+                param_name = quantity_to_param.get(quantity, f"{quantity}_point_ids")
+                ts_params[param_name] = ids
+        else:
+            # Q7, Q8, Q9: single point_ids list
+            ts_params["point_ids"] = point_ids
 
         return self.ts.execute(query, ts_params, timeout_seconds)
 
@@ -295,38 +317,80 @@ class HybridRunner:
         self,
         rows: list[dict[str, Any]],
         column: str | None = None,
-    ) -> list[str]:
+    ) -> list[str] | dict[str, list[str]]:
         """Extract point IDs from graph query results.
+
+        Handles different result formats:
+        - Q7: Single row with point_ids list -> returns list[str]
+        - Q12: Multiple rows with (quantity, point_ids) -> returns dict[str, list[str]]
+        - Q13: Multiple rows with points list of {point_id, quantity} -> returns dict[str, list[str]]
 
         Args:
             rows: Query result rows
             column: Specific column name (auto-detect if None)
 
         Returns:
-            List of point ID strings
+            List of point ID strings, or dict mapping quantity to point ID lists
         """
         if not rows:
             return []
 
-        # Auto-detect column name if not specified
+        sample_row = rows[0]
+
+        # Case 1: Q12 format - rows with (quantity, point_ids)
+        if "quantity" in sample_row and "point_ids" in sample_row:
+            result = {}
+            for row in rows:
+                quantity = row.get("quantity")
+                ids = row.get("point_ids", [])
+                if quantity and ids:
+                    # Handle both list and single value
+                    if isinstance(ids, list):
+                        result[quantity] = [str(id) for id in ids]
+                    else:
+                        result[quantity] = [str(ids)]
+            return result if result else []
+
+        # Case 2: Q13 format - rows with points list of {point_id, quantity}
+        if "points" in sample_row:
+            result = {}
+            for row in rows:
+                points = row.get("points", [])
+                for point in points:
+                    if isinstance(point, dict):
+                        pid = point.get("point_id")
+                        qty = point.get("quantity")
+                        if pid and qty:
+                            if qty not in result:
+                                result[qty] = []
+                            result[qty].append(str(pid))
+            return result if result else []
+
+        # Case 3: Q7/Q8/Q9 format - single row with point_ids as list
+        if "point_ids" in sample_row:
+            ids = sample_row.get("point_ids", [])
+            if isinstance(ids, list):
+                return [str(id) for id in ids]
+            return [str(ids)] if ids else []
+
+        # Fallback: auto-detect column
         if column is None:
-            sample_row = rows[0]
             for col in self.POINT_ID_COLUMNS:
                 if col in sample_row:
                     column = col
                     break
-
             if column is None:
-                # Use first column
                 column = list(sample_row.keys())[0]
 
-        # Extract IDs
+        # Extract IDs from column
         point_ids = []
         for row in rows:
             value = row.get(column)
             if value is not None:
-                # Convert to string
-                point_ids.append(str(value))
+                if isinstance(value, list):
+                    point_ids.extend(str(v) for v in value)
+                else:
+                    point_ids.append(str(value))
 
         # Deduplicate while preserving order
         seen = set()

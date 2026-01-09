@@ -145,29 +145,44 @@ class OxigraphRunner(BaseRunner):
             duration_ms = (time.perf_counter() - start) * 1000
             return self._make_error_result(e, duration_ms)
 
-    def check_connection(self) -> bool:
+    def check_connection(self, max_retries: int = 30, retry_delay: float = 2.0) -> bool:
         """Check if Oxigraph endpoint is reachable.
+
+        Will retry multiple times since Oxigraph container may take time to start.
+
+        Args:
+            max_retries: Maximum number of connection attempts
+            retry_delay: Seconds to wait between retries
 
         Returns:
             True if connected and responsive
         """
-        try:
-            client = self._get_client()
+        for attempt in range(max_retries):
+            try:
+                client = self._get_client()
 
-            # Simple ASK query to test connection
-            response = client.post(
-                self.config.query_endpoint,
-                data={"query": "ASK { ?s ?p ?o }"},
-                headers={
-                    "Accept": "application/sparql-results+json",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                timeout=10.0,
-            )
-            return response.status_code == 200
-        except Exception:
-            self._connected = False
-            return False
+                # Simple ASK query to test connection
+                response = client.post(
+                    self.config.query_endpoint,
+                    data={"query": "ASK { ?s ?p ?o }"},
+                    headers={
+                        "Accept": "application/sparql-results+json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    self._connected = True
+                    return True
+            except Exception:
+                pass
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+
+        self._connected = False
+        return False
 
     def close(self) -> None:
         """Close HTTP client."""

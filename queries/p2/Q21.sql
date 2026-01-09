@@ -5,7 +5,7 @@
 WITH RECURSIVE all_paths AS (
     SELECT
         n.id AS current_id,
-        ARRAY[n.id] AS path,
+        ARRAY[n.id]::text[] AS path,
         0 AS depth
     FROM nodes n
     WHERE n.id = $1
@@ -26,7 +26,7 @@ complete_paths AS (
     SELECT path
     FROM all_paths ap
     JOIN nodes n ON n.id = ap.current_id
-    WHERE n.properties->>'equipment_type' = $2
+    WHERE n.data->>'equipment_type' = $2
 )
 SELECT
     ROW_NUMBER() OVER () AS path_id,

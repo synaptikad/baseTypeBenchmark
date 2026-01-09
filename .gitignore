@@ -26,6 +26,7 @@ results/
 *.log
 
 # Env (local secrets only)
+.env
 .env.local
 .env.secrets
 
@@ -45,7 +46,7 @@ src/basetype_benchmark/dataset/exports/
 
 # Private docs (not for public repo)
 docs_private/
-docs/
+!docs/archive/
 
 # Session and test files
 MEMO_SESSION.md
@@ -53,6 +54,13 @@ AGENT_INIT.md
 *.pkl.gz
 test_ram_*.py
 benchmark_results/
+results*.json
+
+# Temporary status files
+STATUS.md
+HOTFIX_RUNNER_BUGS.md
+SESSION_END_STATUS.md
+addendum.md
 
 # Claude settings
 .claude/

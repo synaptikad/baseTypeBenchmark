@@ -7,7 +7,7 @@ WITH RECURSIVE paths AS (
         n.id AS node_id,
         n.node_type,
         n.name AS node_name,
-        ARRAY[n.id] AS path,
+        ARRAY[n.id]::text[] AS path,
         0 AS depth
     FROM nodes n
     WHERE n.id = $1

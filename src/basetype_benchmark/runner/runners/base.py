@@ -25,6 +25,7 @@ class RunStatus(str, Enum):
     TIMEOUT = "timeout"
     ERROR = "error"
     OOM = "oom"
+    SKIPPED = "skipped"  # Query not supported for this paradigm (IMPOSSIBLE)
 
 
 @dataclass
@@ -57,6 +58,11 @@ class HybridRunResult:
     def __post_init__(self):
         if self.row_count == 0:
             self.row_count = len(self.rows)
+
+    @property
+    def duration_ms(self) -> float:
+        """Alias for total_ms for compatibility with RunResult interface."""
+        return self.total_ms
 
 
 # =============================================================================

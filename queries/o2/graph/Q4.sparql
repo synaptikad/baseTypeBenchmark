@@ -3,16 +3,14 @@
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-SELECT ?floor_id ?point_id ?point_name ?equipment_id ?equipment_name
+SELECT ?floorId ?point_id ?point_name ?equipment_id ?equipment_name
 WHERE {
-    VALUES ?floor_id { "floor_1" }
-
-    ?floor btb:id ?floor_id .
+    ?floor btb:id ?floorId .
 
     # Equipements lies a l'etage (directement ou via spaces)
     {
         # Equipement sur l'etage
-        ?eq btb:floorId ?floor_id .
+        ?eq btb:floorId ?floorId .
     }
     UNION
     {

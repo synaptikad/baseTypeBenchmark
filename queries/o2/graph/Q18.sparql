@@ -5,10 +5,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 SELECT ?point_id ?point_name ?equipment_id ?last_calibration ?next_calibration
 WHERE {
-    VALUES ?meter_id { "meter_main_1" }
-    VALUES ?ref_date { "2024-06-01"^^xsd:date }
-
-    ?meter btb:id ?meter_id .
+    ?meter btb:id ?meterId .
     ?meter btb:feeds+ ?eq .
     ?eq btb:hasPoint ?point .
 
@@ -20,6 +17,6 @@ WHERE {
 
     OPTIONAL { ?point btb:calibrationLastDate ?last_calibration }
 
-    FILTER(?next_calibration < ?ref_date)
+    FILTER(?next_calibration < ?referenceDate)
 }
-ORDER BY DESC(?ref_date - ?next_calibration) ?point_id
+ORDER BY DESC(?referenceDate - ?next_calibration) ?point_id

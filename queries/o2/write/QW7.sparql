@@ -1,0 +1,17 @@
+# QW7: Add Capability (Idempotent)
+# Équivalent O2 - INSERT IF NOT EXISTS
+# Paramètres: ?equipmentId, ?newCapability
+#
+# Note: Utilise INSERT WHERE NOT EXISTS pour idempotence
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+INSERT {
+    ?eq btb:hasCapability ?newCapability .
+}
+WHERE {
+    ?eq btb:id ?equipmentId .
+    FILTER NOT EXISTS {
+        ?eq btb:hasCapability ?newCapability .
+    }
+}

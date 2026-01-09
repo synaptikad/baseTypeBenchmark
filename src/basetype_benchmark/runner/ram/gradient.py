@@ -354,6 +354,10 @@ class RAMGradientExecutor:
             else:
                 sampler = MultiContainerSampler(container_ids)
 
+            # Initialize dynamic parameter sampler (once per level)
+            if not hasattr(self, "_sampled_params"):
+                self._init_param_sampler()
+
             # Run warmup (not counted)
             if self.verbose:
                 self._console.print(f"      [dim]Warmup ({self.n_warmup} runs)...[/dim]")
@@ -452,6 +456,27 @@ class RAMGradientExecutor:
 
             # Get query definition and files
             query_def = self._catalog.get_query(query_id)
+
+            # Skip queries marked IMPOSSIBLE for this paradigm
+            engine_type = EngineType(self.paradigm)
+            if not query_def.can_execute(engine_type):
+                if self.verbose:
+                    self._console.print("[yellow]SKIPPED (IMPOSSIBLE)[/yellow]")
+                # Record as skipped
+                query_stats.runs.append(QueryRunResult(
+                    query_id=query_id,
+                    variant_id=0,
+                    run_id=0,
+                    result=RunResult(
+                        rows=[],
+                        duration_ms=0,
+                        status=RunStatus.SKIPPED,
+                        error_message=f"Query {query_id} is IMPOSSIBLE for {self.paradigm}",
+                    ),
+                ))
+                stats[query_id] = query_stats
+                continue
+
             query_files = self._load_query_files(query_id)
 
             for variant_id in range(self.n_variants):
@@ -784,9 +809,29 @@ class RAMGradientExecutor:
         return files.get("query", "")
 
     def _get_default_params(self, query_id: str) -> dict[str, Any]:
-        """Get default parameters for a query from golden_answers.yaml."""
+        """Get default parameters for a query.
+
+        Strategy:
+        1. Try dynamic sampling from loaded dataset (if available)
+        2. Fall back to golden_answers.yaml
+        """
         from ..core.query_utils import normalize_param_keys
 
+        # Try dynamic parameters first (always use sampled params, never golden_answers)
+        if hasattr(self, "_sampled_params") and self._sampled_params:
+            from ..core.param_sampler import get_params_for_query
+            params = get_params_for_query(query_id, self._sampled_params)
+            if params:
+                # Filter out None values - queries should handle missing params gracefully
+                params = {k: v for k, v in params.items() if v is not None}
+                # Normalize and return dynamic params
+                if self.paradigm in ("M1", "M2"):
+                    params = normalize_param_keys(params, target_case="lower")
+                elif self.paradigm == "O2":
+                    params = normalize_param_keys(params, target_case="camel")
+                return params
+
+        # Fall back to golden_answers.yaml (only for development/validation)
         if not hasattr(self, "_golden_answers"):
             golden_path = Path(__file__).parents[4] / "queries" / "golden_answers.yaml"
             if golden_path.exists():
@@ -815,6 +860,20 @@ class RAMGradientExecutor:
         # P1/P2 SQL: positional parameters, case doesn't matter for keys
 
         return merged
+
+    def _init_param_sampler(self):
+        """Initialize dynamic parameter sampler from loaded dataset."""
+        try:
+            from ..core.param_sampler import ParamSampler
+            runner = self._get_runner()
+            sampler = ParamSampler(self.paradigm, runner, seed=42)
+            self._sampled_params = sampler.sample()
+            if self.verbose:
+                self._console.print("[dim]Dynamic params sampled from dataset[/dim]")
+        except Exception as e:
+            self._sampled_params = None
+            if self.verbose:
+                self._console.print(f"[dim]Using golden_answers.yaml (sampling failed: {e})[/dim]")
 
     def _get_variant_params(self, query_id: str, variant_id: int) -> dict[str, Any]:
         """Get parameters for a specific variant.

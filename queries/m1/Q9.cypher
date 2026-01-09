@@ -1,4 +1,23 @@
 // Q9: Tenant Carbon Footprint
-// Status: IMPOSSIBLE pour M1
-// Raison: Necessite SUM sur timeseries + calcul
-RETURN "IMPOSSIBLE: M1 ne supporte pas les agregations timeseries" AS error;
+// Paramètres: $tenant_id, $date_start, $date_end, $co2_factor
+// Intention: Calculer l'empreinte carbone d'un locataire (énergie × facteur CO2)
+//
+// Modèle M1: Extension de Q8 avec multiplication par facteur CO2
+
+MATCH (t:Tenant {id: $tenant_id})<-[:METERS_TENANT]-(m:Meter)-[:HAS_POINT]->(p:Point)
+WHERE p.quantity = 'energy'
+
+// Récupérer les chunks timeseries dans la plage de dates
+MATCH (p)-[:HAS_CHUNK]->(chunk:TimeseriesChunk)
+WHERE chunk.date >= substring($date_start, 0, 10)
+  AND chunk.date <= substring($date_end, 0, 10)
+
+// Dérouler les valeurs et sommer
+UNWIND chunk.values AS value
+
+WITH t.id AS tenant_id, sum(value) AS total_energy
+
+RETURN
+    tenant_id,
+    total_energy AS total_energy_kwh,
+    total_energy * $co2_factor AS carbon_kg_co2;

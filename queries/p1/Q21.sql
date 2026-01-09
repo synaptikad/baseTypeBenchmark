@@ -5,7 +5,7 @@
 WITH RECURSIVE all_paths AS (
     SELECT
         eq.id AS current_id,
-        ARRAY[eq.id] AS path,
+        ARRAY[eq.id]::text[] AS path,
         0 AS depth
     FROM equipment eq
     WHERE eq.id = $1
@@ -14,13 +14,13 @@ WITH RECURSIVE all_paths AS (
 
     SELECT
         eq.id,
-        ap.path || eq.id,
+        ap.path || eq.id::text,
         ap.depth + 1
     FROM all_paths ap
     JOIN edges e ON e.target_id = ap.current_id AND e.rel_type = 'FEEDS'
     JOIN equipment eq ON eq.id = e.source_id
     WHERE ap.depth < 10
-      AND NOT (eq.id = ANY(ap.path))
+      AND NOT (eq.id::text = ANY(ap.path))
 ),
 complete_paths AS (
     SELECT path

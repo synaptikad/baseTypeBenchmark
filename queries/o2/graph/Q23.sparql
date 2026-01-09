@@ -4,10 +4,7 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT DISTINCT ?node_id ?node_type ?node_name ?hop_distance
 WHERE {
-    VALUES ?start_id { "space_1_1" }
-    VALUES ?max_hops { 3 }
-
-    ?start btb:id ?start_id .
+    ?start btb:id ?startId .
 
     # Hop 1
     {
@@ -32,7 +29,7 @@ WHERE {
         BIND(3 AS ?hop_distance)
     }
 
-    FILTER(?hop_distance <= ?max_hops)
+    FILTER(?hop_distance <= ?maxHops)
 
     ?node btb:id ?node_id ;
           btb:name ?node_name .

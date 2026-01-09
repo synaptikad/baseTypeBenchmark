@@ -1,6 +1,8 @@
 -- Q17: Capability Filter
 -- Status: NATIVE pour P2
--- Paramètres: $1 = CAPABILITY (string, ex: 'humidity_control')
+-- Paramètres: capability (string, ex: 'humidity_control')
+-- Démontre: jsonb_array_elements_text() avec EXISTS subquery
+-- Note: Plus robuste que @> containment pour paramètres dynamiques
 
 SELECT
     eq.id AS equipment_id,
@@ -10,5 +12,8 @@ SELECT
 FROM nodes eq
 WHERE eq.node_type = 'Equipment'
   AND eq.data->>'domain' = 'HVAC'
-  AND eq.data->'capabilities' @> to_jsonb($1::text)
+  AND EXISTS (
+      SELECT 1 FROM jsonb_array_elements_text(eq.data->'capabilities') AS cap
+      WHERE cap = %(capability)s
+  )
 ORDER BY eq.data->>'equipment_type', eq.id;

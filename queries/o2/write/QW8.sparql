@@ -1,0 +1,15 @@
+# QW8: Remove Property
+# Équivalent O2 - DELETE triple
+# Paramètres: ?nodeId, ?propertyToRemove (URI de la propriété)
+#
+# Note: Supprime le triple avec la propriété spécifiée
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+DELETE {
+    ?node ?propertyToRemove ?value .
+}
+WHERE {
+    ?node btb:id ?nodeId .
+    ?node ?propertyToRemove ?value .
+}

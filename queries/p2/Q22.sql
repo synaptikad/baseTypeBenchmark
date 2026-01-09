@@ -5,7 +5,7 @@
 SELECT
     sibling.id AS sibling_id,
     sibling.name AS sibling_name,
-    sibling.properties->>'equipment_type' AS sibling_type,
+    sibling.data->>'equipment_type' AS sibling_type,
     parent.id AS parent_id,
     parent.name AS parent_name
 FROM edges e1

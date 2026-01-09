@@ -27,6 +27,12 @@ categories:
   write_workload:
     description: "Workloads d'écriture (ingestion, mutation)"
     queries: [QW1, QW2, QW3]
+  jsonb_write:
+    description: "Écritures JSONB avancées (P2=NATIVE)"
+    queries: [QW4, QW5, QW6, QW7, QW8]
+  jsonb_validation:
+    description: "Lectures enrichies post-écriture (P2=NATIVE)"
+    queries: [Q24, Q25, Q26]
 
 # ===========================================================================
 # QUERIES
@@ -240,7 +246,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "time_bucket + agrégats TimescaleDB"}
       P2: {status: NATIVE, note: "time_bucket + agrégats TimescaleDB"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M1: {status: DEGRADED, note: "UNWIND sur TimeseriesChunk (daily chunks)"}
       M2: {status: NATIVE, note: "TimescaleDB via extension"}
       O2: {status: DEGRADED, note: "Agrégation SPARQL limitée"}
 
@@ -291,7 +297,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "JOIN nodes + TimescaleDB variance"}
       P2: {status: NATIVE, note: "JOIN nodes + TimescaleDB variance"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M1: {status: DEGRADED, note: "UNWIND + stDev sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB"}
       O2: {status: DEGRADED, note: "SPARQL agrégation limitée"}
 
@@ -340,7 +346,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "Graph JOIN + SUM timeseries"}
       P2: {status: NATIVE, note: "Graph JOIN + SUM timeseries"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M1: {status: DEGRADED, note: "UNWIND + SUM sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher traversée + TimescaleDB"}
       O2: {status: DEGRADED, note: "SPARQL + agrégation externe"}
 
@@ -397,7 +403,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "Extension Q8 avec multiplication"}
       P2: {status: NATIVE, note: "Extension Q8 avec multiplication"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M1: {status: DEGRADED, note: "UNWIND + SUM × CO2 factor sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB + calcul"}
       O2: {status: DEGRADED, note: "SPARQL + calcul externe"}
 
@@ -516,7 +522,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "Multi-JOIN + agrégats par quantity"}
       P2: {status: NATIVE, note: "Multi-JOIN + agrégats par quantity"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M1: {status: DEGRADED, note: "UNWIND multi-agrégats sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB multi-agrégats"}
       O2: {status: DEGRADED, note: "SPARQL + agrégation externe"}
 
@@ -572,7 +578,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "JOIN + EXTRACT(hour/dow) + agrégats"}
       P2: {status: NATIVE, note: "JOIN + EXTRACT(hour/dow) + agrégats"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB"}
+      M1: {status: DEGRADED, note: "UNWIND + filtres temporels sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB filtres temporels"}
       O2: {status: DEGRADED, note: "SPARQL filtres temporels limités"}
 
@@ -630,6 +636,15 @@ queries:
           sparql: "?daysAhead"
         example: 90
         default: 90
+      - name: REFERENCE_DATE
+        type: date
+        description: "Date de référence pour le calcul"
+        format:
+          sql: "$2"
+          cypher: "$reference_date"
+          sparql: "?referenceDate"
+        example: "2025-01-01"
+        default: "2025-01-01"
     jsonb_path: "data->'metadata'->>'warranty_end'"
     result_schema:
       columns:
@@ -671,8 +686,8 @@ queries:
     paradigm_status:
       P1: {status: IMPOSSIBLE, note: "Pas de colonne tags array"}
       P2: {status: NATIVE, note: "jsonb_array_elements_text + regex"}
-      M1: {status: DEGRADED, note: "Regex sur string si exporté"}
-      M2: {status: DEGRADED, note: "Regex sur string si exporté"}
+      M1: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
+      M2: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
       O2: {status: NATIVE, note: "Triples RDF naturels pour tags"}
 
   Q17:
@@ -702,8 +717,8 @@ queries:
     paradigm_status:
       P1: {status: IMPOSSIBLE, note: "Pas de colonne array capabilities"}
       P2: {status: NATIVE, note: "Opérateur @> containment + GIN index"}
-      M1: {status: DEGRADED, note: "Si capabilities exporté comme liste"}
-      M2: {status: DEGRADED, note: "Si capabilities exporté comme liste"}
+      M1: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
+      M2: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
       O2: {status: DEGRADED, note: "Triples multiples requis"}
 
   Q18:
@@ -722,6 +737,15 @@ queries:
           cypher: "$meter_id"
           sparql: "?meterId"
         example: "meter_main_1"
+      - name: REFERENCE_DATE
+        type: date
+        description: "Date de référence pour le calcul du retard"
+        format:
+          sql: "$2"
+          cypher: "$reference_date"
+          sparql: "?referenceDate"
+        example: "2025-01-01"
+        default: "2025-01-01"
     relations: [FEEDS, HAS_POINT]
     jsonb_path: "data->'calibration'->>'next_date'"
     max_depth: 10
@@ -988,7 +1012,7 @@ queries:
     paradigm_status:
       P1: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
       P2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
-      M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB, TS dans Memgraph (chunked)"}
+      M1: {status: NATIVE, note: "UNWIND + MERGE TimeseriesChunk (daily chunking)"}
       M2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
       O2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
 
@@ -1081,6 +1105,288 @@ queries:
       M1: {status: NATIVE, note: "MERGE (a)-[r:REL_TYPE]->(b)"}
       M2: {status: NATIVE, note: "MERGE (a)-[r:REL_TYPE]->(b)"}
       O2: {status: DEGRADED, note: "INSERT DATA triple (nécessite URI construction)"}
+
+  # -------------------------------------------------------------------------
+  # JSONB WRITE WORKLOADS (QW4-QW8) - P2 NATIVE
+  # -------------------------------------------------------------------------
+
+  QW4:
+    name: "Maintenance Event Append"
+    category: jsonb_write
+    intention: |
+      Ajouter un événement de maintenance à l'historique JSONB d'un équipement.
+      Crée le champ maintenance_history s'il n'existe pas.
+    use_case: "GMAO, suivi maintenance préventive/corrective"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID de l'équipement"
+        format:
+          sql: "%(equipment_id)s"
+        example: "eq_ahu_6"
+      - name: EVENT
+        type: json
+        description: "Objet événement de maintenance"
+        format:
+          sql: "%(event)s"
+        example: '{"date": "2024-06-15", "type": "preventive", "technician": "Tech_A"}'
+    write_mode: append_array
+    jsonb_operations: [jsonb_set, array_append, COALESCE]
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID équipement modifié"}
+        - {name: event_count, type: integer, description: "Nombre total d'événements"}
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB"}
+      P2: {status: NATIVE, note: "jsonb_set + array append avec ||"}
+      M1: {status: DEGRADED, note: "Nécessite MAGE pour manipulation liste"}
+      M2: {status: DEGRADED, note: "Nécessite MAGE pour manipulation liste"}
+      O2: {status: IMPOSSIBLE, note: "RDF n'a pas de structure array native"}
+
+  QW5:
+    name: "Deep Calibration Update"
+    category: jsonb_write
+    intention: |
+      Mettre à jour les champs de calibration imbriqués d'un point de mesure.
+      Préserve les autres champs du sous-objet calibration.
+    use_case: "Métrologie, suivi calibration, conformité"
+    parameters:
+      - name: POINT_ID
+        type: string
+        description: "ID du point de mesure"
+        format:
+          sql: "%(point_id)s"
+        example: "point_eq_ahu_6_supply_temp"
+      - name: CALIBRATION_DATE
+        type: date
+        description: "Date de la calibration effectuée"
+        format:
+          sql: "%(calibration_date)s"
+        example: "2024-06-01"
+      - name: NEXT_DATE
+        type: date
+        description: "Date de la prochaine calibration"
+        format:
+          sql: "%(next_date)s"
+        example: "2025-06-01"
+      - name: TECHNICIAN
+        type: string
+        description: "Nom du technicien/société"
+        format:
+          sql: "%(technician)s"
+        example: "Calibration_Co"
+    write_mode: update_nested
+    jsonb_operations: [jsonb_set, nested_path]
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID point modifié"}
+        - {name: updated_calibration, type: json, description: "Objet calibration mis à jour"}
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB"}
+      P2: {status: NATIVE, note: "jsonb_set multi-niveau"}
+      M1: {status: NATIVE, note: "SET direct sur propriétés"}
+      M2: {status: NATIVE, note: "SET direct sur propriétés"}
+      O2: {status: DEGRADED, note: "UPDATE = DELETE + INSERT triple"}
+
+  QW6:
+    name: "Metadata Merge"
+    category: jsonb_write
+    intention: |
+      Fusionner un patch JSON dans les metadata existantes d'un équipement.
+      Préserve les champs non mentionnés dans le patch.
+    use_case: "Mise à jour firmware, campagne bulk update"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID de l'équipement"
+        format:
+          sql: "%(equipment_id)s"
+        example: "eq_ahu_7"
+      - name: METADATA_PATCH
+        type: json
+        description: "Objet JSON à fusionner avec metadata"
+        format:
+          sql: "%(metadata_patch)s"
+        example: '{"firmware_version": "3.2.1", "last_update": "2024-06-20"}'
+    write_mode: merge
+    jsonb_operations: [jsonb_set, merge_operator]
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID équipement modifié"}
+        - {name: merged_metadata, type: json, description: "Metadata fusionnées"}
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB"}
+      P2: {status: NATIVE, note: "Opérateur || pour merge"}
+      M1: {status: DEGRADED, note: "SET multiple propriétés"}
+      M2: {status: DEGRADED, note: "SET multiple propriétés"}
+      O2: {status: IMPOSSIBLE, note: "Pas de merge natif RDF"}
+
+  QW7:
+    name: "Add Capability"
+    category: jsonb_write
+    intention: |
+      Ajouter une capability à un équipement si elle n'existe pas déjà.
+      Opération idempotente (pas de doublon).
+    use_case: "Upgrade équipement, extension fonctionnelle"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID de l'équipement"
+        format:
+          sql: "%(equipment_id)s"
+        example: "eq_ahu_6"
+      - name: NEW_CAPABILITY
+        type: string
+        description: "Capability à ajouter"
+        format:
+          sql: "%(new_capability)s"
+        example: "demand_control_ventilation"
+    write_mode: conditional_append
+    jsonb_operations: [jsonb_set, jsonb_build_array, containment_check]
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID équipement modifié (null si déjà présent)"}
+        - {name: updated_capabilities, type: array, description: "Capabilities après ajout"}
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne array"}
+      P2: {status: NATIVE, note: "Conditional UPDATE avec NOT @>"}
+      M1: {status: DEGRADED, note: "Nécessite MAGE ou WHERE NOT IN"}
+      M2: {status: DEGRADED, note: "Nécessite MAGE ou WHERE NOT IN"}
+      O2: {status: DEGRADED, note: "INSERT IF NOT EXISTS pattern"}
+
+  QW8:
+    name: "Remove Metadata Key"
+    category: jsonb_write
+    intention: |
+      Supprimer une clé obsolète des metadata d'un équipement.
+      Opérateur #- pour suppression par path.
+    use_case: "Nettoyage données, migration schéma, RGPD"
+    parameters:
+      - name: NODE_ID
+        type: string
+        description: "ID du nœud"
+        format:
+          sql: "%(node_id)s"
+        example: "eq_ahu_6"
+      - name: KEY_TO_REMOVE
+        type: string
+        description: "Clé à supprimer dans metadata"
+        format:
+          sql: "%(key_to_remove)s"
+        example: "legacy_protocol_id"
+    write_mode: delete_key
+    jsonb_operations: [path_delete, key_exists_check]
+    result_schema:
+      columns:
+        - {name: id, type: string, description: "ID nœud modifié"}
+        - {name: cleaned_metadata, type: json, description: "Metadata après suppression"}
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB"}
+      P2: {status: NATIVE, note: "Opérateur #- avec path"}
+      M1: {status: NATIVE, note: "REMOVE node.property"}
+      M2: {status: NATIVE, note: "REMOVE node.property"}
+      O2: {status: NATIVE, note: "DELETE DATA triple"}
+
+  # -------------------------------------------------------------------------
+  # JSONB VALIDATION QUERIES (Q24-Q26) - Post-Write Enriched Reads
+  # -------------------------------------------------------------------------
+
+  Q24:
+    name: "Maintenance History"
+    category: jsonb_validation
+    intention: |
+      Lire l'historique de maintenance complet d'un équipement avec agrégations.
+      Valide les écritures QW4.
+    use_case: "Reporting maintenance, analyse coûts, planning"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID de l'équipement"
+        format:
+          sql: "%(equipment_id)s"
+        example: "eq_ahu_6"
+    jsonb_operations: [jsonb_array_length, array_element_access, jsonb_agg, SUM_from_array]
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: event_count, type: integer, description: "Nombre d'événements maintenance"}
+        - {name: last_event, type: json, description: "Dernier événement complet"}
+        - {name: last_event_date, type: date, description: "Date dernier événement"}
+        - {name: last_technician, type: string, description: "Dernier technicien"}
+        - {name: total_maintenance_cost, type: numeric, description: "Coût total maintenance"}
+        - {name: all_parts_replaced, type: array, description: "Toutes pièces remplacées"}
+      order_by: []
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de données maintenance JSONB"}
+      P2: {status: NATIVE, note: "Full JSONB array processing"}
+      M1: {status: DEGRADED, note: "Si exporté comme liste propriété"}
+      M2: {status: DEGRADED, note: "Si exporté comme liste propriété"}
+      O2: {status: IMPOSSIBLE, note: "Pas de structure array RDF"}
+
+  Q25:
+    name: "Equipment Audit Trail"
+    category: jsonb_validation
+    intention: |
+      Construire un rapport d'audit complet combinant maintenance, calibration,
+      et firmware. Vue 360° post-écritures QW4/5/6.
+    use_case: "Audit technique, conformité, reporting direction"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID de l'équipement"
+        format:
+          sql: "%(equipment_id)s"
+        example: "eq_ahu_6"
+    jsonb_operations: [multi_source_aggregation, nested_access, computed_fields]
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: equipment_type, type: string, description: "Type équipement"}
+        - {name: current_firmware, type: string, description: "Version firmware actuelle"}
+        - {name: last_firmware_update, type: date, description: "Date dernière MAJ firmware"}
+        - {name: maintenance_events, type: integer, description: "Nombre événements maintenance"}
+        - {name: last_maintenance_date, type: date, description: "Date dernière maintenance"}
+        - {name: points_calibration_status, type: json, description: "Statut calibration des points"}
+        - {name: health_status, type: string, description: "Score santé calculé"}
+      order_by: []
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Données JSONB requises"}
+      P2: {status: NATIVE, note: "Multi-JOIN + JSONB aggregation"}
+      M1: {status: DEGRADED, note: "Orchestration applicative"}
+      M2: {status: DEGRADED, note: "Orchestration applicative"}
+      O2: {status: IMPOSSIBLE, note: "Structure trop complexe"}
+
+  Q26:
+    name: "Capability Evolution"
+    category: jsonb_validation
+    intention: |
+      Analyser la distribution des capabilities par type d'équipement.
+      Valide les ajouts via QW7.
+    use_case: "Analyse parc, planification upgrades, benchmark"
+    parameters:
+      - name: DOMAIN
+        type: string
+        description: "Domaine d'équipements"
+        format:
+          sql: "%(domain)s"
+        example: "HVAC"
+    jsonb_operations: [jsonb_object_agg, array_stats, GROUP_BY_jsonb]
+    result_schema:
+      columns:
+        - {name: equipment_type, type: string, description: "Type équipement"}
+        - {name: equipment_count, type: integer, description: "Nombre d'équipements"}
+        - {name: capabilities_distribution, type: json, description: "Distribution capabilities"}
+        - {name: most_common_capability, type: string, description: "Capability la plus fréquente"}
+        - {name: avg_capabilities, type: numeric, description: "Moyenne capabilities par équipement"}
+      order_by: [equipment_count DESC]
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne array capabilities"}
+      P2: {status: NATIVE, note: "jsonb_object_agg + array stats"}
+      M1: {status: DEGRADED, note: "MAGE pour manipulation listes"}
+      M2: {status: DEGRADED, note: "MAGE pour manipulation listes"}
+      O2: {status: DEGRADED, note: "Agrégation SPARQL limitée"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

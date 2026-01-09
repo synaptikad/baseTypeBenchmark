@@ -1,0 +1,25 @@
+# QW5: Deep Calibration Update
+# Équivalent O2 - DELETE/INSERT pattern pour update
+# Paramètres: ?pointId, ?calibrationDate, ?nextDate, ?technician
+#
+# Note: SPARQL UPDATE = DELETE anciennes valeurs + INSERT nouvelles
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+DELETE {
+    ?point btb:calibrationLastDate ?oldLastDate .
+    ?point btb:calibrationNextDate ?oldNextDate .
+    ?point btb:calibrationTechnician ?oldTech .
+}
+INSERT {
+    ?point btb:calibrationLastDate ?calibrationDate .
+    ?point btb:calibrationNextDate ?nextDate .
+    ?point btb:calibrationTechnician ?technician .
+}
+WHERE {
+    ?point btb:id ?pointId .
+    OPTIONAL { ?point btb:calibrationLastDate ?oldLastDate }
+    OPTIONAL { ?point btb:calibrationNextDate ?oldNextDate }
+    OPTIONAL { ?point btb:calibrationTechnician ?oldTech }
+}

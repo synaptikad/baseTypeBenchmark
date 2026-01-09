@@ -21,6 +21,7 @@ References:
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -218,11 +219,16 @@ class MemgraphLoader(BaseLoader):
                 self._set_storage_mode(session, "IN_MEMORY_ANALYTICAL")
 
                 try:
-                    # Phase 2: Nodes
-                    nodes_file = data_dir / "nodes.csv"
-                    if nodes_file.exists():
+                    # Phase 2: Nodes (prefer JSON format for native lists)
+                    nodes_json = data_dir / "nodes.json"
+                    nodes_csv = data_dir / "nodes.csv"
+                    if nodes_json.exists():
+                        result.nodes_loaded = self._load_nodes_json(
+                            session, nodes_json, workers, progress_callback
+                        )
+                    elif nodes_csv.exists():
                         result.nodes_loaded = self._load_nodes(
-                            session, nodes_file, workers, progress_callback
+                            session, nodes_csv, workers, progress_callback
                         )
 
                     # Phase 3: Edges
@@ -300,6 +306,72 @@ class MemgraphLoader(BaseLoader):
     # NODES LOADING
     # =========================================================================
 
+    def _load_nodes_json(
+        self,
+        session: Session,
+        json_file: Path,
+        workers: int,
+        callback: ProgressCallback | None,
+    ) -> int:
+        """Charge les nodes depuis nodes.json (format prefere).
+
+        Le JSON contient les listes natives Python, pas de parsing necessaire.
+        Format: {"NodeType": [{"id": "...", "capabilities": ["a", "b"], ...}, ...], ...}
+        """
+        with open(json_file, "r", encoding="utf-8") as f:
+            nodes_by_type: dict[str, list[dict]] = json.load(f)
+
+        total_count = sum(len(nodes) for nodes in nodes_by_type.values())
+        self._emit_progress(callback, LoadPhase.NODES, 0, total_count)
+
+        start = time.time()
+        loaded = 0
+
+        for node_type, nodes in nodes_by_type.items():
+            batch_loaded = self._load_nodes_batch_json(session, node_type, nodes)
+            loaded += batch_loaded
+
+            elapsed = time.time() - start
+            rate = loaded / elapsed if elapsed > 0 else 0
+            self._emit_progress(callback, LoadPhase.NODES, loaded, total_count, rate)
+
+        return loaded
+
+    def _load_nodes_batch_json(
+        self,
+        session: Session,
+        node_type: str,
+        nodes: list[dict],
+    ) -> int:
+        """Charge un batch de nodes depuis JSON (listes natives, pas de parsing)."""
+        if not nodes:
+            return 0
+
+        # Build properties list from ALL nodes
+        all_props = set()
+        for node in nodes:
+            all_props.update(k for k, v in node.items() if k != "node_type" and v is not None)
+        props = sorted(all_props)
+
+        # Build Cypher query with UNWIND
+        prop_assignments = ", ".join(f"{prop}: row.{prop}" for prop in props)
+
+        query = f"""
+        UNWIND $rows AS row
+        CREATE (n:{node_type} {{{prop_assignments}}})
+        """
+
+        # Execute in batches of 5000
+        batch_size = 5000
+        loaded = 0
+
+        for i in range(0, len(nodes), batch_size):
+            batch = nodes[i:i + batch_size]
+            session.run(query, rows=batch)
+            loaded += len(batch)
+
+        return loaded
+
     def _load_nodes(
         self,
         session: Session,
@@ -307,7 +379,7 @@ class MemgraphLoader(BaseLoader):
         workers: int,
         callback: ProgressCallback | None,
     ) -> int:
-        """Charge les nodes depuis nodes.csv.
+        """Charge les nodes depuis nodes.csv (fallback si nodes.json absent).
 
         Uses streaming grouping for memory efficiency on large files (2025 best practice).
         """
@@ -393,6 +465,9 @@ class MemgraphLoader(BaseLoader):
             if rows:
                 yield (ntype, rows)
 
+    # Properties that should be parsed as JSON arrays (exported as JSON strings in CSV)
+    JSON_ARRAY_PROPERTIES = {"capabilities", "tags", "maintenance_history", "capabilities_list"}
+
     def _load_nodes_batch(
         self,
         session: Session,
@@ -422,13 +497,23 @@ class MemgraphLoader(BaseLoader):
         CREATE (n:{node_type} {{{prop_assignments}}})
         """
 
-        # Clean rows (convert empty strings to null)
+        # Clean rows (convert empty strings to null, parse JSON arrays)
         clean_rows = []
         for row in rows:
-            clean_row = {
-                k: (v if v else None) for k, v in row.items()
-                if k != "node_type"
-            }
+            clean_row = {}
+            for k, v in row.items():
+                if k == "node_type":
+                    continue
+                if not v:
+                    clean_row[k] = None
+                elif k in self.JSON_ARRAY_PROPERTIES:
+                    # Parse JSON string back to native Cypher list
+                    try:
+                        clean_row[k] = json.loads(v) if isinstance(v, str) else v
+                    except (json.JSONDecodeError, TypeError):
+                        clean_row[k] = v  # Keep as string if parsing fails
+                else:
+                    clean_row[k] = v
             clean_rows.append(clean_row)
 
         # Execute in batches of 5000

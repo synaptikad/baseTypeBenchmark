@@ -4,9 +4,7 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?sibling_id ?sibling_name ?sibling_type ?parent_id ?parent_name
 WHERE {
-    VALUES ?equipment_id { "vav_1" }
-
-    ?target btb:id ?equipment_id .
+    ?target btb:id ?equipmentId .
     ?parent btb:feeds ?target ;
             btb:feeds ?sibling ;
             btb:id ?parent_id ;
@@ -16,6 +14,6 @@ WHERE {
              btb:name ?sibling_name ;
              btb:equipmentType ?sibling_type .
 
-    FILTER(?sibling_id != ?equipment_id)
+    FILTER(?sibling_id != ?equipmentId)
 }
 ORDER BY ?parent_id ?sibling_id

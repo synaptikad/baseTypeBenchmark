@@ -1,10 +1,11 @@
 // Q20: Shortest HVAC Path
-// Status: NATIVE pour M1/M2 (shortestPath)
+// Status: NATIVE pour M1/M2 (BFS traversal)
 // Paramètres: $equipment_id, $space_id
+// Memgraph: utilise *BFS au lieu de shortestPath()
 
 MATCH (start:Equipment {id: $equipment_id}), (end:Space {id: $space_id})
-MATCH path = shortestPath((start)-[:FEEDS|SERVES*..10]->(end))
-UNWIND range(0, length(path)) AS idx
+MATCH path = (start)-[:FEEDS|:SERVES *BFS ..10]->(end)
+UNWIND range(0, size(nodes(path)) - 1) AS idx
 WITH nodes(path)[idx] AS node, idx AS path_index
 RETURN
     path_index,

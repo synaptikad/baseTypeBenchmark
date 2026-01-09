@@ -1,10 +1,10 @@
 -- Q8: Tenant Energy - Somme energie
--- Parametres: $1 = point_ids, $2 = DATE_START, $3 = DATE_END
+-- Parametres: point_ids (array), date_start, date_end (lowercase for M2 hybrid)
 
 SELECT
     SUM(value) AS total_energy_kwh,
     COUNT(DISTINCT point_id) AS point_count
 FROM timeseries
-WHERE point_id = ANY($1::text[])
-  AND time >= $2::timestamptz
-  AND time <= $3::timestamptz;
+WHERE point_id = ANY(%(point_ids)s::text[])
+  AND time >= %(date_start)s::timestamptz
+  AND time <= %(date_end)s::timestamptz;

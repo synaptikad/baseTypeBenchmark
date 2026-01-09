@@ -19,7 +19,8 @@ class M1M2Extractor(BaseExtractor):
     Extracteur pour M1/M2 (Memgraph Cypher).
 
     Produit:
-    - nodes.csv avec propriétés aplaties
+    - nodes.json avec propriétés aplaties (listes natives, pas de sérialisation)
+    - nodes.csv pour compatibilité (listes sérialisées en JSON strings)
     - edges.csv pour les relations
     - timeseries.csv pour M2 (ignoré par M1)
     - load_cypher.cql pour bulk loading
@@ -31,7 +32,7 @@ class M1M2Extractor(BaseExtractor):
         return "m1m2"
 
     def extract_nodes(self) -> List[Path]:
-        """Extrait les nœuds avec propriétés aplaties vers CSV"""
+        """Extrait les noeuds avec propriétés aplaties vers JSON (principal) et CSV (compatibilité)."""
 
         # Collecter toutes les colonnes possibles
         all_columns = set(["id", "node_type", "name"])
@@ -47,7 +48,23 @@ class M1M2Extractor(BaseExtractor):
             [c for c in all_columns if c not in ["id", "node_type", "name"]]
         )
 
-        # Convertir les listes en JSON strings pour CSV
+        # === Export JSON (format principal - listes natives) ===
+        # Grouper par node_type pour un chargement efficace
+        nodes_by_type: Dict[str, List[Dict]] = {}
+        for row in all_rows:
+            node_type = row.get("node_type", "Unknown")
+            if node_type not in nodes_by_type:
+                nodes_by_type[node_type] = []
+            # Garder les listes/dicts tels quels (pas de sérialisation)
+            clean_row = {k: v for k, v in row.items() if v is not None and v != ""}
+            nodes_by_type[node_type].append(clean_row)
+
+        json_filepath = self.output_dir / "nodes.json"
+        with open(json_filepath, 'w', encoding='utf-8') as f:
+            json.dump(nodes_by_type, f, ensure_ascii=False, indent=None)
+        print(f"  Created {json_filepath} ({len(all_rows)} nodes, {len(nodes_by_type)} types)")
+
+        # === Export CSV (compatibilité - listes sérialisées) ===
         rows_for_csv = []
         for row in all_rows:
             csv_row = {}
@@ -61,14 +78,14 @@ class M1M2Extractor(BaseExtractor):
                     csv_row[col] = str(value)
             rows_for_csv.append(csv_row)
 
-        filepath = self.output_dir / "nodes.csv"
-        write_csv(filepath, rows_for_csv, columns)
-        print(f"  Created {filepath} ({len(rows_for_csv)} rows, {len(columns)} columns)")
+        csv_filepath = self.output_dir / "nodes.csv"
+        write_csv(csv_filepath, rows_for_csv, columns)
+        print(f"  Created {csv_filepath} ({len(rows_for_csv)} rows, {len(columns)} columns)")
 
         # Sauvegarder la liste des colonnes pour le script Cypher
         self._node_columns = columns
 
-        return [filepath]
+        return [json_filepath, csv_filepath]
 
     def extract_edges(self) -> List[Path]:
         """Extrait les relations vers edges.csv"""

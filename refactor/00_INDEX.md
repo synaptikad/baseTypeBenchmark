@@ -28,6 +28,9 @@ Important notes:
 - `docs/07_todo_tracker.md` - ready-to-use checklist
 - `docs/08_debug_recipes.md` - fast debugging commands and minimal reproductions
 - `docs/09_patch_snippets.md` - copy-paste patches and rename lists
+- `docs/10_hotfix_applied.md` - applied hotfixes for critical runner bugs
+- `docs/11_option_a_critical_bug.md` - CRITICAL BUG: containers stopped between paradigms (BLOCKER)
+- `docs/option_a_validation_report.md` - e2e validation test results showing Option A failure
 
 ## How to use (suggested workflow)
 

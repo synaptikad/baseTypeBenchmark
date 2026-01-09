@@ -1,0 +1,22 @@
+# QW6: Metadata Merge
+# Équivalent O2 - INSERT/UPDATE propriétés metadata
+# Paramètres: ?equipmentId, ?firmwareVersion, ?firmwareUpdateDate
+#
+# Note: Chaque propriété = un triple séparé
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+DELETE {
+    ?eq btb:firmwareVersion ?oldVersion .
+    ?eq btb:firmwareUpdateDate ?oldDate .
+}
+INSERT {
+    ?eq btb:firmwareVersion ?firmwareVersion .
+    ?eq btb:firmwareUpdateDate ?firmwareUpdateDate .
+}
+WHERE {
+    ?eq btb:id ?equipmentId .
+    OPTIONAL { ?eq btb:firmwareVersion ?oldVersion }
+    OPTIONAL { ?eq btb:firmwareUpdateDate ?oldDate }
+}

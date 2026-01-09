@@ -196,3 +196,150 @@ Acceptance:
 7) Enable RAM gradient
 - Run 2-3 RAM levels only at first.
 
+## Phase 6 - Write queries extension (usage workloads)
+
+This phase extends the benchmark with **write** workloads that represent real operational usage (middleware smart building/city),
+while keeping the initial data load (setup) out of metrics.
+
+Principles:
+- Write queries are measured like reads: latency, throughput (rows/sec), RAM/CPU, and status.
+- Do NOT include initial dataset loading in metrics.
+- Write workloads must be reproducible:
+  - either idempotent via a `run_id` window, or
+  - isolated into dedicated benchmark tables/schemas and cleaned between runs (cleanup not measured).
+
+### 6.1 Extend the query catalog with write workloads
+File: `queries/catalog.yaml`
+
+Action:
+- Add new query IDs, recommended prefix `QW`:
+  - `QW1` - timeseries append (ingestion usage)
+  - `QW2` - update metadata/tags (JSONB focus)
+  - `QW3` - update relations (structure mutation)
+
+- Add/choose a category:
+  - `category: write_workload` (recommended)
+  - Keep `paradigm_status` explicit per engine (use `IMPOSSIBLE` when not supported).
+
+Acceptance:
+- Catalog parsing succeeds and the runner can enumerate write workloads.
+
+### 6.2 Add W1: append timeseries (usage ingestion)
+Goal:
+- Simulate continuous append-only writes of new measurements.
+
+Implementation:
+- Execute against Timescale (shared) for P1/P2/M2/O2.
+- For M1 (chunked TS inside memgraph), either implement a specific variant or mark `DEGRADED/IMPOSSIBLE` in catalog for now.
+
+File placement (recommended):
+- `queries/p1/write/QW1.sql`
+- `queries/p2/write/QW1.sql`
+- `queries/m2/ts/QW1.sql` (or `queries/m2/write/QW1.sql` if you extend the resolver)
+- `queries/o2/ts/QW1.sql` (same note)
+
+Example SQL (Timescale/Postgres):
+```sql
+INSERT INTO ts.timeseries (ts, point_id, value, quality)
+SELECT * FROM UNNEST(
+  %(ts_arr)s::timestamptz[],
+  %(point_id_arr)s::text[],
+  %(value_arr)s::float8[],
+  %(quality_arr)s::int[]
+);
+```
+
+Parameter generation:
+- `ts_arr`: timestamps in a dedicated non-overlapping window per `run_id` to avoid conflicts with existing data.
+- `point_id_arr`: sample from existing points.
+- `value_arr`, `quality_arr`: synthetic.
+
+Metrics:
+- `rows_written` = len(point_id_arr)
+- `throughput_rows_per_sec` = rows_written / latency_seconds
+
+Acceptance:
+- On `small-2d`, `QW1` succeeds on P1 and P2 (Timescale shared), and on M2/O2 TS phase.
+- Results JSON includes `rows_written` and `throughput_rows_per_sec`.
+
+### 6.3 Add W2: update tags/properties (metadata mutation)
+Goal:
+- Represent operational changes like tagging, calibration flags, categorization.
+
+Recommended first implementation:
+- P2 NATIVE (JSONB).
+- P1 can be `DEGRADED` or `IMPOSSIBLE` depending on whether you already model tags in normalized form.
+
+File placement:
+- `queries/p2/write/QW2.sql`
+- Optional: `queries/p1/write/QW2.sql`
+
+Example P2 SQL:
+```sql
+UPDATE points
+SET properties = jsonb_set(properties, '{tag,co2}', to_jsonb(%(new_value)s::text), true)
+WHERE point_id = %(point_id)s;
+```
+Note:
+- With `search_path` set to `p2, ts, public`, `points` resolves to `p2.points`.
+
+Acceptance:
+- On `small-2d`, `QW2` updates at least 1 row for P2 and reports SUCCESS.
+- If P1 is marked `IMPOSSIBLE`, the runner records it as such (not fatal).
+
+### 6.4 Add W3: update relations (structure mutation)
+Goal:
+- Simulate rare but realistic reconfiguration: add/remove edges.
+
+P1/P2 SQL example:
+```sql
+INSERT INTO edges (src_id, dst_id, rel_type)
+VALUES (%(src_id)s, %(dst_id)s, %(rel_type)s);
+```
+
+M2 Cypher example:
+```cypher
+MATCH (a {id: $src_id}), (b {id: $dst_id})
+MERGE (a)-[r:FEEDS]->(b)
+RETURN 1;
+```
+
+O2:
+- If SPARQL UPDATE is supported in your stack, implement a `DELETE/INSERT` update.
+- Otherwise mark `IMPOSSIBLE` explicitly.
+
+Acceptance:
+- On `small-2d`, `QW3` succeeds for P1/P2 and M2.
+- If O2 is IMPOSSIBLE, it is recorded, not fatal.
+
+### 6.5 Runner integration: write workload execution + reporting
+Actions:
+- Ensure the runner can resolve `write_workload` category to a query file path (same mechanism as read categories).
+- Extend results schema:
+  - `query_mode: read|write`
+  - `rows_written` (optional, for writes)
+  - `throughput_rows_per_sec` (optional, for writes)
+
+Rules:
+- Cleanup/reset required to make writes reproducible must NOT be included in measured latency.
+- Warmup should remain read-only by default (avoid mutating state during warmup).
+
+Acceptance:
+- `QW1..QW3` appear in results JSON with correct status and write-specific fields.
+
+## Phase 7 - Extended acceptance (READ + WRITE)
+
+Run acceptance again including the write workloads.
+
+1) Small profile, 1 RAM level, all paradigms:
+- Execute all READ queries (respecting IMPOSSIBLE matrix)
+- Execute W1 (and W2/W3 where applicable)
+- Ensure results JSON includes read + write entries and statuses.
+
+2) Enable RAM gradient (2-3 levels first):
+- For each RAM level:
+  - run READ + WRITE set (or a defined subset for speed)
+  - record plateau/OOM behavior
+
+Acceptance:
+- Gradient records OOM vs SUCCESS correctly and write workloads do not break reproducibility.

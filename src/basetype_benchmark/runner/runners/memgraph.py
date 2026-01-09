@@ -1,24 +1,20 @@
-"""Memgraph query runner using neo4j driver (Bolt protocol).
+"""Memgraph query runner using pymgclient (native C driver).
 
 Sprint 3 - Benchmark BaseType V3
 
 Supports M1 (standalone) and M2 (hybrid with TimescaleDB) paradigms with:
-- Cypher query execution
-- Query profiling (PROFILE)
+- Cypher query execution via native driver
+- Query profiling (EXPLAIN)
 - Timeout handling
+
+Uses pymgclient (official Memgraph driver) for optimal performance.
 """
 from __future__ import annotations
 
 import time
 from typing import Any
 
-from neo4j import GraphDatabase, Driver, Session
-from neo4j.exceptions import (
-    ServiceUnavailable,
-    SessionExpired,
-    TransientError,
-    ClientError,
-)
+import mgclient
 
 from ..config import MemgraphConfig
 from .base import BaseRunner, RunResult, RunStatus, register_runner
@@ -27,12 +23,12 @@ from .base import BaseRunner, RunResult, RunStatus, register_runner
 class MemgraphRunner(BaseRunner):
     """Query runner for Memgraph (M1, M2 paradigms).
 
-    Uses the neo4j Python driver (Bolt protocol) for Cypher execution.
-    Memgraph is Bolt-compatible so the neo4j driver works.
+    Uses pymgclient (official Memgraph C driver) for Cypher execution.
+    This is the recommended driver for production Memgraph usage.
 
     Example:
         ```python
-        config = MemgraphConfig(uri="bolt://localhost:7687")
+        config = MemgraphConfig(host="localhost", port=7687)
         runner = MemgraphRunner(config, paradigm="M1")
 
         if runner.check_connection():
@@ -55,22 +51,52 @@ class MemgraphRunner(BaseRunner):
         """
         super().__init__(paradigm)
         self.config = config
-        self._driver: Driver | None = None
+        self._conn: mgclient.Connection | None = None
 
-    def _get_driver(self) -> Driver:
-        """Get or create database driver."""
-        if self._driver is None:
-            self._driver = GraphDatabase.driver(
-                self.config.uri,
-                auth=self.config.auth,
+    def _get_connection(self) -> mgclient.Connection:
+        """Get or create database connection."""
+        if self._conn is None or not self._is_connection_alive():
+            # Parse host/port from URI (bolt://host:port)
+            host = "localhost"
+            port = 7687
+
+            uri = self.config.uri
+            if uri.startswith("bolt://"):
+                uri = uri[7:]
+            if ":" in uri:
+                parts = uri.split(":", 1)
+                host = parts[0]
+                port = int(parts[1])
+            else:
+                host = uri
+
+            # Extract auth if present
+            username = ""
+            password = ""
+            if self.config.auth:
+                username, password = self.config.auth
+
+            self._conn = mgclient.connect(
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                lazy=False,  # Eager connection
             )
             self._connected = True
-        return self._driver
+        return self._conn
 
-    def _get_session(self) -> Session:
-        """Get a new session."""
-        driver = self._get_driver()
-        return driver.session()
+    def _is_connection_alive(self) -> bool:
+        """Check if the connection is still valid."""
+        if self._conn is None:
+            return False
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute("RETURN 1")
+            cursor.fetchall()
+            return True
+        except Exception:
+            return False
 
     def execute(
         self,
@@ -92,52 +118,39 @@ class MemgraphRunner(BaseRunner):
         params = params or {}
 
         try:
-            with self._get_session() as session:
-                # neo4j driver handles timeout via connection config
-                # For per-query timeout, we rely on the database's query timeout
-                result = session.run(query, params)
+            conn = self._get_connection()
+            cursor = conn.cursor()
 
-                # Collect all records
-                rows = []
-                for record in result:
-                    # Convert neo4j Record to dict
-                    row = dict(record)
-                    # Convert Node/Relationship objects to dicts
-                    row = self._convert_neo4j_types(row)
-                    rows.append(row)
+            # Execute query with parameters
+            cursor.execute(query, params)
 
-                duration_ms = (time.perf_counter() - start) * 1000
+            # Fetch all results
+            # mgclient.Column has .name attribute, not index [0]
+            columns = [col.name for col in cursor.description] if cursor.description else []
+            raw_rows = cursor.fetchall()
 
-                return RunResult(
-                    rows=rows,
-                    duration_ms=duration_ms,
-                    status=RunStatus.SUCCESS,
-                    row_count=len(rows),
-                )
+            # Convert to list of dicts
+            rows = []
+            for raw_row in raw_rows:
+                row = {}
+                for i, col in enumerate(columns):
+                    row[col] = self._convert_mgclient_types(raw_row[i])
+                rows.append(row)
 
-        except (ServiceUnavailable, SessionExpired) as e:
             duration_ms = (time.perf_counter() - start) * 1000
-            self._connected = False
-            return self._make_error_result(e, duration_ms)
 
-        except TransientError as e:
-            duration_ms = (time.perf_counter() - start) * 1000
-            error_msg = str(e).lower()
+            return RunResult(
+                rows=rows,
+                duration_ms=duration_ms,
+                status=RunStatus.SUCCESS,
+                row_count=len(rows),
+            )
 
-            if "timeout" in error_msg:
-                return RunResult(
-                    rows=[],
-                    duration_ms=duration_ms,
-                    status=RunStatus.TIMEOUT,
-                    error_message=str(e),
-                )
-            return self._make_error_result(e, duration_ms)
-
-        except ClientError as e:
+        except mgclient.DatabaseError as e:
             duration_ms = (time.perf_counter() - start) * 1000
             error_msg = str(e).lower()
 
-            # Memgraph OOM detection
+            # OOM detection
             if "memory" in error_msg or "allocation" in error_msg:
                 return RunResult(
                     rows=[],
@@ -145,6 +158,22 @@ class MemgraphRunner(BaseRunner):
                     status=RunStatus.OOM,
                     error_message=str(e),
                 )
+
+            # Timeout detection
+            if "timeout" in error_msg:
+                return RunResult(
+                    rows=[],
+                    duration_ms=duration_ms,
+                    status=RunStatus.TIMEOUT,
+                    error_message=str(e),
+                )
+
+            return self._make_error_result(e, duration_ms)
+
+        except mgclient.InterfaceError as e:
+            duration_ms = (time.perf_counter() - start) * 1000
+            self._connected = False
+            self._conn = None
             return self._make_error_result(e, duration_ms)
 
         except Exception as e:
@@ -180,19 +209,24 @@ class MemgraphRunner(BaseRunner):
             True if connected and responsive
         """
         try:
-            with self._get_session() as session:
-                result = session.run("RETURN 1 AS test")
-                result.single()
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("RETURN 1 AS test")
+            cursor.fetchall()
             return True
         except Exception:
             self._connected = False
+            self._conn = None
             return False
 
     def close(self) -> None:
-        """Close database driver."""
-        if self._driver is not None:
-            self._driver.close()
-        self._driver = None
+        """Close database connection."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        self._conn = None
         self._connected = False
 
     def get_query_plan(
@@ -200,37 +234,44 @@ class MemgraphRunner(BaseRunner):
         query: str,
         params: dict[str, Any] | None = None,
     ) -> dict | None:
-        """Get PROFILE output for a query.
+        """Get EXPLAIN output for a query.
 
-        Note: In Memgraph, PROFILE actually executes the query.
-        Use EXPLAIN for plan without execution.
+        Note: In Memgraph, EXPLAIN shows the plan without execution.
+        PROFILE executes and shows actual metrics.
 
         Args:
             query: Cypher query to analyze
             params: Query parameters
 
         Returns:
-            Query profile as dict
+            Query plan as dict
         """
         try:
-            with self._get_session() as session:
-                # EXPLAIN doesn't execute, PROFILE does
-                explain_query = f"EXPLAIN {query}"
-                result = session.run(explain_query, params or {})
+            conn = self._get_connection()
+            cursor = conn.cursor()
 
-                plan_rows = []
-                for record in result:
-                    plan_rows.append(dict(record))
+            explain_query = f"EXPLAIN {query}"
+            cursor.execute(explain_query, params or {})
 
-                if plan_rows:
-                    return {"plan": plan_rows}
-                return None
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            raw_rows = cursor.fetchall()
+
+            plan_rows = []
+            for raw_row in raw_rows:
+                row = {}
+                for i, col in enumerate(columns):
+                    row[col] = raw_row[i]
+                plan_rows.append(row)
+
+            if plan_rows:
+                return {"plan": plan_rows}
+            return None
 
         except Exception:
             return None
 
-    def _convert_neo4j_types(self, obj: Any) -> Any:
-        """Convert neo4j types to Python native types.
+    def _convert_mgclient_types(self, obj: Any) -> Any:
+        """Convert mgclient types to Python native types.
 
         Args:
             obj: Object to convert
@@ -238,25 +279,40 @@ class MemgraphRunner(BaseRunner):
         Returns:
             Converted object
         """
-        if hasattr(obj, "__iter__") and not isinstance(obj, (str, dict)):
-            if isinstance(obj, dict):
-                return {k: self._convert_neo4j_types(v) for k, v in obj.items()}
-            return [self._convert_neo4j_types(item) for item in obj]
-
-        # Convert Node to dict
-        if hasattr(obj, "labels") and hasattr(obj, "items"):
+        # Handle Node
+        if isinstance(obj, mgclient.Node):
             return {
+                "_id": obj.id,
                 "_labels": list(obj.labels),
-                **dict(obj.items()),
+                **obj.properties,
             }
 
-        # Convert Relationship to dict
-        if hasattr(obj, "type") and hasattr(obj, "items") and hasattr(obj, "start_node"):
+        # Handle Relationship
+        if isinstance(obj, mgclient.Relationship):
             return {
+                "_id": obj.id,
                 "_type": obj.type,
-                **dict(obj.items()),
+                "_start": obj.start_id,
+                "_end": obj.end_id,
+                **obj.properties,
             }
 
+        # Handle Path
+        if isinstance(obj, mgclient.Path):
+            return {
+                "nodes": [self._convert_mgclient_types(n) for n in obj.nodes],
+                "relationships": [self._convert_mgclient_types(r) for r in obj.relationships],
+            }
+
+        # Handle lists
+        if isinstance(obj, (list, tuple)):
+            return [self._convert_mgclient_types(item) for item in obj]
+
+        # Handle dicts
+        if isinstance(obj, dict):
+            return {k: self._convert_mgclient_types(v) for k, v in obj.items()}
+
+        # Return as-is for primitive types
         return obj
 
     def __enter__(self) -> "MemgraphRunner":

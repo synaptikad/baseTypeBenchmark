@@ -36,10 +36,35 @@ def strip_query_comments(query: str, dialect: str) -> str:
             elif "--" in line:
                 line = line.split("--")[0]
 
-        # SPARQL: # comments
+        # SPARQL: # comments (but not inside IRIs or strings)
         elif dialect == "sparql":
-            if "#" in line:
-                line = line.split("#")[0]
+            # Only treat # as comment if it's at start of line (after whitespace)
+            stripped_line = line.lstrip()
+            if stripped_line.startswith("#"):
+                line = ""
+            else:
+                # For inline comments, only strip if # is outside IRIs and strings
+                in_iri = False
+                in_string = False
+                string_char = None
+                for i, char in enumerate(line):
+                    if not in_string:
+                        if char == '<':
+                            in_iri = True
+                        elif char == '>':
+                            in_iri = False
+                        elif char in ('"', "'"):
+                            in_string = True
+                            string_char = char
+                        elif char == '#' and not in_iri:
+                            # Found comment start outside IRI and string
+                            line = line[:i]
+                            break
+                    else:
+                        # In string - check for end
+                        if char == string_char and (i == 0 or line[i-1] != '\\'):
+                            in_string = False
+                            string_char = None
 
         # Keep line if not empty after stripping
         stripped = line.rstrip()

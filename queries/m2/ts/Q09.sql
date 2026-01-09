@@ -1,10 +1,10 @@
 -- Q9: Tenant Carbon Footprint
--- Parametres: $1 = point_ids, $2 = DATE_START, $3 = DATE_END, $4 = CO2_FACTOR
+-- Parametres: point_ids (array), date_start, date_end, co2_factor (lowercase for M2 hybrid)
 
 SELECT
     SUM(value) AS total_energy_kwh,
-    SUM(value) * $4 AS carbon_kg_co2
+    SUM(value) * %(co2_factor)s AS carbon_kg_co2
 FROM timeseries
-WHERE point_id = ANY($1::text[])
-  AND time >= $2::timestamptz
-  AND time <= $3::timestamptz;
+WHERE point_id = ANY(%(point_ids)s::text[])
+  AND time >= %(date_start)s::timestamptz
+  AND time <= %(date_end)s::timestamptz;

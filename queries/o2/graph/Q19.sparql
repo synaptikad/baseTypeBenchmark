@@ -8,9 +8,7 @@ SELECT ?id ?name ?type ?domain
        (GROUP_CONCAT(DISTINCT ?tag; separator=",") AS ?tags)
        (GROUP_CONCAT(DISTINCT ?point_info; separator="|") AS ?points)
 WHERE {
-    VALUES ?equipment_id { "ahu_1" }
-
-    ?eq btb:id ?equipment_id ;
+    ?eq btb:id ?equipmentId ;
         btb:id ?id ;
         btb:name ?name ;
         btb:equipmentType ?type ;

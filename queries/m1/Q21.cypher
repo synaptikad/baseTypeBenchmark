@@ -1,10 +1,13 @@
 // Q21: Electrical Resilience (SPOF Detection)
-// Status: NATIVE pour M1/M2 (allShortestPaths)
+// Status: NATIVE pour M1/M2
 // Paramètres: $equipment_id, $source_type
+// Memgraph: utilise *ALLSHORTEST avec poids constant (r, n | 1)
 
 MATCH (target:Equipment {id: $equipment_id})
 MATCH (source:Equipment {equipment_type: $source_type})
-MATCH paths = allShortestPaths((source)-[:FEEDS*..10]->(target))
+
+// Trouver tous les chemins les plus courts avec *ALLSHORTEST
+MATCH paths = (source)-[:FEEDS *ALLSHORTEST 10 (r, n | 1)]->(target)
 WITH collect(paths) AS all_paths, collect([n IN nodes(paths) | n.id]) AS all_node_lists
 
 // Trouver les SPOF (nœuds présents dans TOUS les chemins)
