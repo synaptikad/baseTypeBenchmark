@@ -444,17 +444,44 @@ class DatasetGenerator:
         '1y': 8760,     # 365 * 24
     }
 
+    # Mapping frequency -> step en secondes
+    FREQUENCY_STEP_SECONDS = {
+        'fast': 60,      # 1 minute
+        'normal': 300,   # 5 minutes
+        'slow': 900,     # 15 minutes
+        'energy': 900,   # 15 minutes (cumulative)
+        'event': 0,      # événements discrets, traitement spécial
+    }
+
+    # Budget rows par défaut selon durée (heures)
+    DEFAULT_TARGET_ROWS = {
+        24: 5000,       # 1 jour
+        168: 15000,     # 1 semaine
+        720: 30000,     # 1 mois
+        8760: 50000,    # 1 an
+    }
+
+    # Profils d'événements par quantity (events/jour)
+    EVENT_PROFILES = {
+        'status': 5.0,    # ~5 events/jour (comm_status, breaker_status)
+        'alarm': 1.0,     # ~1 event/jour (overload_alarm, power_quality_alarm)
+        'fault': 0.14,    # ~1 event/semaine (sensor_fault)
+        'default': 1.0,   # fallback
+    }
+
     def __init__(self,
                  config_dir: Path,
                  profile: str = 'small',
                  seed: int = None,
                  reference_date: datetime = None,
-                 duration: str = '2d'):
+                 duration: str = '2d',
+                 target_rows: int = None):
 
         self.config_dir = Path(config_dir)
         self.profile_name = profile
         self.duration = duration
         self.duration_hours = self.DURATION_HOURS.get(duration, 48)
+        self.target_rows = target_rows
 
         # Charger le profil
         profile_path = self.config_dir / "profiles" / f"{profile}.yaml"
@@ -911,41 +938,130 @@ class DatasetGenerator:
         # PAS d'edges pour cet équipement
 
     def _generate_timeseries(self):
-        """Génère les données timeseries selon la durée configurée"""
-        # Collecter tous les points avec quantity mesurable
-        measurable_points = [
-            n for n in self.nodes
-            if n.type == 'Point' and n.properties.get('quantity') in
-               ['temperature', 'humidity', 'co2', 'power', 'energy', 'flow', 'pressure']
-        ]
+        """Génère les données timeseries selon frequency et budget rows"""
+        # Grouper les points mesurables par frequency
+        measurable_quantities = ['temperature', 'humidity', 'co2', 'power', 'energy', 'flow', 'pressure']
+        points_by_freq = {'energy': [], 'slow': [], 'normal': [], 'fast': [], 'event': []}
 
-        # Limiter pour les gros datasets (scale avec durée)
-        # Plus de points pour durées courtes, moins pour durées longues
-        if self.duration_hours <= 48:
-            max_points_ts = min(len(measurable_points), 100)
-        elif self.duration_hours <= 720:
-            max_points_ts = min(len(measurable_points), 50)
-        else:
-            max_points_ts = min(len(measurable_points), 20)
+        for n in self.nodes:
+            if n.type == 'Point':
+                quantity = n.properties.get('quantity', '')
+                freq = n.properties.get('frequency', 'normal')
+                if quantity in measurable_quantities and freq in points_by_freq:
+                    points_by_freq[freq].append(n)
+                elif freq == 'event' and freq in points_by_freq:
+                    points_by_freq['event'].append(n)
 
-        selected_points = self.rng.sample(measurable_points, max_points_ts)
+        # Budget target (CLI override ou défaut)
+        target_rows = self.target_rows or self._get_default_target_rows()
 
+        # Calculer rows par point selon frequency
+        duration_sec = self.duration_hours * 3600
+        days = self.duration_hours / 24
+
+        def rows_for_freq(freq, quantity=''):
+            step = self.FREQUENCY_STEP_SECONDS[freq]
+            if step == 0:  # event - selon profil
+                if 'status' in quantity:
+                    rate = self.EVENT_PROFILES['status']
+                elif 'alarm' in quantity:
+                    rate = self.EVENT_PROFILES['alarm']
+                elif 'fault' in quantity:
+                    rate = self.EVENT_PROFILES['fault']
+                else:
+                    rate = self.EVENT_PROFILES['default']
+                return max(1, int(rate * days))
+            return duration_sec // step
+
+        # Sélectionner points par priorité jusqu'au budget
+        selected = []
+        rows_used = 0
+
+        for freq in ['energy', 'slow', 'normal', 'fast']:
+            rows_per_point = rows_for_freq(freq)
+            for point in points_by_freq[freq]:
+                if rows_used + rows_per_point <= target_rows:
+                    selected.append((point, freq, rows_per_point))
+                    rows_used += rows_per_point
+
+        # Ajouter events (budget séparé, toujours inclus, max 10 points)
+        event_points = points_by_freq['event'][:10]
+        for point in event_points:
+            quantity = point.properties.get('quantity', '')
+            rows = rows_for_freq('event', quantity)
+            selected.append((point, 'event', rows))
+            rows_used += rows
+
+        # Sanity check
+        if rows_used > target_rows * 1.1:  # 10% marge pour events
+            print(f"WARNING: Budget dépassé: {rows_used} > {target_rows}")
+
+        # Log breakdown
+        breakdown = {}
+        for _, freq, rows in selected:
+            breakdown[freq] = breakdown.get(freq, 0) + rows
+        print(f"Timeseries: {len(selected)} points, {rows_used} rows")
+        print(f"  Breakdown: {breakdown}")
+
+        # Générer les données
         base_time = self.reference_date
+        end_time = base_time + timedelta(hours=self.duration_hours)
 
-        print(f"Generating timeseries: {len(selected_points)} points × {self.duration_hours}h = {len(selected_points) * self.duration_hours} values")
-
-        for point in selected_points:
+        for point, freq, _ in selected:
             quantity = point.properties.get('quantity', 'status')
+            step_sec = self.FREQUENCY_STEP_SECONDS[freq]
 
-            for hour in range(self.duration_hours):
-                timestamp = base_time + timedelta(hours=hour)
-                value = self._generate_value(quantity, hour % 24)  # Cycle journalier
+            if step_sec == 0:  # event: timestamps aléatoires
+                self._generate_event_timeseries(point, base_time, end_time)
+            else:  # régulier
+                current = base_time
+                while current < end_time:
+                    value = self._generate_value(quantity, current.hour)
+                    self.timeseries.append(TimeseriesPoint(
+                        point_id=point.id,
+                        timestamp=current,
+                        value=value
+                    ))
+                    current += timedelta(seconds=step_sec)
 
-                self.timeseries.append(TimeseriesPoint(
-                    point_id=point.id,
-                    timestamp=timestamp,
-                    value=value
-                ))
+        # Sanity check final
+        print(f"  Actual rows: {len(self.timeseries)}")
+
+    def _generate_event_timeseries(self, point, start: datetime, end: datetime):
+        """Génère des événements discrets selon profil quantity"""
+        quantity = point.properties.get('quantity', '')
+        days = max(1, (end - start).total_seconds() / 86400)
+
+        # Déterminer profil selon quantity
+        if 'status' in quantity:
+            events_per_day = self.EVENT_PROFILES['status']
+        elif 'alarm' in quantity:
+            events_per_day = self.EVENT_PROFILES['alarm']
+        elif 'fault' in quantity:
+            events_per_day = self.EVENT_PROFILES['fault']
+        else:
+            events_per_day = self.EVENT_PROFILES['default']
+
+        # Garantir au moins 1 événement
+        n_events = max(1, int(events_per_day * days))
+
+        # Générer timestamps aléatoires sur toute la période
+        total_seconds = int((end - start).total_seconds())
+        for _ in range(n_events):
+            offset = self.rng.randint(0, total_seconds)
+            ts = start + timedelta(seconds=offset)
+            self.timeseries.append(TimeseriesPoint(
+                point_id=point.id,
+                timestamp=ts,
+                value=float(self.rng.randint(0, 1))
+            ))
+
+    def _get_default_target_rows(self) -> int:
+        """Budget rows par défaut selon durée"""
+        for threshold, budget in sorted(self.DEFAULT_TARGET_ROWS.items()):
+            if self.duration_hours <= threshold:
+                return budget
+        return self.DEFAULT_TARGET_ROWS[8760]
 
     def _generate_value(self, quantity: str, hour: int) -> float:
         """Génère une valeur réaliste selon la quantity et l'heure"""
@@ -1101,6 +1217,8 @@ def main():
                         help='Output directory')
     parser.add_argument('--format', type=str, choices=['parquet', 'json'], default='parquet',
                         help='Output format')
+    parser.add_argument('--target-rows', type=int, default=None,
+                        help='Budget max de lignes timeseries (défaut: auto selon durée)')
 
     args = parser.parse_args()
 
@@ -1109,7 +1227,8 @@ def main():
         config_dir=Path(args.config_dir),
         profile=args.profile,
         seed=args.seed,
-        duration=args.duration
+        duration=args.duration,
+        target_rows=args.target_rows
     )
     generator.generate()
 
