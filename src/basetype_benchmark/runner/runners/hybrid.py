@@ -283,11 +283,20 @@ class HybridRunner:
         Returns:
             RunResult from timeseries query
         """
-        from ..core.query_utils import normalize_param_keys
+        import re
+
+        def camel_to_snake(name: str) -> str:
+            """Convert camelCase to snake_case (e.g., dateStart -> date_start)."""
+            return re.sub(r'([a-z])([A-Z])', r'\1_\2', name).lower()
 
         # Build params dict for named placeholders %(name)s
-        # SQL uses lowercase_snake param names, so normalize keys
-        ts_params = normalize_param_keys(params, target_case="lower")
+        # SQL uses lowercase_snake param names
+        # Handle both UPPER_CASE (from sampler) and camelCase (from O2 normalization)
+        ts_params = {}
+        for k, v in params.items():
+            # Convert camelCase to snake_case, then lowercase
+            snake_key = camel_to_snake(k).lower()
+            ts_params[snake_key] = v
 
         # Handle different point_ids formats
         if isinstance(point_ids, dict):
