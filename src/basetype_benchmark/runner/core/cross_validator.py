@@ -443,13 +443,20 @@ class CrossParadigmValidator:
         keys = []
         for col in key_cols:
             if col in row:
-                keys.append(row[col])
+                val = row[col]
+                # Convert unhashable types to string for use as dict key
+                if isinstance(val, (dict, list)):
+                    val = json.dumps(val, sort_keys=True, default=str)
+                keys.append(val)
 
         if not keys:
             # Fallback: use first column as key
             if row:
                 first_col = list(row.keys())[0]
-                return row[first_col]
+                val = row[first_col]
+                if isinstance(val, (dict, list)):
+                    val = json.dumps(val, sort_keys=True, default=str)
+                return val
             return None
 
         return tuple(keys) if len(keys) > 1 else keys[0]
