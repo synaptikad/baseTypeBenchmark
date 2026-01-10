@@ -34,6 +34,12 @@ class SampledParams:
     tag_pattern: Optional[str] = None
     capability: Optional[str] = None
 
+    # Special params for complex queries
+    hvac_source_equipment_id: Optional[str] = None  # Q20
+    hvac_target_space_id: Optional[str] = None      # Q20
+    critical_equipment_id: Optional[str] = None     # Q21
+    building_with_offices_id: Optional[str] = None  # Q13
+
     # Dates (from dataset or defaults)
     date_start: str = "2024-01-15T00:00:00Z"
     date_end: str = "2024-01-15T23:59:59Z"
@@ -370,11 +376,11 @@ def get_params_for_query(query_id: str, sampled: SampledParams) -> Dict[str, Any
         },
         "Q19": {"EQUIPMENT_ID": sampled.equipment_id},
         "Q20": {
-            "EQUIPMENT_ID": sampled.equipment_id,
-            "SPACE_ID": sampled.space_id,
+            "EQUIPMENT_ID": sampled.hvac_source_equipment_id or sampled.equipment_id,
+            "SPACE_ID": sampled.hvac_target_space_id or sampled.space_id,
         },
         "Q21": {
-            "EQUIPMENT_ID": sampled.equipment_id,
+            "EQUIPMENT_ID": sampled.critical_equipment_id or sampled.equipment_id,
             "SOURCE_TYPE": sampled.source_type,
         },
         "Q22": {"EQUIPMENT_ID": sampled.equipment_id},

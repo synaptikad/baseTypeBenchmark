@@ -235,8 +235,8 @@ class RAMGradientExecutor:
     # Default RAM levels (MB) - descending to detect OOM early
     DEFAULT_LEVELS_MB = [131072, 65536, 32768, 16384, 8192]  # 128, 64, 32, 16, 8 GB
 
-    # Execution parameters (from papier.md)
-    DEFAULT_WARMUP_RUNS = 3
+    # Execution parameters
+    DEFAULT_WARMUP_RUNS = 0  # Warmup disabled by default (middleware benchmark)
     DEFAULT_TIMED_RUNS = 10
     DEFAULT_VARIANTS = 3
 
@@ -275,6 +275,11 @@ class RAMGradientExecutor:
         self._docker = DockerClient()
         self._console = Console()
         self._catalog = QueryCatalog()  # Fix Bug #4: Initialize catalog
+        self._data_path: Path | None = None
+
+    def set_data_path(self, data_path: Path) -> None:
+        """Set the data directory path for loading queries_params.yaml."""
+        self._data_path = Path(data_path)
 
     def run_gradient(
         self,
@@ -871,7 +876,25 @@ class RAMGradientExecutor:
         return merged
 
     def _init_param_sampler(self):
-        """Initialize dynamic parameter sampler from loaded dataset."""
+        """Initialize parameters from queries_params.yaml or dynamic sampling."""
+        # Try to load from queries_params.yaml first
+        if self._data_path:
+            params_file = self._data_path / "queries_params.yaml"
+            if params_file.exists():
+                try:
+                    import yaml
+                    with open(params_file, "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                    file_params = data.get("parameters", {})
+                    self._sampled_params = self._build_sampled_params(file_params)
+                    if self.verbose:
+                        self._console.print("[dim]Loaded params from queries_params.yaml[/dim]")
+                    return
+                except Exception as e:
+                    if self.verbose:
+                        self._console.print(f"[yellow]Warning: Failed to load queries_params.yaml: {e}[/yellow]")
+
+        # Fallback to dynamic sampling
         try:
             from ..core.param_sampler import ParamSampler
             runner = self._get_runner()
@@ -882,7 +905,37 @@ class RAMGradientExecutor:
         except Exception as e:
             self._sampled_params = None
             if self.verbose:
-                self._console.print(f"[dim]Using golden_answers.yaml (sampling failed: {e})[/dim]")
+                self._console.print(f"[dim]Param sampling failed: {e}[/dim]")
+
+    def _build_sampled_params(self, file_params: dict):
+        """Build SampledParams from queries_params.yaml content."""
+        from ..core.param_sampler import SampledParams
+
+        return SampledParams(
+            building_id=file_params.get("building_id"),
+            floor_id=file_params.get("floor_id"),
+            space_id=file_params.get("space_id"),
+            equipment_id=file_params.get("equipment_id"),
+            meter_id=file_params.get("meter_id"),
+            ups_id=file_params.get("ups_id"),
+            tenant_id=file_params.get("tenant_id"),
+            point_id=file_params.get("point_id"),
+            source_type=file_params.get("source_type", "MainMeter"),
+            tag_pattern=file_params.get("tag_pattern", "^brick:"),
+            capability=file_params.get("capability", "humidity_control"),
+            date_start=file_params.get("date_start", "2024-01-15T00:00:00Z"),
+            date_end=file_params.get("date_end", "2024-01-15T23:59:59Z"),
+            reference_date=file_params.get("reference_date", "2024-06-01"),
+            days_ahead=file_params.get("days_ahead", 90),
+            max_hops=file_params.get("max_hops", 3),
+            co2_factor=file_params.get("co2_factor", 0.5),
+            device_id=file_params.get("device_id", 1234),
+            # New fields for Q20/Q21
+            hvac_source_equipment_id=file_params.get("hvac_source_equipment_id"),
+            hvac_target_space_id=file_params.get("hvac_target_space_id"),
+            critical_equipment_id=file_params.get("critical_equipment_id"),
+            building_with_offices_id=file_params.get("building_with_offices_id"),
+        )
 
     def _get_variant_params(self, query_id: str, variant_id: int) -> dict[str, Any]:
         """Get parameters for a specific variant.

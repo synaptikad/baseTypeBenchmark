@@ -12,9 +12,8 @@ import csv
 import json
 import sys
 
-# Ajouter le chemin pour importer golden
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-from src.basetype_benchmark.dataset.golden import GoldenDataset, Node, Edge, TimeseriesPoint
+# Dataclasses partagées pour la génération de données
+from basetype_benchmark.dataset.models import Node, Edge, TimeseriesPoint
 
 
 class ParquetDataset:
@@ -111,11 +110,19 @@ class BaseExtractor(ABC):
         pass
 
     def load_dataset(self):
-        """Charge le dataset depuis Parquet (si input_dir) ou GoldenDataset (fallback)"""
-        if self.input_dir and (self.input_dir / "nodes.parquet").exists():
-            self.dataset = ParquetDataset(self.input_dir)
-        else:
-            self.dataset = GoldenDataset()
+        """Charge le dataset depuis Parquet.
+
+        Raises:
+            FileNotFoundError: Si le répertoire Parquet n'existe pas
+        """
+        if not self.input_dir:
+            raise FileNotFoundError("input_dir is required - use generator to create Parquet dataset")
+
+        nodes_file = self.input_dir / "nodes.parquet"
+        if not nodes_file.exists():
+            raise FileNotFoundError(f"Parquet dataset not found at {self.input_dir}")
+
+        self.dataset = ParquetDataset(self.input_dir)
         return self.dataset
 
     @abstractmethod
@@ -152,6 +159,15 @@ class BaseExtractor(ABC):
         files.extend(self.extract_nodes())
         files.extend(self.extract_edges())
         files.extend(self.extract_timeseries())
+
+        # Copy queries_params.yaml if exists
+        if self.input_dir:
+            params_file = self.input_dir / "queries_params.yaml"
+            if params_file.exists():
+                import shutil
+                dest_file = self.output_dir / "queries_params.yaml"
+                shutil.copy(params_file, dest_file)
+                files.append(dest_file)
 
         return ExportResult(
             paradigm=self.paradigm_name,

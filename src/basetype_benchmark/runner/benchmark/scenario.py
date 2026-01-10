@@ -52,7 +52,7 @@ class ScenarioConfig:
     queries: list[str] | None = None  # None = all queries
     data_profile: str = "small"
     ram_levels_mb: list[int] = field(default_factory=lambda: [131072, 65536, 32768, 16384, 8192])
-    n_warmup: int = 3
+    n_warmup: int = 0  # Warmup disabled by default (middleware benchmark)
     n_runs: int = 10
     n_variants: int = 3
     timeout_seconds: float = 300.0
@@ -273,6 +273,7 @@ class BenchmarkOrchestrator:
                     paradigm=paradigm,
                     queries=queries,
                     scenario=scenario,
+                    source_dir=source_dir,
                     on_progress=on_progress,
                 )
 
@@ -448,6 +449,7 @@ class BenchmarkOrchestrator:
         paradigm: str,
         queries: list[str],
         scenario: ScenarioConfig,
+        source_dir: Path | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> GradientResult:
         """Run RAM gradient for a paradigm.
@@ -456,6 +458,7 @@ class BenchmarkOrchestrator:
             paradigm: Paradigm ID
             queries: Query IDs
             scenario: Scenario config
+            source_dir: Source data directory (for queries_params.yaml)
             on_progress: Progress callback
 
         Returns:
@@ -470,6 +473,10 @@ class BenchmarkOrchestrator:
             n_variants=scenario.n_variants,
             timeout_seconds=scenario.timeout_seconds,
         )
+
+        # Set data path for queries_params.yaml loading
+        if source_dir:
+            executor.set_data_path(source_dir)
 
         def progress_wrapper(msg: str, current: int, total: int):
             console.print(f"    {msg} ({current}/{total})")

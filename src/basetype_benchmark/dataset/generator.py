@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import math
 
-# Réutiliser les dataclasses de golden.py pour cohérence
-from .golden import Node, Edge, TimeseriesPoint
+# Dataclasses partagées pour la génération de données
+from .models import Node, Edge, TimeseriesPoint
 
 
 # ===========================================================================
@@ -1121,6 +1121,157 @@ class DatasetGenerator:
         return None
 
     # =========================================================================
+    # QUERY PARAMS GENERATION
+    # =========================================================================
+
+    def _generate_query_params(self) -> Dict[str, Any]:
+        """Extract guaranteed-valid IDs from generated dataset for queries."""
+        params: Dict[str, Any] = {}
+
+        # 1. Building with complete hierarchy (floors → spaces → equipment)
+        for building_id in self._buildings:
+            floors = self._floors.get(building_id, [])
+            if not floors:
+                continue
+            has_offices = False
+            for floor_id in floors:
+                spaces = self._spaces.get(floor_id, [])
+                for space_id in spaces:
+                    space_node = self._get_node(space_id)
+                    if space_node and 'office' in space_node.properties.get('space_type', ''):
+                        has_offices = True
+                        break
+                if has_offices:
+                    break
+            if has_offices:
+                params["building_id"] = building_id
+                params["building_with_offices_id"] = building_id
+                break
+
+        # Fallback if no building with offices found
+        if "building_id" not in params and self._buildings:
+            params["building_id"] = self._buildings[0]
+
+        # 2. Floor with spaces
+        for building_id, floors in self._floors.items():
+            if floors:
+                params["floor_id"] = floors[0]
+                break
+
+        # 3. Space with equipment (via SERVES/MONITORS/LOCATED_IN)
+        serving_rels = {"SERVES", "MONITORS", "LOCATED_IN"}
+        for edge in self.edges:
+            if edge.rel_type in serving_rels:
+                target = self._get_node(edge.target_id)
+                if target and target.type == "Space":
+                    params["space_id"] = edge.target_id
+                    break
+
+        # 4. Equipment in FEEDS chain (prefer middle of chain)
+        feeds_sources = {e.source_id for e in self.edges if e.rel_type == "FEEDS"}
+        feeds_targets = {e.target_id for e in self.edges if e.rel_type == "FEEDS"}
+        middle = feeds_sources & feeds_targets
+        if middle:
+            params["equipment_id"] = list(middle)[0]
+        elif feeds_sources:
+            params["equipment_id"] = list(feeds_sources)[0]
+
+        # 5. MainMeter with FEEDS downstream
+        for node in self.nodes:
+            if node.type == "Equipment" and node.properties.get("equipment_type") == "MainMeter":
+                has_feeds = any(e.source_id == node.id and e.rel_type == "FEEDS" for e in self.edges)
+                if has_feeds:
+                    params["meter_id"] = node.id
+                    break
+
+        # 6. UPS feeding equipment
+        for node in self.nodes:
+            if node.type == "Equipment" and node.properties.get("equipment_type") == "UPS":
+                has_feeds = any(e.source_id == node.id and e.rel_type == "FEEDS" for e in self.edges)
+                if has_feeds:
+                    params["ups_id"] = node.id
+                    break
+
+        # 7. Tenant with METERS_TENANT relation
+        for edge in self.edges:
+            if edge.rel_type == "METERS_TENANT":
+                params["tenant_id"] = edge.target_id
+                break
+
+        # 8. Point with timeseries data
+        point_ids_with_ts = {ts.point_id for ts in self.timeseries}
+        if point_ids_with_ts:
+            params["point_id"] = list(point_ids_with_ts)[0]
+
+        # 9. HVAC → Space path for Q20
+        hvac_types = {"AHU", "VAV", "FCU", "RTU"}
+        for node in self.nodes:
+            if node.type == "Equipment" and node.properties.get("equipment_type") in hvac_types:
+                for edge in self.edges:
+                    if edge.source_id == node.id and edge.rel_type == "SERVES":
+                        target = self._get_node(edge.target_id)
+                        if target and target.type == "Space":
+                            params["hvac_source_equipment_id"] = node.id
+                            params["hvac_target_space_id"] = edge.target_id
+                            break
+                if "hvac_source_equipment_id" in params:
+                    break
+
+        # 10. Critical equipment for Q21 (server fed by UPS)
+        if params.get("ups_id"):
+            for edge in self.edges:
+                if edge.source_id == params["ups_id"] and edge.rel_type == "FEEDS":
+                    target = self._get_node(edge.target_id)
+                    if target and target.type == "Equipment":
+                        params["critical_equipment_id"] = edge.target_id
+                        break
+
+        # 11. Date range from timeseries
+        if self.timeseries:
+            timestamps = [ts.timestamp for ts in self.timeseries]
+            params["date_start"] = min(timestamps).strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["date_end"] = max(timestamps).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # 12. Default values
+        params.setdefault("reference_date", self.reference_date.strftime("%Y-%m-%d"))
+        params.setdefault("days_ahead", 90)
+        params.setdefault("co2_factor", 0.0569)
+        params.setdefault("max_hops", 3)
+        params.setdefault("tag_pattern", "^brick:")
+        params.setdefault("capability", "humidity_control")
+        params.setdefault("source_type", "MainMeter")
+
+        # 13. Device ID from BACnet protocol
+        for node in self.nodes:
+            if node.protocol.get("device_id"):
+                params["device_id"] = node.protocol["device_id"]
+                break
+        params.setdefault("device_id", 1234)
+
+        return params
+
+    def _write_query_params(self, output_dir: Path):
+        """Write queries_params.yaml with validated parameters."""
+        params = self._generate_query_params()
+
+        output = {
+            "metadata": {
+                "generator_version": "3.0",
+                "seed": self.seed,
+                "generated_at": datetime.now().isoformat(),
+                "profile": self.profile_name,
+                "duration": self.duration,
+            },
+            "parameters": params
+        }
+
+        params_file = output_dir / "queries_params.yaml"
+        with open(params_file, "w", encoding="utf-8") as f:
+            yaml.dump(output, f, default_flow_style=False, allow_unicode=True)
+
+        print(f"Generated queries_params.yaml with {len(params)} parameters")
+
+    # =========================================================================
     # EXPORT METHODS
     # =========================================================================
 
@@ -1169,6 +1320,9 @@ class DatasetGenerator:
         ts_table = pa.Table.from_pylist(ts_data)
         pq.write_table(ts_table, output_dir / "timeseries.parquet")
 
+        # Write queries_params.yaml
+        self._write_query_params(output_dir)
+
         print(f"Exported to Parquet: {output_dir}")
         return output_dir
 
@@ -1208,6 +1362,9 @@ class DatasetGenerator:
                    for t in self.timeseries]
         with open(output_dir / "timeseries.json", 'w', encoding='utf-8') as f:
             json.dump(ts_data, f, indent=2)
+
+        # Write queries_params.yaml
+        self._write_query_params(output_dir)
 
         print(f"Exported to JSON: {output_dir}")
         return output_dir
