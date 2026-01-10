@@ -1176,32 +1176,49 @@ def golden_export(
     output: Annotated[
         Path,
         typer.Option("--output", "-o", help="Output directory for Parquet files")
-    ] = Path("data/golden"),
+    ] = Path("data/generated/validation"),
 ) -> None:
-    """Export golden dataset to Parquet files.
+    """Generate validation dataset using the generator.
 
-    Creates nodes.parquet, edges.parquet, timeseries.parquet from the
-    reference golden dataset for validation purposes.
+    Creates nodes.parquet, edges.parquet, timeseries.parquet using
+    the dataset generator with seed=42 for reproducibility.
+
+    This replaces the old manual golden dataset with a generated one.
     """
-    from ..dataset.golden import export_to_parquet
+    import subprocess
 
     console.print(Panel.fit(
-        "[bold blue]Export Golden Dataset[/bold blue]",
+        "[bold blue]Generate Validation Dataset[/bold blue]",
         border_style="blue"
     ))
 
     try:
-        output.mkdir(parents=True, exist_ok=True)
-        export_to_parquet(output)
-        console.print(f"\n[green]Golden dataset exported to {output}[/green]")
+        # Use generator instead of old golden.py
+        cmd = [
+            "python", "-m", "basetype_benchmark.dataset.generator",
+            "--profile", "medium",
+            "--duration", "1m",
+            "--seed", "42",
+            "--output", str(output),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            console.print(f"[red]Generator failed: {result.stderr}[/red]")
+            raise typer.Exit(1)
+
+        console.print(result.stdout)
+        console.print(f"\n[green]Validation dataset generated at {output}[/green]")
 
         # Show file sizes
-        for f in output.glob("*.parquet"):
-            size_kb = f.stat().st_size / 1024
-            console.print(f"  {f.name}: {size_kb:.1f} KB")
+        output_dir = output / "medium-1m"
+        if output_dir.exists():
+            for f in output_dir.glob("*.parquet"):
+                size_kb = f.stat().st_size / 1024
+                console.print(f"  {f.name}: {size_kb:.1f} KB")
 
     except Exception as e:
-        console.print(f"[red]Export failed: {e}[/red]")
+        console.print(f"[red]Generation failed: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -1449,6 +1466,326 @@ def export_cmd(
         raise typer.Exit(1)
 
     console.print(f"\n[green]Exported to {output_dir}[/green]")
+
+
+# =============================================================================
+# VALIDATE COMMAND
+# =============================================================================
+
+@app.command("validate")
+def validate_cmd(
+    results_file: Annotated[
+        Path,
+        typer.Argument(help="Path to results.json from benchmark run")
+    ],
+    reference: Annotated[
+        str,
+        typer.Option("--reference", "-r", help="Reference paradigm (ground truth)")
+    ] = "P1",
+    tolerance: Annotated[
+        float,
+        typer.Option("--tolerance", "-t", help="Float comparison tolerance (relative)")
+    ] = 0.01,
+    output: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Output JSON report file")
+    ] = None,
+    html: Annotated[
+        Optional[Path],
+        typer.Option("--html", help="Output HTML report for publication")
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Show detailed diff information")
+    ] = False,
+    fail_on_mismatch: Annotated[
+        bool,
+        typer.Option("--fail-on-mismatch", help="Exit with code 1 if any mismatch found")
+    ] = False,
+) -> None:
+    """Validate query results across paradigms.
+
+    Compares all paradigms against a reference (default: P1) to verify
+    semantic equivalence of query results.
+
+    This command is essential for academic validation - it ensures that
+    different database paradigms return equivalent results for the same queries.
+
+    Examples:
+        btb-runner validate results.json
+        btb-runner validate results.json --reference P1 --verbose
+        btb-runner validate results.json -o validation_report.json
+        btb-runner validate results.json --html docs/validation.html --fail-on-mismatch
+    """
+    from .core.cross_validator import CrossParadigmValidator, ValidationStatus
+    from .benchmark.results import BenchmarkResults
+
+    # Validate input file
+    if not results_file.exists():
+        console.print(f"[red]Results file not found: {results_file}[/red]")
+        raise typer.Exit(1)
+
+    console.print(Panel.fit(
+        "[bold blue]Cross-Paradigm Validation[/bold blue]\n\n"
+        f"Results: {results_file}\n"
+        f"Reference: {reference}\n"
+        f"Tolerance: {tolerance:.1%}",
+        border_style="blue"
+    ))
+
+    # Load results
+    try:
+        results = BenchmarkResults.from_json(results_file)
+        console.print(f"[dim]Loaded benchmark: {results.benchmark_id}[/dim]")
+    except Exception as e:
+        console.print(f"[red]Failed to load results: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Validate reference paradigm exists
+    if reference not in results.results:
+        console.print(f"[red]Reference paradigm '{reference}' not found in results[/red]")
+        console.print(f"Available paradigms: {', '.join(results.results.keys())}")
+        raise typer.Exit(1)
+
+    # Run validation
+    try:
+        validator = CrossParadigmValidator(
+            reference=reference,
+            float_tolerance=tolerance,
+        )
+        report = validator.validate(results)
+    except Exception as e:
+        console.print(f"[red]Validation failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display summary table
+    console.print("\n")
+    summary_table = Table(title="Validation Summary", show_header=True)
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Count", justify="right")
+    summary_table.add_column("Percentage", justify="right")
+
+    total = report.total_queries * len(report.compared_paradigms)
+    if total > 0:
+        summary_table.add_row(
+            "Equivalent",
+            str(report.equivalent_count),
+            f"[green]{100*report.equivalent_count/total:.1f}%[/green]"
+        )
+        summary_table.add_row(
+            "Degraded",
+            str(report.degraded_count),
+            f"[yellow]{100*report.degraded_count/total:.1f}%[/yellow]"
+        )
+        summary_table.add_row(
+            "Skip",
+            str(report.skip_count),
+            f"[dim]{100*report.skip_count/total:.1f}%[/dim]"
+        )
+        summary_table.add_row(
+            "Mismatch",
+            str(report.mismatch_count),
+            f"[red]{100*report.mismatch_count/total:.1f}%[/red]"
+        )
+    console.print(summary_table)
+
+    # Display per-query results
+    console.print("\n")
+    query_table = Table(title="Query Results", show_header=True)
+    query_table.add_column("Query", style="bold")
+    for paradigm in report.compared_paradigms:
+        query_table.add_column(paradigm, justify="center")
+
+    status_icons = {
+        ValidationStatus.EQUIVALENT: "[green]≡[/green]",
+        ValidationStatus.DEGRADED: "[yellow]D[/yellow]",
+        ValidationStatus.SKIP: "[dim]–[/dim]",
+        ValidationStatus.MISMATCH: "[red]✗[/red]",
+        ValidationStatus.NO_DATA: "[dim]?[/dim]",
+    }
+
+    for query_id in sorted(report.comparisons.keys()):
+        row = [query_id]
+        for paradigm in report.compared_paradigms:
+            if paradigm in report.comparisons[query_id]:
+                cmp = report.comparisons[query_id][paradigm]
+                row.append(status_icons.get(cmp.status, "?"))
+            else:
+                row.append("[dim]–[/dim]")
+        query_table.add_row(*row)
+
+    console.print(query_table)
+
+    # Legend
+    console.print("\n")
+    legend = Text()
+    legend.append("Legend: ")
+    legend.append("≡", style="green bold")
+    legend.append("=Equivalent  ")
+    legend.append("D", style="yellow bold")
+    legend.append("=Degraded  ")
+    legend.append("–", style="dim")
+    legend.append("=Skip  ")
+    legend.append("✗", style="red bold")
+    legend.append("=Mismatch")
+    console.print(Panel.fit(legend, border_style="dim"))
+
+    # Show verbose details for mismatches
+    if verbose and report.mismatch_count > 0:
+        console.print("\n[bold red]Mismatches:[/bold red]\n")
+        for query_id, paradigm_results in report.comparisons.items():
+            for paradigm, cmp in paradigm_results.items():
+                if cmp.status == ValidationStatus.MISMATCH:
+                    console.print(f"  [bold]{query_id}[/bold] vs {paradigm}:")
+                    console.print(f"    Row count: {cmp.row_count_ref} vs {cmp.row_count_cmp}")
+                    if cmp.reason:
+                        console.print(f"    Reason: {cmp.reason}")
+                    if cmp.diffs:
+                        console.print(f"    First diff: {cmp.diffs[0]}")
+                    console.print()
+
+    # Show degraded reasons if verbose
+    if verbose and report.degraded_count > 0:
+        console.print("\n[bold yellow]Degraded Queries:[/bold yellow]\n")
+        for query_id, paradigm_results in report.comparisons.items():
+            for paradigm, cmp in paradigm_results.items():
+                if cmp.status == ValidationStatus.DEGRADED:
+                    console.print(f"  [bold]{query_id}[/bold] ({paradigm}): {cmp.reason}")
+
+    # Save JSON report
+    if output:
+        try:
+            report.to_json(output)
+            console.print(f"\n[green]JSON report saved to {output}[/green]")
+        except Exception as e:
+            console.print(f"[red]Failed to save JSON report: {e}[/red]")
+
+    # Generate HTML report
+    if html:
+        try:
+            _generate_html_report(report, html)
+            console.print(f"[green]HTML report saved to {html}[/green]")
+        except Exception as e:
+            console.print(f"[red]Failed to generate HTML report: {e}[/red]")
+
+    # Exit code
+    if fail_on_mismatch and report.mismatch_count > 0:
+        console.print(f"\n[red]Validation failed: {report.mismatch_count} mismatches found[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[green]Validation complete![/green]")
+
+
+def _generate_html_report(report, output_path: Path) -> None:
+    """Generate HTML validation report for publication."""
+    from .core.cross_validator import ValidationStatus
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cross-Paradigm Validation Report</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        h1 {{ color: #1a1a2e; }}
+        .summary {{ background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+        .summary-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }}
+        .summary-item {{ text-align: center; padding: 15px; border-radius: 6px; }}
+        .equivalent {{ background: #d4edda; color: #155724; }}
+        .degraded {{ background: #fff3cd; color: #856404; }}
+        .skip {{ background: #e9ecef; color: #6c757d; }}
+        .mismatch {{ background: #f8d7da; color: #721c24; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+        th, td {{ padding: 10px; text-align: center; border: 1px solid #dee2e6; }}
+        th {{ background: #343a40; color: white; }}
+        .status-eq {{ color: #28a745; font-weight: bold; }}
+        .status-deg {{ color: #ffc107; font-weight: bold; }}
+        .status-skip {{ color: #6c757d; }}
+        .status-mis {{ color: #dc3545; font-weight: bold; }}
+        .footer {{ margin-top: 30px; text-align: center; color: #6c757d; font-size: 0.9em; }}
+    </style>
+</head>
+<body>
+    <h1>Cross-Paradigm Validation Report</h1>
+    <p><strong>Benchmark:</strong> {report.benchmark_id}</p>
+    <p><strong>Reference Paradigm:</strong> {report.reference_paradigm}</p>
+    <p><strong>Timestamp:</strong> {report.timestamp.isoformat()}</p>
+
+    <div class="summary">
+        <h2>Summary</h2>
+        <div class="summary-grid">
+            <div class="summary-item equivalent">
+                <div style="font-size: 2em;">{report.equivalent_count}</div>
+                <div>Equivalent</div>
+            </div>
+            <div class="summary-item degraded">
+                <div style="font-size: 2em;">{report.degraded_count}</div>
+                <div>Degraded</div>
+            </div>
+            <div class="summary-item skip">
+                <div style="font-size: 2em;">{report.skip_count}</div>
+                <div>Skip</div>
+            </div>
+            <div class="summary-item mismatch">
+                <div style="font-size: 2em;">{report.mismatch_count}</div>
+                <div>Mismatch</div>
+            </div>
+        </div>
+    </div>
+
+    <h2>Query Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Query</th>
+                {"".join(f'<th>{p}</th>' for p in report.compared_paradigms)}
+            </tr>
+        </thead>
+        <tbody>
+"""
+
+    status_classes = {
+        ValidationStatus.EQUIVALENT: ("status-eq", "≡"),
+        ValidationStatus.DEGRADED: ("status-deg", "D"),
+        ValidationStatus.SKIP: ("status-skip", "–"),
+        ValidationStatus.MISMATCH: ("status-mis", "✗"),
+        ValidationStatus.NO_DATA: ("status-skip", "?"),
+    }
+
+    for query_id in sorted(report.comparisons.keys()):
+        html_content += f"            <tr><td><strong>{query_id}</strong></td>"
+        for paradigm in report.compared_paradigms:
+            if paradigm in report.comparisons[query_id]:
+                cmp = report.comparisons[query_id][paradigm]
+                css_class, symbol = status_classes.get(cmp.status, ("", "?"))
+                title = cmp.reason or cmp.status.value
+                html_content += f'<td class="{css_class}" title="{title}">{symbol}</td>'
+            else:
+                html_content += '<td class="status-skip">–</td>'
+        html_content += "</tr>\n"
+
+    html_content += f"""        </tbody>
+    </table>
+
+    <h2>Legend</h2>
+    <ul>
+        <li><span class="status-eq">≡</span> Equivalent - Results match within tolerance</li>
+        <li><span class="status-deg">D</span> Degraded - Known limitation, acceptable difference</li>
+        <li><span class="status-skip">–</span> Skip - Query impossible for this paradigm</li>
+        <li><span class="status-mis">✗</span> Mismatch - Unexpected difference</li>
+    </ul>
+
+    <div class="footer">
+        <p>Generated by BaseType Benchmark V3 - Cross-Paradigm Validation System</p>
+        <p>Reference: {report.reference_paradigm} | Total Queries: {report.total_queries}</p>
+    </div>
+</body>
+</html>
+"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
 
 # =============================================================================

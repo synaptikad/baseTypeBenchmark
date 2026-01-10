@@ -75,6 +75,44 @@ class QueryStats:
     def latencies_ms(self) -> list[float]:
         return [r.latency_ms for r in self.runs if r.status == RunStatus.SUCCESS]
 
+    # Validation data properties (from first successful run)
+    @property
+    def row_count(self) -> int:
+        """Total row count from first successful run."""
+        for r in self.runs:
+            if r.status == RunStatus.SUCCESS:
+                return r.result.row_count
+        return 0
+
+    @property
+    def sample_rows(self) -> list[dict] | None:
+        """First N rows from first successful run (for cross-paradigm comparison)."""
+        for r in self.runs:
+            if r.status == RunStatus.SUCCESS and r.result.rows:
+                # Return first 100 rows for comparison
+                return r.result.rows[:100]
+        return None
+
+    @property
+    def row_hash(self) -> str | None:
+        """SHA256 hash of full result for integrity verification."""
+        import hashlib
+        import json
+        for r in self.runs:
+            if r.status == RunStatus.SUCCESS and r.result.rows:
+                # Hash the full result for integrity checking
+                rows_json = json.dumps(r.result.rows, sort_keys=True, default=str)
+                return hashlib.sha256(rows_json.encode()).hexdigest()
+        return None
+
+    @property
+    def column_names(self) -> list[str] | None:
+        """Column names from first successful run."""
+        for r in self.runs:
+            if r.status == RunStatus.SUCCESS and r.result.rows:
+                return list(r.result.rows[0].keys()) if r.result.rows else None
+        return None
+
     @property
     def p50_ms(self) -> float:
         latencies = sorted(self.latencies_ms)

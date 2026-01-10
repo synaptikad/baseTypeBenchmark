@@ -302,6 +302,11 @@ class BenchmarkOrchestrator:
                             success_rate=stats.success_rate,
                             memory_peak_mb=stats.memory_peak_mb,
                             run_count=len(stats.runs),
+                            # Validation data for cross-paradigm comparison
+                            row_count=stats.row_count,
+                            sample_rows=stats.sample_rows,
+                            row_hash=stats.row_hash,
+                            column_names=stats.column_names,
                         )
 
                     results.levels.append(level_result)

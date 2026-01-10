@@ -46,8 +46,12 @@ class BenchmarkConfig:
 
 @dataclass
 class QueryResult:
-    """Results for a single query."""
+    """Results for a single query.
+
+    Includes both performance metrics and validation data for cross-paradigm comparison.
+    """
     query_id: str
+    # Performance metrics
     p50_ms: float = 0.0
     p95_ms: float = 0.0
     avg_ms: float = 0.0
@@ -58,8 +62,14 @@ class QueryResult:
     memory_peak_mb: float = 0.0
     run_count: int = 0
 
+    # Validation data (for cross-paradigm comparison)
+    row_count: int = 0                              # Total rows returned
+    sample_rows: list[dict[str, Any]] | None = None # First N rows for comparison
+    row_hash: str | None = None                     # SHA256 of full result for integrity
+    column_names: list[str] | None = None           # Column names returned
+
     def to_dict(self) -> dict:
-        return {
+        result = {
             "query_id": self.query_id,
             "p50_ms": round(self.p50_ms, 2),
             "p95_ms": round(self.p95_ms, 2),
@@ -70,7 +80,17 @@ class QueryResult:
             "success_rate": round(self.success_rate, 3),
             "memory_peak_mb": round(self.memory_peak_mb, 1),
             "run_count": self.run_count,
+            # Validation data
+            "row_count": self.row_count,
         }
+        # Only include validation fields if populated
+        if self.sample_rows is not None:
+            result["sample_rows"] = self.sample_rows
+        if self.row_hash is not None:
+            result["row_hash"] = self.row_hash
+        if self.column_names is not None:
+            result["column_names"] = self.column_names
+        return result
 
 
 @dataclass
@@ -237,6 +257,11 @@ class BenchmarkResults:
                         success_rate=qdata.get("success_rate", 0),
                         memory_peak_mb=qdata.get("memory_peak_mb", 0),
                         run_count=qdata.get("run_count", 0),
+                        # Validation data
+                        row_count=qdata.get("row_count", 0),
+                        sample_rows=qdata.get("sample_rows"),
+                        row_hash=qdata.get("row_hash"),
+                        column_names=qdata.get("column_names"),
                     )
 
                 pr.levels.append(level)

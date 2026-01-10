@@ -40,6 +40,10 @@ RESULTS_DIR = DATA_DIR / "results"
 PROFILES = ["small", "medium", "large", "xlarge"]
 DURATIONS = ["2d", "1w", "1m", "6m", "1y"]
 PARADIGMS = ["P1", "P2", "M1", "M2", "O2"]
+SCENARIOS_DIR = CONFIG_DIR / "scenarios"
+
+# All 23 query IDs for reference
+ALL_QUERIES = [f"Q{i}" for i in range(1, 24)]
 
 
 def run_cmd(cmd: list[str]) -> int:
@@ -319,6 +323,9 @@ def run_benchmark(mode: str, datasets: list[Path]):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    output = None  # Track output file for post-benchmark validation
+    paradigms_used = ""  # Track paradigms for validation check
+
     # Use temporary directory for exports (on-demand, cleaned after use)
     import tempfile
     with tempfile.TemporaryDirectory(prefix="btb_export_") as tmp_export:
@@ -328,18 +335,20 @@ def run_benchmark(mode: str, datasets: list[Path]):
         if mode == "1":
             # Quick
             output = RESULTS_DIR / f"quick_{timestamp}.json"
+            paradigms_used = "P1,M1"
             console.print(f"\n[yellow]Quick test: P1+M1, 3 runs, 32-16-8 GB[/yellow]")
             if Confirm.ask("Start?", default=True):
                 btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", "P1,M1", "--ram", "32,16,8", "--runs", "3", "--cleanup")
+                    "-p", paradigms_used, "--ram", "32,16,8", "--runs", "3", "--cleanup")
 
         elif mode == "2":
             # Standard
             output = RESULTS_DIR / f"standard_{timestamp}.json"
+            paradigms_used = "P1,P2,M1,M2,O2"
             console.print(f"\n[yellow]Standard: All paradigms, 10 runs, 64-32-16-8 GB[/yellow]")
             if Confirm.ask("Start?", default=True):
                 btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", "P1,P2,M1,M2,O2", "--ram", "64,32,16,8", "--runs", "10", "--cleanup")
+                    "-p", paradigms_used, "--ram", "64,32,16,8", "--runs", "10", "--cleanup")
 
         elif mode == "3":
             # RAM gradient
@@ -349,6 +358,7 @@ def run_benchmark(mode: str, datasets: list[Path]):
             console.print()
             idx = IntPrompt.ask("Select", default=3)
             paradigm = PARADIGMS[idx - 1] if 1 <= idx <= len(PARADIGMS) else "M1"
+            paradigms_used = paradigm
 
             ram = Prompt.ask("RAM levels (GB)", default="64,48,32,24,16,12,8,4")
 
@@ -364,6 +374,7 @@ def run_benchmark(mode: str, datasets: list[Path]):
             paradigms = Prompt.ask("Select", default="ALL")
             if paradigms.upper() == "ALL":
                 paradigms = "P1,P2,M1,M2,O2"
+            paradigms_used = paradigms
             console.print("[bold]RAM levels (GB):[/bold] 128, 64, 32, 16, 8, 4, 2, 1, 0.5")
             ram = Prompt.ask("Select", default="128,64,32,16,8,4,2,1,0.5")
             runs = IntPrompt.ask("Runs", default=5)
@@ -376,6 +387,26 @@ def run_benchmark(mode: str, datasets: list[Path]):
 
     # Temporary directory auto-cleaned on exit
     console.print("[dim]Export directory cleaned.[/dim]")
+
+    # Post-benchmark validation (if multi-paradigm and output exists)
+    if output and output.exists():
+        paradigm_count = len(paradigms_used.split(","))
+        if paradigm_count >= 2:
+            console.print()
+            console.print(Panel.fit(
+                "[bold green]Benchmark Complete![/bold green]\n\n"
+                f"Results: {output.name}\n"
+                f"Paradigms: {paradigms_used}",
+                border_style="green"
+            ))
+            console.print()
+
+            if Confirm.ask("[cyan]Run cross-paradigm validation?[/cyan]", default=True):
+                run_validation(output)
+        else:
+            console.print(f"\n[green]Benchmark complete: {output.name}[/green]")
+            console.print("[dim]Single paradigm - validation not applicable[/dim]")
+
     wait()
 
 
@@ -389,6 +420,53 @@ def debug_query():
     wait()
 
 
+def run_validation(results_path: Path, generate_reports: bool = True):
+    """Run cross-paradigm validation with nice UX."""
+    header("Cross-Paradigm Validation")
+
+    console.print(f"[bold]Results:[/bold] {results_path.name}")
+    console.print()
+
+    # Ask for options
+    reference = Prompt.ask("Reference paradigm", default="P1")
+    verbose = Confirm.ask("Verbose output?", default=False)
+
+    # Build command
+    cmd_args = ["validate", str(results_path), "-r", reference]
+
+    if verbose:
+        cmd_args.append("-v")
+
+    # Generate reports if requested
+    if generate_reports:
+        validation_dir = RESULTS_DIR / "validation"
+        validation_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = results_path.stem
+
+        json_report = validation_dir / f"{base_name}_validation_{timestamp}.json"
+        html_report = validation_dir / f"{base_name}_validation_{timestamp}.html"
+
+        cmd_args.extend(["-o", str(json_report)])
+        cmd_args.extend(["--html", str(html_report)])
+
+    console.print()
+    btb(*cmd_args)
+
+    if generate_reports:
+        console.print()
+        console.print(Panel.fit(
+            "[bold]Reports Generated:[/bold]\n\n"
+            f"JSON: {json_report.name}\n"
+            f"HTML: {html_report.name}\n\n"
+            f"[dim]Location: {validation_dir}[/dim]",
+            border_style="green"
+        ))
+
+    wait()
+
+
 # =============================================================================
 # 3. RESULTS
 # =============================================================================
@@ -398,30 +476,103 @@ def menu_results():
         header("Results")
 
         files = sorted(RESULTS_DIR.glob("*.json"), reverse=True) if RESULTS_DIR.exists() else []
+        validation_dir = RESULTS_DIR / "validation"
+        validation_reports = list(validation_dir.glob("*.html")) if validation_dir.exists() else []
 
         if not files:
             console.print("[yellow]No results yet.[/yellow]")
             wait()
             return
 
-        console.print("[bold]Recent:[/bold]")
+        console.print("[bold]Recent Benchmarks:[/bold]")
         for i, f in enumerate(files[:8], 1):
             size_kb = f.stat().st_size / 1024
-            console.print(f"  [cyan]{i}[/cyan]. {f.name} ({size_kb:.0f}KB)")
+            # Check if validation exists for this result
+            validation_exists = any(f.stem in v.name for v in validation_reports)
+            validation_icon = "[green]✓[/green]" if validation_exists else "[dim]·[/dim]"
+            console.print(f"  [cyan]{i}[/cyan]. {validation_icon} {f.name} ({size_kb:.0f}KB)")
+
+        if validation_reports:
+            console.print(f"\n[dim]{len(validation_reports)} validation reports available[/dim]")
+
         console.print()
+        console.print("[cyan]v[/cyan]. Validate a result")
+        console.print("[cyan]r[/cyan]. View validation reports")
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
-        choice = Prompt.ask("", default="1")
+        choice = Prompt.ask("Select result or action", default="1")
         if choice == "b":
             return
+        elif choice == "v":
+            validate_result_menu(files)
+        elif choice == "r":
+            view_validation_reports()
+        else:
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(files):
+                    view_result(files[idx])
+            except ValueError:
+                pass
 
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(files):
-                view_result(files[idx])
-        except ValueError:
-            pass
+
+def validate_result_menu(files: list[Path]):
+    """Menu to select and validate a result file."""
+    header("Validate Result")
+
+    if not files:
+        console.print("[yellow]No results to validate.[/yellow]")
+        wait()
+        return
+
+    console.print("[bold]Select result to validate:[/bold]")
+    for i, f in enumerate(files[:10], 1):
+        console.print(f"  [cyan]{i}[/cyan]. {f.name}")
+    console.print()
+
+    choice = IntPrompt.ask("Select", default=1)
+    if 1 <= choice <= len(files):
+        run_validation(files[choice - 1])
+
+
+def view_validation_reports():
+    """View available validation reports."""
+    header("Validation Reports")
+
+    validation_dir = RESULTS_DIR / "validation"
+    if not validation_dir.exists():
+        console.print("[yellow]No validation reports yet.[/yellow]")
+        wait()
+        return
+
+    html_reports = sorted(validation_dir.glob("*.html"), reverse=True)
+    json_reports = sorted(validation_dir.glob("*.json"), reverse=True)
+
+    if not html_reports and not json_reports:
+        console.print("[yellow]No validation reports yet.[/yellow]")
+        wait()
+        return
+
+    console.print("[bold]HTML Reports (for publication):[/bold]")
+    for i, f in enumerate(html_reports[:5], 1):
+        console.print(f"  [cyan]{i}[/cyan]. {f.name}")
+
+    console.print()
+    console.print("[bold]JSON Reports (detailed data):[/bold]")
+    for f in json_reports[:5]:
+        console.print(f"  [dim]{f.name}[/dim]")
+
+    console.print()
+    console.print(f"[dim]Location: {validation_dir}[/dim]")
+    console.print()
+
+    if html_reports:
+        if Confirm.ask("Open latest HTML report in browser?", default=False):
+            import webbrowser
+            webbrowser.open(f"file://{html_reports[0].absolute()}")
+
+    wait()
 
 
 def view_result(path: Path):
@@ -436,11 +587,13 @@ def view_result(path: Path):
             cfg = data["config"]
             console.print("[bold]Config:[/bold]")
             console.print(f"  Paradigms: {', '.join(cfg.get('paradigms', []))}")
-            console.print(f"  RAM: {cfg.get('ram_levels_mb', [])}")
+            ram_levels = cfg.get('ram_levels_mb', [])
+            ram_str = ", ".join(f"{r//1024}GB" for r in ram_levels) if ram_levels else "?"
+            console.print(f"  RAM: {ram_str}")
             console.print(f"  Runs: {cfg.get('n_runs', '?')}")
             console.print()
 
-        # Summary
+        # Summary - RAM Viable
         if "summary" in data:
             console.print("[bold]RAM Viable (min without OOM):[/bold]")
             table = Table(show_header=True, header_style="bold")
@@ -454,10 +607,50 @@ def view_result(path: Path):
                     table.add_row(p, "[red]FAIL[/red]")
             console.print(table)
 
+        # Check for validation status
+        validation_dir = RESULTS_DIR / "validation"
+        validation_json = None
+        if validation_dir.exists():
+            for v in validation_dir.glob(f"{path.stem}_validation_*.json"):
+                validation_json = v
+                break
+
+        console.print()
+
+        if validation_json:
+            # Show validation summary
+            try:
+                with open(validation_json) as f:
+                    val_data = json.load(f)
+                summary = val_data.get("summary", {})
+
+                console.print("[bold]Validation Status:[/bold] [green]✓ Validated[/green]")
+                console.print(f"  Equivalent: [green]{summary.get('equivalent', 0)}[/green]")
+                console.print(f"  Degraded:   [yellow]{summary.get('degraded', 0)}[/yellow]")
+                console.print(f"  Skip:       [dim]{summary.get('skip', 0)}[/dim]")
+                console.print(f"  Mismatch:   [red]{summary.get('mismatch', 0)}[/red]")
+
+                if summary.get('mismatch', 0) == 0:
+                    console.print("\n[green]All queries validate successfully![/green]")
+                else:
+                    console.print(f"\n[red]Warning: {summary.get('mismatch', 0)} mismatches found[/red]")
+            except Exception:
+                console.print("[yellow]Validation report exists but could not be parsed[/yellow]")
+        else:
+            console.print("[bold]Validation Status:[/bold] [dim]Not validated[/dim]")
+            paradigms = cfg.get('paradigms', []) if "config" in data else []
+            if len(paradigms) >= 2:
+                console.print("[dim]Run validation from Results menu (v)[/dim]")
+
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
 
-    wait()
+    console.print()
+    choice = Prompt.ask("[cyan]v[/cyan]=Validate  [cyan]b[/cyan]=Back", default="b", show_choices=False)
+    if choice == "v":
+        run_validation(path)
+    else:
+        return
 
 
 # =============================================================================
