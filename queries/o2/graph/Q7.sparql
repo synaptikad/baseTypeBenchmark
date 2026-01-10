@@ -1,10 +1,14 @@
 # Q7: Drift Top-20 - Extraction point_ids
+# Navigate via Building -> Floor -> Space -> Equipment -> Point
 PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?point_id
 WHERE {
-    ?point a btb:Point ;
-           btb:id ?point_id ;
-           btb:buildingId ?buildingId .
-    FILTER(?buildingId = "building_1")
+    ?building a btb:Building ;
+              btb:id ?buildingId .
+    ?building btb:contains ?floor .
+    ?floor btb:contains ?space .
+    ?eq btb:serves|btb:locatedIn|btb:monitors ?space .
+    ?eq btb:hasPoint ?point .
+    ?point btb:id ?point_id .
 }

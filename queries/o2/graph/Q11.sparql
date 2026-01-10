@@ -3,7 +3,7 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?equipment_id ?equipment_name ?equipment_type
 WHERE {
-    ?ups btb:id "ups_1" .
+    ?ups btb:id ?upsId .
     ?ups btb:feeds+ ?target .
 
     ?target btb:id ?equipment_id ;

@@ -1,12 +1,17 @@
 # Q13: Office Hours Comfort - Points bureaux
+# Navigate via Building -> Floor -> Space (office type) -> Equipment -> Point
 PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?space_id ?space_name ?point_id ?quantity
 WHERE {
+    ?building a btb:Building ;
+              btb:id ?buildingId .
+    ?building btb:contains ?floor .
+    ?floor btb:contains ?space .
+
     ?space a btb:Space ;
            btb:id ?space_id ;
            btb:name ?space_name ;
-           btb:buildingId "building_1" ;
            btb:spaceType ?spaceType .
     FILTER(STRSTARTS(?spaceType, "office"))
 

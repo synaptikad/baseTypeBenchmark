@@ -5,7 +5,7 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
 SELECT ?equipment_id ?name ?equipment_type ?warranty_end
-       (xsd:integer(?warranty_end - ?ref_date) AS ?days_remaining)
+       (xsd:integer(?warranty_end - ?referenceDate) AS ?days_remaining)
 WHERE {
     ?eq a btb:Equipment ;
         btb:id ?equipment_id ;
@@ -13,7 +13,7 @@ WHERE {
         btb:equipmentType ?equipment_type ;
         btb:metadataWarrantyEnd ?warranty_end .
 
-    FILTER(?warranty_end >= ?ref_date)
-    FILTER(?warranty_end <= ?ref_date + xsd:dayTimeDuration(CONCAT("P", STR(?days_ahead), "D")))
+    FILTER(?warranty_end >= ?referenceDate)
+    FILTER(?warranty_end <= ?referenceDate + xsd:dayTimeDuration(CONCAT("P", STR(?daysAhead), "D")))
 }
 ORDER BY ?days_remaining ?equipment_id
