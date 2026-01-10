@@ -172,15 +172,17 @@ def generate_dataset():
 
     seed = IntPrompt.ask("\nSeed", default=42)
 
-    console.print(f"\n[yellow]Generate {profile}-{duration} (seed={seed})?[/yellow]")
+    target_rows_str = Prompt.ask("\nTarget rows timeseries [dim](vide=auto)[/dim]", default="")
+    target_rows = int(target_rows_str) if target_rows_str.strip() else None
+
+    console.print(f"\n[yellow]Generate {profile}-{duration} (seed={seed}, target_rows={target_rows or 'auto'})?[/yellow]")
     if not Confirm.ask("", default=True):
         return
 
     output_dir = GENERATED_DIR / f"{profile}-{duration}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print()
-    run_cmd([
+    cmd = [
         str(VENV_PYTHON), "-m", "src.basetype_benchmark.dataset.generator",
         "--profile", profile,
         "--duration", duration,
@@ -188,7 +190,12 @@ def generate_dataset():
         "--config-dir", str(CONFIG_DIR),
         "--output", str(GENERATED_DIR),
         "--format", "parquet"
-    ])
+    ]
+    if target_rows:
+        cmd.extend(["--target-rows", str(target_rows)])
+
+    console.print()
+    run_cmd(cmd)
 
     console.print(f"\n[green]Done: {output_dir}[/green]")
     wait()

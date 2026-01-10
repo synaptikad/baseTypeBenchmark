@@ -453,6 +453,16 @@ class DatasetGenerator:
         'event': 0,      # événements discrets, traitement spécial
     }
 
+    # Budget rows par défaut selon durée (heures)
+    # Dimensionné pour distribution: 20 energy + 30 slow + 50 normal + 10 fast
+    DEFAULT_TARGET_ROWS = {
+        48: 100000,      # 2 jours
+        168: 300000,     # 1 semaine
+        720: 1000000,    # 1 mois
+        4320: 2000000,   # 6 mois
+        8760: 3000000,   # 1 an
+    }
+
     # Profils d'événements par quantity (events/jour)
     EVENT_PROFILES = {
         'status': 5.0,    # ~5 events/jour (comm_status, breaker_status)
@@ -466,12 +476,14 @@ class DatasetGenerator:
                  profile: str = 'small',
                  seed: int = None,
                  reference_date: datetime = None,
-                 duration: str = '2d'):
+                 duration: str = '2d',
+                 target_rows: int = None):
 
         self.config_dir = Path(config_dir)
         self.profile_name = profile
         self.duration = duration
         self.duration_hours = self.DURATION_HOURS.get(duration, 48)
+        self.target_rows = target_rows
 
         # Charger le profil
         profile_path = self.config_dir / "profiles" / f"{profile}.yaml"
@@ -928,27 +940,30 @@ class DatasetGenerator:
         # PAS d'edges pour cet équipement
 
     def _generate_timeseries(self):
-        """Génère les données timeseries pour tous les points mesurables selon leur frequency"""
-        # Collecter tous les points mesurables avec leur frequency
+        """Génère les données timeseries selon frequency et budget rows"""
+        # Grouper les points mesurables par frequency
         measurable_quantities = ['temperature', 'humidity', 'co2', 'power', 'energy', 'flow', 'pressure']
+        points_by_freq = {'energy': [], 'slow': [], 'normal': [], 'fast': [], 'event': []}
 
-        points_to_generate = []  # (point, freq)
         for n in self.nodes:
             if n.type == 'Point':
                 quantity = n.properties.get('quantity', '')
                 freq = n.properties.get('frequency', 'normal')
-                if quantity in measurable_quantities:
-                    points_to_generate.append((n, freq))
-                elif freq == 'event':
-                    points_to_generate.append((n, 'event'))
+                if quantity in measurable_quantities and freq in points_by_freq:
+                    points_by_freq[freq].append(n)
+                elif freq == 'event' and freq in points_by_freq:
+                    points_by_freq['event'].append(n)
 
-        # Calculer le volume total prévu
+        # Budget target (CLI override ou défaut)
+        target_rows = self.target_rows or self._get_default_target_rows()
+
+        # Calculer rows par point selon frequency
         duration_sec = self.duration_hours * 3600
         days = self.duration_hours / 24
 
-        def rows_for_point(freq, quantity=''):
-            step = self.FREQUENCY_STEP_SECONDS.get(freq, 300)  # default normal
-            if step == 0:  # event
+        def rows_for_freq(freq, quantity=''):
+            step = self.FREQUENCY_STEP_SECONDS[freq]
+            if step == 0:  # event - selon profil
                 if 'status' in quantity:
                     rate = self.EVENT_PROFILES['status']
                 elif 'alarm' in quantity:
@@ -960,30 +975,56 @@ class DatasetGenerator:
                 return max(1, int(rate * days))
             return duration_sec // step
 
-        # Calculer et afficher le breakdown prévu
-        breakdown = {'fast': 0, 'normal': 0, 'slow': 0, 'energy': 0, 'event': 0}
-        point_counts = {'fast': 0, 'normal': 0, 'slow': 0, 'energy': 0, 'event': 0}
-        total_rows = 0
+        # Limites de points par fréquence pour distribution équilibrée
+        max_points_per_freq = {
+            'energy': 20,   # tous les compteurs
+            'slow': 30,     # échantillon
+            'normal': 50,   # échantillon
+            'fast': 10,     # petit échantillon (coûteux en rows)
+        }
 
-        for point, freq in points_to_generate:
+        # Sélectionner points par priorité jusqu'au budget
+        selected = []
+        rows_used = 0
+
+        for freq in ['energy', 'slow', 'normal', 'fast']:
+            rows_per_point = rows_for_freq(freq)
+            max_points = max_points_per_freq[freq]
+            count = 0
+            for point in points_by_freq[freq]:
+                if count >= max_points:
+                    break
+                if rows_used + rows_per_point <= target_rows:
+                    selected.append((point, freq, rows_per_point))
+                    rows_used += rows_per_point
+                    count += 1
+
+        # Ajouter events (budget séparé, toujours inclus, max 10 points)
+        event_points = points_by_freq['event'][:10]
+        for point in event_points:
             quantity = point.properties.get('quantity', '')
-            rows = rows_for_point(freq, quantity)
-            if freq in breakdown:
-                breakdown[freq] += rows
-                point_counts[freq] += 1
-            total_rows += rows
+            rows = rows_for_freq('event', quantity)
+            selected.append((point, 'event', rows))
+            rows_used += rows
 
-        print(f"Timeseries: {len(points_to_generate)} points, {total_rows:,} rows estimated")
-        print(f"  Points: {point_counts}")
-        print(f"  Rows: {breakdown}")
+        # Sanity check
+        if rows_used > target_rows * 1.1:  # 10% marge pour events
+            print(f"WARNING: Budget dépassé: {rows_used} > {target_rows}")
+
+        # Log breakdown
+        breakdown = {}
+        for _, freq, rows in selected:
+            breakdown[freq] = breakdown.get(freq, 0) + rows
+        print(f"Timeseries: {len(selected)} points, {rows_used} rows")
+        print(f"  Breakdown: {breakdown}")
 
         # Générer les données
         base_time = self.reference_date
         end_time = base_time + timedelta(hours=self.duration_hours)
 
-        for point, freq in points_to_generate:
+        for point, freq, _ in selected:
             quantity = point.properties.get('quantity', 'status')
-            step_sec = self.FREQUENCY_STEP_SECONDS.get(freq, 300)
+            step_sec = self.FREQUENCY_STEP_SECONDS[freq]
 
             if step_sec == 0:  # event: timestamps aléatoires
                 self._generate_event_timeseries(point, base_time, end_time)
@@ -998,8 +1039,8 @@ class DatasetGenerator:
                     ))
                     current += timedelta(seconds=step_sec)
 
-        # Sanity check
-        print(f"  Actual rows: {len(self.timeseries):,}")
+        # Sanity check final
+        print(f"  Actual rows: {len(self.timeseries)}")
 
     def _generate_event_timeseries(self, point, start: datetime, end: datetime):
         """Génère des événements discrets selon profil quantity"""
@@ -1029,6 +1070,13 @@ class DatasetGenerator:
                 timestamp=ts,
                 value=float(self.rng.randint(0, 1))
             ))
+
+    def _get_default_target_rows(self) -> int:
+        """Budget rows par défaut selon durée"""
+        for threshold, budget in sorted(self.DEFAULT_TARGET_ROWS.items()):
+            if self.duration_hours <= threshold:
+                return budget
+        return self.DEFAULT_TARGET_ROWS[8760]
 
     def _generate_value(self, quantity: str, hour: int) -> float:
         """Génère une valeur réaliste selon la quantity et l'heure"""
@@ -1184,6 +1232,8 @@ def main():
                         help='Output directory')
     parser.add_argument('--format', type=str, choices=['parquet', 'json'], default='parquet',
                         help='Output format')
+    parser.add_argument('--target-rows', type=int, default=None,
+                        help='Budget max de lignes timeseries (défaut: auto selon durée)')
 
     args = parser.parse_args()
 
@@ -1192,7 +1242,8 @@ def main():
         config_dir=Path(args.config_dir),
         profile=args.profile,
         seed=args.seed,
-        duration=args.duration
+        duration=args.duration,
+        target_rows=args.target_rows
     )
     generator.generate()
 
