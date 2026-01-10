@@ -3,7 +3,7 @@ PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?point_id (COUNT(DISTINCT ?meter) AS ?meter_count)
 WHERE {
-    ?tenant a btb:Tenant ; btb:id "tenant_1" .
+    ?tenant a btb:Tenant ; btb:id ?tenantId .
     ?meter btb:metersTenant ?tenant ;
            btb:hasPoint ?point .
     ?point btb:id ?point_id ;

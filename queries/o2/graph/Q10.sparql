@@ -7,7 +7,7 @@ WHERE {
     ?space a btb:Space ;
            btb:id ?space_id ;
            btb:name ?space_name ;
-           btb:buildingId "building_1" .
+           btb:buildingId ?buildingId .
 
     ?eq a btb:Equipment ;
         btb:equipmentType ?equipment_type .

@@ -5,7 +5,7 @@ SELECT ?quantity (GROUP_CONCAT(?point_id; separator=",") AS ?point_ids)
 WHERE {
     ?point a btb:Point ;
            btb:id ?point_id ;
-           btb:buildingId "building_1" ;
+           btb:buildingId ?buildingId ;
            btb:quantity ?quantity .
     FILTER(?quantity IN ("energy", "temperature", "occupancy"))
 }
