@@ -1,41 +1,100 @@
 # Q23: Adjacency Propagation
-# Status: DEGRADED pour O2 (property path avec limite approximative)
+# Status: DEGRADED pour O2 (property path avec limite fixe)
+# Paramètres: spaceId, maxHops (ignoré, fixé à 3)
 PREFIX btb: <http://basetype.benchmark/ontology#>
 
-SELECT DISTINCT ?node_id ?node_type ?node_name ?hop_distance
+SELECT DISTINCT ?node_id ?node_type ?node_name (MIN(?dist) AS ?hop_distance)
 WHERE {
-    ?start btb:id ?startId .
+    ?start a btb:Space ;
+           btb:id ?spaceId .
 
-    # Hop 1
+    # Relations de propagation (bidirectionnelles pour ADJACENT_TO)
+    # ADJACENT_TO: symétrique (space <-> space)
+    # CONTAINS: floor -> space (on veut remonter)
+    # MONITORS/SERVES: equipment -> space (on veut l'equipment)
+
     {
-        ?start btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?node .
-        BIND(1 AS ?hop_distance)
+        # Hop 1: voisins directs
+        {
+            ?start btb:adjacentTo ?node .
+        } UNION {
+            ?node btb:adjacentTo ?start .
+        } UNION {
+            ?node btb:monitors|btb:serves|btb:contains ?start .
+        } UNION {
+            ?start btb:contains ?node .
+        }
+        BIND(1 AS ?dist)
     }
     UNION
-    # Hop 2
     {
-        ?start btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?mid1 .
-        ?mid1 btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?node .
+        # Hop 2
+        {
+            ?start btb:adjacentTo ?mid1 .
+        } UNION {
+            ?mid1 btb:adjacentTo ?start .
+        } UNION {
+            ?mid1 btb:monitors|btb:serves|btb:contains ?start .
+        } UNION {
+            ?start btb:contains ?mid1 .
+        }
+
+        {
+            ?mid1 btb:adjacentTo ?node .
+        } UNION {
+            ?node btb:adjacentTo ?mid1 .
+        } UNION {
+            ?node btb:monitors|btb:serves|btb:contains ?mid1 .
+        } UNION {
+            ?mid1 btb:contains ?node .
+        }
         FILTER(?node != ?start)
-        BIND(2 AS ?hop_distance)
+        BIND(2 AS ?dist)
     }
     UNION
-    # Hop 3
     {
-        ?start btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?mid1 .
-        ?mid1 btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?mid2 .
-        ?mid2 btb:adjacentTo|btb:contains|^btb:monitors|^btb:serves ?node .
-        FILTER(?node != ?start && ?node != ?mid1)
-        BIND(3 AS ?hop_distance)
-    }
+        # Hop 3
+        {
+            ?start btb:adjacentTo ?mid1 .
+        } UNION {
+            ?mid1 btb:adjacentTo ?start .
+        } UNION {
+            ?mid1 btb:monitors|btb:serves|btb:contains ?start .
+        } UNION {
+            ?start btb:contains ?mid1 .
+        }
 
-    FILTER(?hop_distance <= ?maxHops)
+        {
+            ?mid1 btb:adjacentTo ?mid2 .
+        } UNION {
+            ?mid2 btb:adjacentTo ?mid1 .
+        } UNION {
+            ?mid2 btb:monitors|btb:serves|btb:contains ?mid1 .
+        } UNION {
+            ?mid1 btb:contains ?mid2 .
+        }
+        FILTER(?mid2 != ?start)
+
+        {
+            ?mid2 btb:adjacentTo ?node .
+        } UNION {
+            ?node btb:adjacentTo ?mid2 .
+        } UNION {
+            ?node btb:monitors|btb:serves|btb:contains ?mid2 .
+        } UNION {
+            ?mid2 btb:contains ?node .
+        }
+        FILTER(?node != ?start && ?node != ?mid1)
+        BIND(3 AS ?dist)
+    }
 
     ?node btb:id ?node_id ;
           btb:name ?node_name .
 
-    OPTIONAL { ?node a btb:Space . BIND("Space" AS ?type1) }
-    OPTIONAL { ?node a btb:Equipment . BIND("Equipment" AS ?type2) }
-    BIND(COALESCE(?type1, ?type2, "Unknown") AS ?node_type)
+    # Déterminer le type
+    OPTIONAL { ?node a btb:Space . BIND("Space" AS ?t1) }
+    OPTIONAL { ?node a btb:Equipment . BIND("Equipment" AS ?t2) }
+    BIND(COALESCE(?t1, ?t2, "Unknown") AS ?node_type)
 }
+GROUP BY ?node_id ?node_type ?node_name
 ORDER BY ?hop_distance ?node_type ?node_id

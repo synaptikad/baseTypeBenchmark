@@ -15,6 +15,6 @@ WHERE {
     OPTIONAL { ?point btb:protocolObjectType ?object_type }
     OPTIONAL { ?point btb:protocolObjectInstance ?object_instance }
 
-    FILTER(?device_id = 1234)
+    FILTER(?device_id = ?deviceId)
 }
 ORDER BY ?equipment_id ?point_id
