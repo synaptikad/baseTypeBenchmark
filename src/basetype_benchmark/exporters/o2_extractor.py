@@ -132,8 +132,8 @@ class O2Extractor(BaseExtractor):
         for key, value in node.metadata.items():
             rdf_key = 'metadata' + key.replace('_', ' ').title().replace(' ', '')
             if value is not None:
-                # Dates
-                if 'date' in key.lower():
+                # Dates: check for 'date' or date-like patterns (warranty_end, _start, _end)
+                if 'date' in key.lower() or key.endswith('_end') or key.endswith('_start'):
                     literal = make_literal(value, f"{XSD}date")
                 else:
                     literal = make_literal(value)
