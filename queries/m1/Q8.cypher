@@ -1,11 +1,11 @@
 // Q8: Tenant Energy
 // Paramètres: $tenant_id, $date_start, $date_end
 // Intention: Calculer la consommation énergétique totale d'un locataire
-//
-// Modèle M1: Utilise TimeseriesChunk nodes avec arrays de timestamps/values
-// Traverse depuis Tenant -> Meters -> Points -> Chunks, puis agrège
+// Status: DEGRADED pour M1 - utilise TimeseriesChunk avec UNWIND
+// Note: Démontre la limitation des graphes pour l'agrégation timeseries
 
-MATCH (t:Tenant {id: $tenant_id})<-[:METERS_TENANT]-(m:Meter)-[:HAS_POINT]->(p:Point)
+// Traverse depuis Tenant <- METERS_TENANT <- Equipment (submeter) -> HAS_POINT -> Point -> HAS_CHUNK -> Chunk
+MATCH (t:Tenant {id: $tenant_id})<-[:METERS_TENANT]-(m:Equipment)-[:HAS_POINT]->(p:Point)
 WHERE p.quantity = 'energy'
 
 // Récupérer les chunks timeseries dans la plage de dates
@@ -13,7 +13,7 @@ MATCH (p)-[:HAS_CHUNK]->(chunk:TimeseriesChunk)
 WHERE chunk.date >= substring($date_start, 0, 10)
   AND chunk.date <= substring($date_end, 0, 10)
 
-// Dérouler les valeurs et sommer
+// Dérouler les valeurs depuis les arrays stockés dans les chunks
 UNWIND chunk.values AS value
 
 WITH t.id AS tenant_id,

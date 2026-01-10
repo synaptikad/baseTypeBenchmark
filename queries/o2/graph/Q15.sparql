@@ -1,11 +1,11 @@
 # Q15: Warranty Expiry
 # Status: DEGRADED pour O2
-# Note: warranty_end doit être un triple dédié
+# Note: SPARQL date arithmetic limited - uses BIND for days_remaining calculation
+# Paramètres: referenceDate (xsd:date), daysAhead (integer)
 PREFIX btb: <http://basetype.benchmark/ontology#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-SELECT ?equipment_id ?name ?equipment_type ?warranty_end
-       (xsd:integer(?warranty_end - ?referenceDate) AS ?days_remaining)
+SELECT ?equipment_id ?name ?equipment_type ?warranty_end ?days_remaining
 WHERE {
     ?eq a btb:Equipment ;
         btb:id ?equipment_id ;
@@ -13,7 +13,20 @@ WHERE {
         btb:equipmentType ?equipment_type ;
         btb:metadataWarrantyEnd ?warranty_end .
 
+    # Filter: warranty_end between referenceDate and referenceDate + daysAhead
     FILTER(?warranty_end >= ?referenceDate)
-    FILTER(?warranty_end <= ?referenceDate + xsd:dayTimeDuration(CONCAT("P", STR(?daysAhead), "D")))
+
+    # Calculate days remaining using year/month/day extraction
+    # This is an approximation since direct date subtraction is not universally supported
+    BIND(
+        (YEAR(?warranty_end) - YEAR(?referenceDate)) * 365 +
+        (MONTH(?warranty_end) - MONTH(?referenceDate)) * 30 +
+        (DAY(?warranty_end) - DAY(?referenceDate))
+        AS ?days_remaining
+    )
+
+    # Filter by days_ahead instead of date addition
+    FILTER(?days_remaining <= ?daysAhead)
+    FILTER(?days_remaining >= 0)
 }
 ORDER BY ?days_remaining ?equipment_id

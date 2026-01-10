@@ -1,11 +1,11 @@
 // Q12: Full Building Analytics
 // Paramètres: $building_id, $date_start, $date_end
 // Intention: Agrégation multi-domaine pour un bâtiment (énergie, température, occupation)
-//
-// Modèle M1: Traverse Building -> Equipment -> Points -> Chunks
-// Agrège par quantity type
+// Status: DEGRADED pour M1 - utilise TimeseriesChunk avec UNWIND
+// Note: Démontre la limitation des graphes pour l'agrégation timeseries multi-domaine
 
-MATCH (b:Building {id: $building_id})<-[:LOCATED_IN*1..4]-(eq:Equipment)-[:HAS_POINT]->(p:Point)
+// Utilise propriété dénormalisée building_id sur Point
+MATCH (p:Point {building_id: $building_id})
 WHERE p.quantity IN ['energy', 'temperature', 'occupancy']
 
 // Récupérer les chunks timeseries dans la plage de dates
@@ -13,11 +13,11 @@ MATCH (p)-[:HAS_CHUNK]->(chunk:TimeseriesChunk)
 WHERE chunk.date >= substring($date_start, 0, 10)
   AND chunk.date <= substring($date_end, 0, 10)
 
-// Dérouler les valeurs
+// Dérouler les valeurs depuis les arrays stockés dans les chunks
 UNWIND chunk.values AS value
 
 // Grouper par quantity et agréger
-WITH b.id AS building_id, p.quantity AS quantity, collect(value) AS values
+WITH $building_id AS building_id, p.quantity AS quantity, collect(value) AS values
 
 // Calculer les agrégats par type
 WITH building_id,
