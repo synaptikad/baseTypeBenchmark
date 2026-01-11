@@ -1,0 +1,341 @@
+# Semantic Definitions for Query Validation
+# BaseType Benchmark V3
+#
+# Ce fichier définit la sémantique de chaque query pour permettre
+# la comparaison des INFORMATIONS (pas des rows) entre paradigmes.
+#
+# Pour chaque query:
+# - question: La question en langage naturel
+# - answer_type: Type de réponse (set, value, aggregate, ordered_set, path, document)
+# - semantic_key: Colonne(s) représentant la "réponse"
+# - exclude_parameter: Exclure le paramètre source des résultats (détection bug)
+# - info_columns: Colonnes informatives (pas comparées)
+# - tolerance: Tolérance numérique (global ou par paradigme)
+# - paradigm_status: Statut spécifique par paradigme (IMPOSSIBLE, DEGRADED)
+
+version: "1.0"
+
+# Configuration globale
+global:
+  float_tolerance: 0.01  # 1% par défaut
+  key_columns: [id, point_id, equipment_id, space_id, tenant_id, node_id]
+
+queries:
+  # ===========================================================================
+  # GRAPH-ONLY (Q1-Q5)
+  # ===========================================================================
+
+  Q1:
+    question: "Quels équipements sont alimentés (downstream) par ce compteur?"
+    answer_type: set
+    semantic_key: id
+    exclude_parameter: true
+    parameter_name: meter_id
+    info_columns: [depth, type, name]
+    notes: |
+      P1 bug: inclut le source car base case depth=1 et WHERE depth > 0.
+      M1/O2 corrects: excluent le source (*1..10 et feeds+).
+
+  Q2:
+    question: "Quels équipements parents sont affectés si celui-ci tombe en panne?"
+    answer_type: set
+    semantic_key: id
+    exclude_parameter: true
+    parameter_name: equipment_id
+    info_columns: [depth, type, name, relation_type]
+
+  Q3:
+    question: "Quels équipements desservent cet espace?"
+    answer_type: set
+    semantic_key: equipment_id
+    exclude_parameter: false  # Le space_id n'est pas dans les résultats
+    info_columns: [equipment_name, equipment_type, relation_type]
+
+  Q4:
+    question: "Quels capteurs température et leurs équipements sur cet étage?"
+    answer_type: set
+    semantic_key: [point_id, equipment_id]  # Tuple composite
+    exclude_parameter: false
+    info_columns: [floor_id, point_name, equipment_name]
+
+  Q5:
+    question: "Quels équipements n'ont aucune relation?"
+    answer_type: set
+    semantic_key: id
+    exclude_parameter: false
+    info_columns: [type, name]
+
+  # ===========================================================================
+  # TIMESERIES PURE (Q6)
+  # ===========================================================================
+
+  Q6:
+    question: "Quelle est la courbe horaire (avg/min/max) de ce capteur?"
+    answer_type: aggregate
+    semantic_key: time_bucket
+    value_columns: [avg_value, min_value, max_value, sample_count]
+    tolerance:
+      default: 0.01
+      M1: 0.05  # DEGRADED: TimeseriesChunk arrays vs TimescaleDB
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays instead of TimescaleDB"
+
+  # ===========================================================================
+  # HYBRID (Q7-Q13)
+  # ===========================================================================
+
+  Q7:
+    question: "Top 20 capteurs avec la plus grande variance dans ce bâtiment?"
+    answer_type: ordered_set
+    semantic_key: point_id
+    order_by: variance
+    order_direction: desc
+    limit: 20
+    rank_tolerance: 2  # ±2 positions acceptables pour variance proche
+    value_columns: [variance, avg_value, sample_count]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays"
+
+  Q8:
+    question: "Quelle est la consommation énergétique totale du locataire?"
+    answer_type: value
+    semantic_key: total_energy_kwh
+    additional_values: [meter_count, point_count]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays"
+
+  Q9:
+    question: "Quelle est l'empreinte carbone du locataire?"
+    answer_type: value
+    semantic_key: carbon_kg_co2
+    additional_values: [total_energy_kwh]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays"
+
+  Q10:
+    question: "Combien d'équipements de sécurité par espace dans ce bâtiment?"
+    answer_type: aggregate
+    semantic_key: [space_id, equipment_type]
+    value_columns: [equipment_count]
+    info_columns: [space_name]
+
+  Q11:
+    question: "Quels équipements IT sont downstream de cet UPS?"
+    answer_type: set
+    semantic_key: equipment_id
+    exclude_parameter: true
+    parameter_name: ups_id
+    info_columns: [equipment_name, equipment_type, depth]
+
+  Q12:
+    question: "Quelles sont les métriques globales du bâtiment?"
+    answer_type: value
+    semantic_key: [total_energy_kwh, avg_temperature_c, total_occupancy]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays"
+
+  Q13:
+    question: "Qualité de l'air dans les bureaux pendant les heures de travail?"
+    answer_type: aggregate
+    semantic_key: space_id
+    value_columns: [avg_temp_c, avg_co2_ppm]
+    info_columns: [space_name, hours_out_of_range]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays"
+
+  # ===========================================================================
+  # JSONB-SPECIFIC (Q14-Q19)
+  # ===========================================================================
+
+  Q14:
+    question: "Quels points communiquent avec ce device BACnet?"
+    answer_type: set
+    semantic_key: point_id
+    info_columns: [point_name, equipment_id, object_type, object_instance]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB protocol column"
+
+  Q15:
+    question: "Quels équipements ont une garantie expirant bientôt?"
+    answer_type: set
+    semantic_key: equipment_id
+    info_columns: [name, equipment_type, warranty_end, days_remaining]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB metadata column"
+      O2:
+        status: DEGRADED
+        reason: "Date arithmetic approximation (365/30 days)"
+
+  Q16:
+    question: "Quels équipements ont ces tags sémantiques?"
+    answer_type: set
+    semantic_key: equipment_id
+    info_columns: [name, matching_tags]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB tags column"
+
+  Q17:
+    question: "Quels équipements HVAC ont cette capability?"
+    answer_type: set
+    semantic_key: equipment_id
+    info_columns: [name, equipment_type, all_capabilities]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB capabilities column"
+
+  Q18:
+    question: "Quels capteurs ont une calibration en retard dans la chaîne énergétique?"
+    answer_type: set
+    semantic_key: point_id
+    exclude_parameter: true
+    parameter_name: meter_id
+    info_columns: [point_name, equipment_id, last_calibration, next_calibration]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "Returns NULL for calibration columns"
+
+  Q19:
+    question: "Document complet de l'équipement (digital twin)?"
+    answer_type: document
+    structure:
+      required: [id, name, type]
+      optional: [domain, capabilities, tags, metadata, protocol]
+      nested:
+        points:
+          required: [id, name, quantity]
+          optional: [unit]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "No metadata/capabilities/protocol"
+      M1:
+        status: DEGRADED
+        reason: "No live stats without TimescaleDB"
+
+  # ===========================================================================
+  # GRAPH-NATIVE (Q20-Q23)
+  # ===========================================================================
+
+  Q20:
+    question: "Quel est un chemin le plus court entre cet équipement et cet espace?"
+    answer_type: path
+    validation:
+      same_length: true       # Même nombre de nœuds
+      same_start: true        # Même nœud de départ
+      same_end: true          # Même nœud d'arrivée
+      same_intermediates: false  # Plusieurs chemins valides possibles
+    info_columns: [path_index, node_type, node_name]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "CTE exploration, not guaranteed shortest"
+      O2:
+        status: DEGRADED
+        reason: "Manual enumeration (1-2 hops only)"
+
+  Q21:
+    question: "Tous les chemins électriques + points de défaillance unique (SPOF)?"
+    answer_type: paths_with_spof
+    validation:
+      all_paths_required: true
+      spof_detection: true
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "Combinatorial explosion possible"
+      O2:
+        status: IMPOSSIBLE
+        reason: "No allShortestPaths in SPARQL"
+
+  Q22:
+    question: "Quels équipements partagent le même parent (siblings)?"
+    answer_type: set
+    semantic_key: sibling_id
+    exclude_parameter: true
+    parameter_name: equipment_id
+    info_columns: [sibling_name, sibling_type, parent_id, parent_name]
+
+  Q23:
+    question: "Quels nœuds sont atteignables en N sauts depuis cet espace?"
+    answer_type: set
+    semantic_key: node_id
+    exclude_parameter: true
+    parameter_name: space_id
+    info_columns: [node_type, node_name, hop_distance, via_relation]
+    paradigm_status:
+      O2:
+        status: IMPOSSIBLE
+        reason: "Combinatorial explosion (5322 vs 30 rows)"
+
+  # ===========================================================================
+  # JSONB VALIDATION (Q24-Q26)
+  # ===========================================================================
+
+  Q24:
+    question: "Historique de maintenance de l'équipement?"
+    answer_type: aggregate
+    semantic_key: equipment_id
+    value_columns: [event_count, total_maintenance_cost]
+    info_columns: [name, last_event_date, last_technician]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB maintenance_history"
+
+  Q25:
+    question: "Audit trail complet de l'équipement?"
+    answer_type: document
+    structure:
+      required: [equipment_id, name]
+      optional: [equipment_type, current_firmware, last_firmware_update,
+                 maintenance_events, last_maintenance_date, health_status]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB for firmware/maintenance"
+
+  Q26:
+    question: "Distribution des capabilities par type d'équipement?"
+    answer_type: aggregate
+    semantic_key: equipment_type
+    value_columns: [equipment_count, avg_capabilities]
+    info_columns: [capabilities_distribution, most_common_capability]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB capabilities"

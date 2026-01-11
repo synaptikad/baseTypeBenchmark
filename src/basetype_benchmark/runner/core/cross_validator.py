@@ -4,6 +4,7 @@ Sprint 3 - Benchmark BaseType V3
 
 Provides infrastructure for validating query results across paradigms:
 - Row-level comparison with semantic equivalence rules
+- Semantic validation comparing INFORMATION not rows
 - Tolerance for floating point values
 - Handling of DEGRADED and IMPOSSIBLE query statuses
 - Generation of validation reports for publication
@@ -17,9 +18,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
 from ..benchmark.results import BenchmarkResults, QueryResult
+
+if TYPE_CHECKING:
+    from .semantic_validator import SemanticValidator, SemanticComparison
 
 
 class ValidationStatus(str, Enum):
@@ -115,6 +119,10 @@ class ComparisonResult:
     # Reason for DEGRADED/SKIP status
     reason: str | None = None
 
+    # Semantic validation results (new)
+    semantic_status: str | None = None
+    semantic_details: dict = field(default_factory=dict)
+
     def to_dict(self) -> dict:
         return {
             "query_id": self.query_id,
@@ -136,6 +144,8 @@ class ComparisonResult:
                 for d in self.diffs[:10]  # Limit to 10 diffs
             ],
             "reason": self.reason,
+            "semantic_status": self.semantic_status,
+            "semantic_details": self.semantic_details,
         }
 
 
@@ -287,6 +297,9 @@ class CrossParadigmValidator:
 
     Compares all paradigms against a reference (default: P1).
     Handles semantic equivalence with configurable tolerance.
+
+    If semantic_definitions_path is provided, also performs semantic validation
+    which compares the INFORMATION (not rows) between paradigms.
     """
 
     def __init__(
@@ -294,10 +307,17 @@ class CrossParadigmValidator:
         reference: str = "P1",
         float_tolerance: float = 0.01,
         rules: dict | None = None,
+        semantic_definitions_path: Path | None = None,
     ):
         self.reference = reference
         self.float_tolerance = float_tolerance
         self.rules = rules or EQUIVALENCE_RULES
+
+        # Initialize semantic validator if definitions provided
+        self.semantic_validator: SemanticValidator | None = None
+        if semantic_definitions_path and semantic_definitions_path.exists():
+            from .semantic_validator import SemanticValidator
+            self.semantic_validator = SemanticValidator(semantic_definitions_path)
 
     def validate_matrix(self, results: BenchmarkResults) -> CrossValidationMatrix:
         """Validate all paradigm pairs (asymmetric cross-validation matrix).
@@ -473,8 +493,17 @@ class CrossParadigmValidator:
         ref_result: QueryResult | None,
         cmp_result: QueryResult | None,
         cmp_paradigm: str,
+        parameters: dict | None = None,
     ) -> ComparisonResult:
-        """Compare a single query between reference and compared paradigm."""
+        """Compare a single query between reference and compared paradigm.
+
+        Args:
+            query_id: Query identifier (e.g., "Q1")
+            ref_result: Reference paradigm result
+            cmp_result: Compared paradigm result
+            cmp_paradigm: Compared paradigm name
+            parameters: Query parameters (for semantic validation)
+        """
         comparison = ComparisonResult(
             query_id=query_id,
             reference_paradigm=self.reference,
@@ -556,6 +585,29 @@ class CrossParadigmValidator:
             else:
                 comparison.status = ValidationStatus.MISMATCH
                 comparison.reason = f"Row count mismatch: {comparison.row_count_ref} vs {comparison.row_count_cmp}"
+
+        # Semantic validation (compares INFORMATION, not rows)
+        if self.semantic_validator:
+            from .semantic_validator import SemanticStatus
+
+            semantic_result = self.semantic_validator.validate(
+                query_id,
+                ref_result, self.reference,
+                cmp_result, cmp_paradigm,
+                parameters or {}
+            )
+
+            comparison.semantic_status = semantic_result.status.value
+            comparison.semantic_details = semantic_result.to_dict()
+
+            # Override syntactic MISMATCH if semantically EQUIVALENT
+            if comparison.status == ValidationStatus.MISMATCH:
+                if semantic_result.status == SemanticStatus.EQUIVALENT:
+                    comparison.status = ValidationStatus.EQUIVALENT
+                    comparison.reason = f"Semantically equivalent: {semantic_result.reason}"
+                elif semantic_result.status == SemanticStatus.DEGRADED:
+                    comparison.status = ValidationStatus.DEGRADED
+                    comparison.reason = f"Semantically degraded: {semantic_result.reason}"
 
         return comparison
 
@@ -682,6 +734,7 @@ def validate_results(
     results_path: Path,
     reference: str = "P1",
     tolerance: float = 0.01,
+    semantic_definitions_path: Path | None = None,
 ) -> ValidationReport:
     """Convenience function to validate results from JSON file.
 
@@ -689,10 +742,15 @@ def validate_results(
         results_path: Path to results.json
         reference: Reference paradigm
         tolerance: Float comparison tolerance
+        semantic_definitions_path: Path to semantic_definitions.yaml (optional)
 
     Returns:
         ValidationReport
     """
     results = BenchmarkResults.from_json(results_path)
-    validator = CrossParadigmValidator(reference=reference, float_tolerance=tolerance)
+    validator = CrossParadigmValidator(
+        reference=reference,
+        float_tolerance=tolerance,
+        semantic_definitions_path=semantic_definitions_path,
+    )
     return validator.validate(results)
