@@ -35,6 +35,7 @@ CONFIG_DIR = PROJECT_DIR / "config"
 DATA_DIR = Path(os.environ.get("BTB_DATA_DIR", PROJECT_DIR / "data"))
 GENERATED_DIR = DATA_DIR / "generated"
 RESULTS_DIR = DATA_DIR / "results"
+ARCHIVE_DIR = RESULTS_DIR / "runs"  # Raw results archive for replay
 # Note: Exports are now on-demand in temporary directories during benchmark
 
 PROFILES = ["small", "medium", "large", "xlarge"]
@@ -415,8 +416,12 @@ def run_benchmark_wizard(datasets: list[Path]):
             type_label = "simple"
             output = RESULTS_DIR / f"{type_label}_{bench_mode == '2' and 'gradient' or 'single'}_{timestamp}.json"
 
+            # Archive raw results for validation replay
+            ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
             btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup")
+                "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup",
+                "--archive", str(ARCHIVE_DIR))
         else:
             # Scenario benchmark
             output = RESULTS_DIR / f"scenario_{workload_name}_{timestamp}.json"
@@ -480,12 +485,27 @@ def run_validation(results_path: Path, generate_reports: bool = True):
     console.print(f"[bold]Results:[/bold] {results_path.name}")
     console.print()
 
-    # Ask for options
-    reference = Prompt.ask("Reference paradigm", default="P1")
+    # Ask for validation mode
+    console.print("[bold]Validation Mode:[/bold]")
+    console.print("  [cyan]1[/cyan]. Cross-Matrix   [dim]All paradigms vs all (A→B, B→A)[/dim]")
+    console.print("  [cyan]2[/cyan]. Single Ref     [dim]All vs one reference paradigm[/dim]")
+    console.print()
+    mode = Prompt.ask("Select", choices=["1", "2"], default="1")
+
+    cross_matrix = (mode == "1")
+
+    if not cross_matrix:
+        reference = Prompt.ask("Reference paradigm (P1)", default="P1")
+
     verbose = Confirm.ask("Verbose output?", default=False)
 
     # Build command
-    cmd_args = ["validate", str(results_path), "-r", reference]
+    cmd_args = ["validate", str(results_path)]
+
+    if cross_matrix:
+        cmd_args.append("--cross-matrix")
+    else:
+        cmd_args.extend(["-r", reference])
 
     if verbose:
         cmd_args.append("-v")
@@ -498,8 +518,10 @@ def run_validation(results_path: Path, generate_reports: bool = True):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = results_path.stem
 
-        json_report = validation_dir / f"{base_name}_validation_{timestamp}.json"
-        html_report = validation_dir / f"{base_name}_validation_{timestamp}.html"
+        suffix = "cross_matrix" if cross_matrix else "validation"
+
+        json_report = validation_dir / f"{base_name}_{suffix}_{timestamp}.json"
+        html_report = validation_dir / f"{base_name}_{suffix}_{timestamp}.html"
 
         cmd_args.extend(["-o", str(json_report)])
         cmd_args.extend(["--html", str(html_report)])
@@ -551,6 +573,7 @@ def menu_results():
         console.print()
         console.print("[cyan]v[/cyan]. Validate a result")
         console.print("[cyan]r[/cyan]. View validation reports")
+        console.print("[cyan]a[/cyan]. Archived runs      [dim]Replay validation[/dim]")
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
@@ -561,6 +584,8 @@ def menu_results():
             validate_result_menu(files)
         elif choice == "r":
             view_validation_reports()
+        elif choice == "a":
+            menu_archived_runs()
         else:
             try:
                 idx = int(choice) - 1
@@ -587,6 +612,101 @@ def validate_result_menu(files: list[Path]):
     choice = IntPrompt.ask("Select", default=1)
     if 1 <= choice <= len(files):
         run_validation(files[choice - 1])
+
+
+def menu_archived_runs():
+    """Menu to view and replay validation on archived runs."""
+    header("Archived Runs")
+
+    if not ARCHIVE_DIR.exists():
+        console.print("[yellow]No archived runs yet.[/yellow]")
+        console.print("[dim]Run a benchmark to create archives.[/dim]")
+        wait()
+        return
+
+    # List archived runs
+    runs = sorted([d for d in ARCHIVE_DIR.iterdir() if d.is_dir()], reverse=True)
+    if not runs:
+        console.print("[yellow]No archived runs found.[/yellow]")
+        wait()
+        return
+
+    console.print("[bold]Archived Runs:[/bold]")
+    for i, run in enumerate(runs[:10], 1):
+        # Try to read metadata
+        metadata_file = run / "metadata.json"
+        if metadata_file.exists():
+            try:
+                with open(metadata_file) as f:
+                    metadata = json.load(f)
+                paradigms = ", ".join(metadata.get("config", {}).get("paradigms", [])[:3])
+                queries = len(metadata.get("config", {}).get("queries", []))
+                git = metadata.get("environment", {}).get("git_hash", "")[:7]
+                console.print(f"  [cyan]{i}[/cyan]. {run.name} [dim]({paradigms}, {queries}Q, git:{git})[/dim]")
+            except Exception:
+                console.print(f"  [cyan]{i}[/cyan]. {run.name}")
+        else:
+            console.print(f"  [cyan]{i}[/cyan]. {run.name}")
+
+    console.print()
+    console.print("[cyan]b[/cyan]. Back")
+    console.print()
+
+    choice = Prompt.ask("Select run to replay validation", default="b")
+    if choice == "b":
+        return
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(runs):
+            replay_validation(runs[idx])
+    except ValueError:
+        pass
+
+
+def replay_validation(run_path: Path):
+    """Replay validation on an archived run."""
+    header(f"Replay: {run_path.name}")
+
+    console.print(f"[bold]Run:[/bold] {run_path.name}")
+
+    # Show run info
+    metadata_file = run_path / "metadata.json"
+    if metadata_file.exists():
+        try:
+            with open(metadata_file) as f:
+                metadata = json.load(f)
+            config = metadata.get("config", {})
+            console.print(f"[dim]Paradigms: {', '.join(config.get('paradigms', []))}[/dim]")
+            console.print(f"[dim]Queries: {len(config.get('queries', []))}[/dim]")
+            console.print(f"[dim]Git: {metadata.get('environment', {}).get('git_hash', '?')}[/dim]")
+        except Exception:
+            pass
+
+    console.print()
+
+    # Options
+    semantic = Confirm.ask("Use semantic validation?", default=True)
+    reference = Prompt.ask("Reference paradigm", default="P1")
+
+    # Output
+    validation_dir = RESULTS_DIR / "validation"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output = validation_dir / f"replay_{run_path.name}_{timestamp}.json"
+
+    # Run replay
+    cmd_args = ["replay", run_path.name, "-d", str(ARCHIVE_DIR), "-r", reference, "-o", str(output)]
+    if semantic:
+        cmd_args.append("--semantic")
+    else:
+        cmd_args.append("--no-semantic")
+
+    console.print()
+    btb(*cmd_args)
+
+    console.print(f"\n[green]Report saved: {output.name}[/green]")
+    wait()
 
 
 def view_validation_reports():
