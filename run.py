@@ -363,21 +363,19 @@ def run_benchmark(mode: str, datasets: list[Path]):
 
         elif mode == "3":
             # RAM gradient
-            console.print("\n[bold]Paradigm:[/bold]")
-            for i, p in enumerate(PARADIGMS, 1):
-                console.print(f"  [cyan]{i}[/cyan]. {p}")
-            console.print()
-            idx = IntPrompt.ask("Select", default=3)
-            paradigm = PARADIGMS[idx - 1] if 1 <= idx <= len(PARADIGMS) else "M1"
-            paradigms_used = paradigm
+            console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
+            paradigms = Prompt.ask("Select", default="M1")
+            if paradigms.upper() == "ALL":
+                paradigms = "P1,P2,M1,M2,O2"
+            paradigms_used = paradigms
 
             ram = Prompt.ask("RAM levels (GB)", default="64,48,32,24,16,12,8,4")
 
-            output = RESULTS_DIR / f"gradient_{paradigm}_{timestamp}.json"
-            console.print(f"\n[yellow]RAM gradient: {paradigm}, levels={ram}[/yellow]")
+            output = RESULTS_DIR / f"gradient_{paradigms.replace(',', '-')}_{timestamp}.json"
+            console.print(f"\n[yellow]RAM gradient: {paradigms}, levels={ram}[/yellow]")
             if Confirm.ask("Start?", default=True):
                 btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", paradigm, "--ram", ram, "--runs", "5", "--cleanup")
+                    "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup")
 
         elif mode == "4":
             # Custom
