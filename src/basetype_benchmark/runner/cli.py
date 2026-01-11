@@ -1518,6 +1518,10 @@ def validate_cmd(
         bool,
         typer.Option("--cross-matrix", "-x", help="Compare all paradigm pairs (not just vs reference)")
     ] = False,
+    semantic: Annotated[
+        bool,
+        typer.Option("--semantic/--no-semantic", help="Enable semantic validation (compares INFORMATION, not rows)")
+    ] = True,
 ) -> None:
     """Validate query results across paradigms.
 
@@ -1527,12 +1531,17 @@ def validate_cmd(
     This command is essential for academic validation - it ensures that
     different database paradigms return equivalent results for the same queries.
 
+    With --semantic (default), uses semantic rules to compare the INFORMATION
+    returned by queries, not just row counts. This catches bugs like Q1 where
+    P1 includes the source meter but M1/O2 don't.
+
     Examples:
         btb-runner validate results.json
         btb-runner validate results.json --reference P1 --verbose
         btb-runner validate results.json -o validation_report.json
         btb-runner validate results.json --html docs/validation.html --fail-on-mismatch
         btb-runner validate results.json --cross-matrix  # Compare all pairs
+        btb-runner validate results.json --no-semantic   # Row-based only
     """
     from .core.cross_validator import CrossParadigmValidator, ValidationStatus, CrossValidationMatrix
     from .benchmark.results import BenchmarkResults
@@ -1564,11 +1573,25 @@ def validate_cmd(
         console.print(f"Available paradigms: {', '.join(results.results.keys())}")
         raise typer.Exit(1)
 
+    # Setup semantic definitions path
+    semantic_path = None
+    if semantic:
+        # Try multiple locations
+        semantic_path = Path(__file__).parent.parent.parent / "config" / "semantic_definitions.yaml"
+        if not semantic_path.exists():
+            semantic_path = Path("config/semantic_definitions.yaml")
+        if not semantic_path.exists():
+            console.print("[yellow]Warning: semantic_definitions.yaml not found, falling back to row-based validation[/yellow]")
+            semantic_path = None
+        else:
+            console.print(f"[dim]Semantic validation enabled: {semantic_path}[/dim]")
+
     # Run validation
     try:
         validator = CrossParadigmValidator(
             reference=reference,
             float_tolerance=tolerance,
+            semantic_definitions_path=semantic_path,
         )
 
         if cross_matrix:
