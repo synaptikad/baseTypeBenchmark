@@ -2120,6 +2120,10 @@ def run_workload_cmd(
         Path,
         typer.Option("-o", "--output", help="Output JSON file")
     ] = None,
+    archive: Annotated[
+        Optional[Path],
+        typer.Option("-a", "--archive", help="Archive raw results to directory for replay")
+    ] = None,
 ) -> None:
     """Run a workload scenario.
 
@@ -2129,6 +2133,7 @@ def run_workload_cmd(
         btb-runner workload dashboard_refresh -s data/generated/small-1w
         btb-runner workload bos_twin -p M1,M2 -d 60
         btb-runner workload config/workloads/custom.yaml
+        btb-runner workload bos_twin --archive data/results/runs
     """
     from .workload import load_or_get_workload, WorkloadOrchestrator
     from .ram.isolation import IsolationManager
@@ -2204,10 +2209,38 @@ def run_workload_cmd(
 
     console.print(table)
 
-    # Save results
+    # Convert to unified format
+    benchmark_results = results.to_benchmark_results()
+
+    # Archive if requested
+    if archive:
+        from .benchmark.archive import ResultsArchive
+
+        archive_mgr = ResultsArchive(archive)
+        archive_mgr.start_run(
+            benchmark_id=benchmark_results.benchmark_id,
+            paradigms=list(results.results.keys()),
+            queries=list({step.query_id for step in workload.sequence}),
+            data_profile=f"workload:{workload.name}",
+            ram_levels_mb=[],
+            n_warmup=0,
+            n_runs=sum(step.repeat for step in workload.sequence),
+            n_variants=1,
+            timeout_seconds=float(workload.duration_seconds or 0),
+        )
+        archive_mgr.finalize_run(benchmark_summary=benchmark_results.to_dict())
+        console.print(f"\n[green]Results archived to {archive / benchmark_results.benchmark_id}[/green]")
+
+    # Save results in both formats
     if output:
+        # Native workload format (detailed)
         results.to_json(str(output))
-        console.print(f"\n[dim]Results saved to: {output}[/dim]")
+        console.print(f"[dim]Workload results saved to: {output}[/dim]")
+
+        # Also save in unified BenchmarkResults format for validation/archiving
+        unified_output = output.with_name(output.stem + "_unified.json")
+        benchmark_results.to_json(unified_output)
+        console.print(f"[dim]Unified results saved to: {unified_output}[/dim]")
 
 
 def _build_paradigm_configs() -> dict:

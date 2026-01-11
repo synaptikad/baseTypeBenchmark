@@ -290,3 +290,97 @@ class WorkloadResults:
         from pathlib import Path
 
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
+
+    def to_benchmark_results(self) -> "BenchmarkResults":
+        """Convert workload results to standard BenchmarkResults format.
+
+        This enables:
+        - Unified archiving with simple benchmarks
+        - Cross-paradigm validation on workload results
+        - Consistent reporting format
+
+        Returns:
+            BenchmarkResults with aggregated metrics per query/paradigm
+        """
+        from ..benchmark.results import (
+            BenchmarkResults,
+            BenchmarkConfig,
+            ParadigmResults,
+            LevelResult,
+            QueryResult,
+        )
+        from datetime import datetime
+
+        # Create benchmark results
+        benchmark = BenchmarkResults()
+        benchmark.benchmark_id = f"workload_{self.scenario.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        # Extract unique queries from scenario
+        query_ids = list({step.query_id for step in self.scenario.sequence})
+
+        # Config
+        benchmark.config = BenchmarkConfig(
+            paradigms=list(self.results.keys()),
+            queries=query_ids,
+            data_profile=f"workload:{self.scenario.name}",
+            ram_levels_mb=[],  # Workloads don't use RAM gradient by default
+            n_warmup=0,
+            n_runs=sum(step.repeat for step in self.scenario.sequence),
+            n_variants=1,
+            timeout_seconds=float(self.scenario.duration_seconds or 0),
+        )
+
+        # Convert each paradigm result
+        for paradigm, workload_result in self.results.items():
+            pr = ParadigmResults(paradigm=paradigm)
+            pr.baseline_peak_mb = workload_result.scenario_memory_peak_mb
+
+            # Create single level (workloads run at one RAM level)
+            level = LevelResult(
+                limit_mb=workload_result.ram_limit_mb or 0,
+                status="success" if workload_result.error_rate < 0.5 else "error",
+                actual_peak_mb=workload_result.scenario_memory_peak_mb,
+                duration_seconds=workload_result.total_duration_seconds,
+            )
+
+            # Convert per-query stats
+            for query_id, stats in workload_result.query_stats.items():
+                stats.compute_stats()  # Ensure stats are computed
+
+                # Calculate stddev from latencies
+                stddev_ms = 0.0
+                if stats._latencies_ms and len(stats._latencies_ms) > 1:
+                    avg = stats.latency_avg_ms
+                    variance = sum((x - avg) ** 2 for x in stats._latencies_ms) / len(stats._latencies_ms)
+                    stddev_ms = variance ** 0.5
+
+                level.queries[query_id] = QueryResult(
+                    query_id=query_id,
+                    p50_ms=stats.latency_p50_ms,
+                    p95_ms=stats.latency_p95_ms,
+                    avg_ms=stats.latency_avg_ms,
+                    min_ms=stats.latency_min_ms,
+                    max_ms=stats.latency_max_ms,
+                    stddev_ms=stddev_ms,
+                    success_rate=stats.successes / stats.executions if stats.executions > 0 else 0.0,
+                    memory_peak_mb=stats.memory_peak_max_mb,
+                    run_count=stats.executions,
+                    # Note: workloads don't capture row data for validation
+                    row_count=0,
+                    sample_rows=None,
+                    row_hash=None,
+                    column_names=None,
+                )
+
+            pr.levels.append(level)
+            benchmark.results[paradigm] = pr
+
+        # Set timestamps from first/last result
+        if self.results:
+            first_result = next(iter(self.results.values()))
+            if first_result.start_time:
+                benchmark.start_time = datetime.fromisoformat(first_result.start_time)
+            if first_result.end_time:
+                benchmark.end_time = datetime.fromisoformat(first_result.end_time)
+
+        return benchmark
