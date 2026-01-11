@@ -487,13 +487,15 @@ class RAMGradientExecutor:
         stats: dict[str, QueryStats] = {}
         total_queries = len(queries)
 
-        # Get cgroups monitors for per-query peak measurement
+        # Get PeakMemoryTrackers for per-query peak measurement
+        # These maintain persistent fds for proper per-fd reset semantics
         container_ids = self.isolation.get_container_ids(self.paradigm)
-        query_monitors = {}
+        peak_trackers: dict[str, "PeakMemoryTracker"] = {}
         for name, cid in container_ids.items():
             try:
-                from ..monitoring import CgroupsV2Monitor
-                query_monitors[name] = CgroupsV2Monitor(cid)
+                from ..monitoring import CgroupsV2Monitor, PeakMemoryTracker
+                monitor = CgroupsV2Monitor(cid)
+                peak_trackers[name] = PeakMemoryTracker(monitor.cgroup_path)
             except Exception:
                 pass
 
@@ -543,12 +545,9 @@ class RAMGradientExecutor:
 
                 for run_id in range(self.n_runs):
                     try:
-                        # Reset memory peak before each run for accurate per-query measurement
-                        for monitor in query_monitors.values():
-                            try:
-                                monitor.reset_memory_peak()
-                            except Exception:
-                                pass
+                        # Reset memory peak before each run (per-fd reset)
+                        for tracker in peak_trackers.values():
+                            tracker.reset()
 
                         # Execute based on query category
                         if query_def.category == "hybrid" and self.paradigm in ("M2", "O2"):
@@ -567,13 +566,10 @@ class RAMGradientExecutor:
                                 float(self.timeout),
                             )
 
-                        # Capture memory peak after query execution
+                        # Capture memory peak after query (via same fd)
                         run_peak_bytes = 0
-                        for monitor in query_monitors.values():
-                            try:
-                                run_peak_bytes += monitor.get_memory_peak()
-                            except Exception:
-                                pass
+                        for tracker in peak_trackers.values():
+                            run_peak_bytes += tracker.read_peak()
 
                         # Create sampling result for this run
                         run_sampling = SamplingResult(
@@ -635,6 +631,10 @@ class RAMGradientExecutor:
             # Exit query loop on OOM
             if query_stats.runs and query_stats.runs[-1].status == RunStatus.OOM:
                 break
+
+        # Cleanup peak trackers (close fds)
+        for tracker in peak_trackers.values():
+            tracker.close()
 
         return stats
 

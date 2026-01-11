@@ -10,6 +10,10 @@ Key metrics:
 - memory.peak: Peak memory usage since last reset (kernel 5.10+)
 - memory.max: Memory limit configured
 - memory.events: OOM kill count
+
+Important: memory.peak reset is PER FILE DESCRIPTOR in modern kernels.
+Writing to memory.peak resets it only for reads via the SAME fd.
+Use PeakMemoryTracker class for accurate per-query measurements.
 """
 from __future__ import annotations
 
@@ -59,6 +63,160 @@ class MemoryStats:
         if self.max_bytes is None or self.max_bytes == 0:
             return None
         return (self.current_bytes / self.max_bytes) * 100
+
+
+class PeakMemoryTracker:
+    """Track peak memory with proper per-fd reset semantics.
+
+    In modern Linux kernels (5.19+), writing to memory.peak resets the peak
+    value only for reads via the SAME file descriptor. This class uses a
+    subprocess with sudo to maintain a root-privileged fd for reset operations.
+
+    Usage:
+        ```python
+        tracker = PeakMemoryTracker(cgroup_path)
+
+        # Before query
+        tracker.reset()
+
+        # Run query...
+
+        # After query - get peak since reset
+        peak_bytes = tracker.read_peak()
+
+        # Cleanup
+        tracker.close()
+        ```
+    """
+
+    def __init__(self, cgroup_path: Path):
+        """Initialize tracker with subprocess for privileged access.
+
+        Args:
+            cgroup_path: Path to container's cgroup directory
+        """
+        import subprocess
+
+        self.peak_file = cgroup_path / "memory.peak"
+        self._process: subprocess.Popen | None = None
+        self._has_sudo = False
+        self._baseline: int = 0  # Memory at last reset
+        self._start_helper()
+
+    def _start_helper(self) -> None:
+        """Start helper subprocess with privileged fd."""
+        import subprocess
+
+        # Helper script that keeps fd open and responds to commands
+        helper_script = '''
+import os
+import sys
+
+peak_file = sys.argv[1]
+fd = os.open(peak_file, os.O_RDWR)
+
+while True:
+    cmd = sys.stdin.readline().strip()
+    if not cmd or cmd == "quit":
+        break
+    elif cmd == "reset":
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, b"0")
+        sys.stdout.write("ok\\n")
+        sys.stdout.flush()
+    elif cmd == "read":
+        os.lseek(fd, 0, os.SEEK_SET)
+        data = os.read(fd, 64)
+        sys.stdout.write(data.decode().strip() + "\\n")
+        sys.stdout.flush()
+
+os.close(fd)
+'''
+
+        try:
+            # Try with sudo -n (non-interactive)
+            self._process = subprocess.Popen(
+                ["sudo", "-n", "python3", "-c", helper_script, str(self.peak_file)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            # Test if it works
+            self._process.stdin.write("read\n")
+            self._process.stdin.flush()
+            result = self._process.stdout.readline().strip()
+            if result.isdigit():
+                self._has_sudo = True
+                return
+        except Exception:
+            pass
+
+        # Fallback: no reset capability, just read baseline
+        self._process = None
+        self._has_sudo = False
+
+    def reset(self) -> bool:
+        """Reset peak counter.
+
+        Returns:
+            True if reset succeeded, False otherwise
+        """
+        if not self._has_sudo or self._process is None:
+            # Fallback: record baseline for delta calculation
+            self._baseline = self._read_global_peak()
+            return False
+
+        try:
+            self._process.stdin.write("reset\n")
+            self._process.stdin.flush()
+            result = self._process.stdout.readline().strip()
+            return result == "ok"
+        except Exception:
+            return False
+
+    def read_peak(self) -> int:
+        """Read peak memory since last reset.
+
+        Returns:
+            Peak memory in bytes
+        """
+        if self._has_sudo and self._process is not None:
+            try:
+                self._process.stdin.write("read\n")
+                self._process.stdin.flush()
+                result = self._process.stdout.readline().strip()
+                return int(result)
+            except Exception:
+                pass
+
+        # Fallback: return delta from baseline
+        current_peak = self._read_global_peak()
+        return max(0, current_peak - self._baseline) if self._baseline > 0 else current_peak
+
+    def _read_global_peak(self) -> int:
+        """Read peak via new fd (global value, not per-fd)."""
+        try:
+            return int(self.peak_file.read_text().strip())
+        except Exception:
+            return 0
+
+    def close(self) -> None:
+        """Close helper process."""
+        if self._process is not None:
+            try:
+                self._process.stdin.write("quit\n")
+                self._process.stdin.flush()
+                self._process.wait(timeout=1)
+            except Exception:
+                self._process.kill()
+            self._process = None
+
+    def __enter__(self) -> "PeakMemoryTracker":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.close()
 
 
 class CgroupsV2Monitor:
@@ -206,15 +364,42 @@ class CgroupsV2Monitor:
         Writes "0" to memory.peak to reset the peak counter.
         This allows measuring peak memory for a specific operation.
 
+        Falls back to sudo -n tee if direct write fails (common on cloud VMs
+        with passwordless sudo).
+
         Returns:
-            True if reset successful, False otherwise
+            True if reset actually worked (peak decreased), False otherwise
         """
+        import subprocess
+
         peak_path = self.cgroup_path / "memory.peak"
+
         try:
-            peak_path.write_text("0")
-            return True
-        except (PermissionError, OSError) as e:
-            # May need root/docker group permissions
+            # 1. Read peak BEFORE reset attempt
+            peak_before = self.get_memory_peak()
+
+            # 2. Try to write "0"
+            try:
+                peak_path.write_text("0")
+            except (PermissionError, OSError):
+                # Try sudo -n (non-interactive) for passwordless sudo environments
+                if not str(peak_path).startswith("/sys/fs/cgroup/"):
+                    return False
+
+                result = subprocess.run(
+                    ["sudo", "-n", "tee", str(peak_path)],
+                    input="0",
+                    text=True,
+                    capture_output=True,
+                )
+                if result.returncode != 0:
+                    return False
+
+            # 3. Verify reset actually worked (peak should have decreased)
+            peak_after = self.get_memory_peak()
+            return peak_after < peak_before
+
+        except Exception:
             return False
 
     def get_memory_stats(self) -> MemoryStats:

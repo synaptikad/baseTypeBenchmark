@@ -38,6 +38,7 @@ from .cgroups import (
     CgroupsNotFoundError,
     CgroupsNotSupportedError,
     MemoryStats,
+    PeakMemoryTracker,
     is_cgroups_v2_available,
     get_container_cgroup_path,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "CgroupsNotFoundError",
     "CgroupsNotSupportedError",
     "MemoryStats",
+    "PeakMemoryTracker",
     "is_cgroups_v2_available",
     "get_container_cgroup_path",
     # docker
