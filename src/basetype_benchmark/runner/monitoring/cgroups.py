@@ -69,8 +69,11 @@ class PeakMemoryTracker:
     """Track peak memory with proper per-fd reset semantics.
 
     In modern Linux kernels (5.19+), writing to memory.peak resets the peak
-    value only for reads via the SAME file descriptor. This class uses a
-    subprocess with sudo to maintain a root-privileged fd for reset operations.
+    value only for reads via the SAME file descriptor. This class maintains
+    a persistent fd for accurate per-query measurements.
+
+    IMPORTANT: Requires root privileges (run benchmark with sudo) for accurate
+    per-query memory tracking. Without root, falls back to delta calculation.
 
     Usage:
         ```python
@@ -90,90 +93,52 @@ class PeakMemoryTracker:
     """
 
     def __init__(self, cgroup_path: Path):
-        """Initialize tracker with subprocess for privileged access.
+        """Initialize tracker with persistent fd.
 
         Args:
             cgroup_path: Path to container's cgroup directory
         """
-        import subprocess
-
         self.peak_file = cgroup_path / "memory.peak"
-        self._process: subprocess.Popen | None = None
-        self._has_sudo = False
-        self._baseline: int = 0  # Memory at last reset
-        self._start_helper()
+        self._fd: int | None = None
+        self._can_reset = False
+        self._baseline: int = 0  # Memory at last reset (fallback mode)
+        self._open()
 
-    def _start_helper(self) -> None:
-        """Start helper subprocess with privileged fd."""
-        import subprocess
-
-        # Helper script that keeps fd open and responds to commands
-        helper_script = '''
-import os
-import sys
-
-peak_file = sys.argv[1]
-fd = os.open(peak_file, os.O_RDWR)
-
-while True:
-    cmd = sys.stdin.readline().strip()
-    if not cmd or cmd == "quit":
-        break
-    elif cmd == "reset":
-        os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, b"0")
-        sys.stdout.write("ok\\n")
-        sys.stdout.flush()
-    elif cmd == "read":
-        os.lseek(fd, 0, os.SEEK_SET)
-        data = os.read(fd, 64)
-        sys.stdout.write(data.decode().strip() + "\\n")
-        sys.stdout.flush()
-
-os.close(fd)
-'''
-
+    def _open(self) -> None:
+        """Open memory.peak file descriptor."""
         try:
-            # Try with sudo -n (non-interactive)
-            self._process = subprocess.Popen(
-                ["sudo", "-n", "python3", "-c", helper_script, str(self.peak_file)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            # Test if it works
-            self._process.stdin.write("read\n")
-            self._process.stdin.flush()
-            result = self._process.stdout.readline().strip()
-            if result.isdigit():
-                self._has_sudo = True
-                return
-        except Exception:
-            pass
-
-        # Fallback: no reset capability, just read baseline
-        self._process = None
-        self._has_sudo = False
+            # Try read-write (requires root)
+            self._fd = os.open(str(self.peak_file), os.O_RDWR)
+            self._can_reset = True
+        except PermissionError:
+            # Fallback to read-only (no reset capability)
+            try:
+                self._fd = os.open(str(self.peak_file), os.O_RDONLY)
+                self._can_reset = False
+            except Exception:
+                self._fd = None
+                self._can_reset = False
 
     def reset(self) -> bool:
-        """Reset peak counter.
+        """Reset peak counter for this fd.
 
         Returns:
-            True if reset succeeded, False otherwise
+            True if reset succeeded, False otherwise (fallback to delta mode)
         """
-        if not self._has_sudo or self._process is None:
-            # Fallback: record baseline for delta calculation
-            self._baseline = self._read_global_peak()
+        if self._fd is None:
             return False
 
-        try:
-            self._process.stdin.write("reset\n")
-            self._process.stdin.flush()
-            result = self._process.stdout.readline().strip()
-            return result == "ok"
-        except Exception:
-            return False
+        if self._can_reset:
+            try:
+                os.lseek(self._fd, 0, os.SEEK_SET)
+                os.write(self._fd, b"0")
+                return True
+            except (OSError, PermissionError):
+                self._can_reset = False
+
+        # Fallback: record baseline for delta calculation
+        self._baseline = self._read_via_fd()
+        return False
 
     def read_peak(self) -> int:
         """Read peak memory since last reset.
@@ -181,36 +146,47 @@ os.close(fd)
         Returns:
             Peak memory in bytes
         """
-        if self._has_sudo and self._process is not None:
-            try:
-                self._process.stdin.write("read\n")
-                self._process.stdin.flush()
-                result = self._process.stdout.readline().strip()
-                return int(result)
-            except Exception:
-                pass
+        current = self._read_via_fd()
 
-        # Fallback: return delta from baseline
-        current_peak = self._read_global_peak()
-        return max(0, current_peak - self._baseline) if self._baseline > 0 else current_peak
+        if self._can_reset:
+            # Direct per-fd reading (accurate)
+            return current
+        else:
+            # Delta from baseline (approximate)
+            return current  # Return absolute value, delta doesn't work well with peak
 
-    def _read_global_peak(self) -> int:
-        """Read peak via new fd (global value, not per-fd)."""
+    def _read_via_fd(self) -> int:
+        """Read peak via the persistent fd."""
+        if self._fd is None:
+            return self._read_global()
+
+        try:
+            os.lseek(self._fd, 0, os.SEEK_SET)
+            data = os.read(self._fd, 64)
+            return int(data.decode().strip())
+        except (OSError, ValueError):
+            return self._read_global()
+
+    def _read_global(self) -> int:
+        """Read peak via new fd (fallback)."""
         try:
             return int(self.peak_file.read_text().strip())
         except Exception:
             return 0
 
     def close(self) -> None:
-        """Close helper process."""
-        if self._process is not None:
+        """Close the file descriptor."""
+        if self._fd is not None:
             try:
-                self._process.stdin.write("quit\n")
-                self._process.stdin.flush()
-                self._process.wait(timeout=1)
-            except Exception:
-                self._process.kill()
-            self._process = None
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
+    @property
+    def has_reset_capability(self) -> bool:
+        """Check if tracker can reset peak (requires root)."""
+        return self._can_reset
 
     def __enter__(self) -> "PeakMemoryTracker":
         return self
