@@ -487,6 +487,16 @@ class RAMGradientExecutor:
         stats: dict[str, QueryStats] = {}
         total_queries = len(queries)
 
+        # Get cgroups monitors for per-query peak measurement
+        container_ids = self.isolation.get_container_ids(self.paradigm)
+        query_monitors = {}
+        for name, cid in container_ids.items():
+            try:
+                from ..monitoring import CgroupsV2Monitor
+                query_monitors[name] = CgroupsV2Monitor(cid)
+            except Exception:
+                pass
+
         for q_idx, query_id in enumerate(queries, 1):
             query_stats = QueryStats(query_id=query_id)
             query_start = time.perf_counter()
@@ -533,6 +543,13 @@ class RAMGradientExecutor:
 
                 for run_id in range(self.n_runs):
                     try:
+                        # Reset memory peak before each run for accurate per-query measurement
+                        for monitor in query_monitors.values():
+                            try:
+                                monitor.reset_memory_peak()
+                            except Exception:
+                                pass
+
                         # Execute based on query category
                         if query_def.category == "hybrid" and self.paradigm in ("M2", "O2"):
                             # Hybrid execution: two-phase (graph + timeseries)
@@ -550,11 +567,25 @@ class RAMGradientExecutor:
                                 float(self.timeout),
                             )
 
+                        # Capture memory peak after query execution
+                        run_peak_bytes = 0
+                        for monitor in query_monitors.values():
+                            try:
+                                run_peak_bytes += monitor.get_memory_peak()
+                            except Exception:
+                                pass
+
+                        # Create sampling result for this run
+                        run_sampling = SamplingResult(
+                            memory_peak_bytes=run_peak_bytes,
+                        ) if run_peak_bytes > 0 else None
+
                         query_stats.runs.append(QueryRunResult(
                             query_id=query_id,
                             variant_id=variant_id,
                             run_id=run_id,
                             result=result,
+                            sampling=run_sampling,
                         ))
 
                         # Early exit on OOM
