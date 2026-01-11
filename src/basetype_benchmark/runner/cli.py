@@ -555,11 +555,17 @@ def benchmark(
         bool,
         typer.Option("--cleanup/--no-cleanup", help="Cleanup exports after each paradigm (saves disk)")
     ] = True,
+    archive: Annotated[
+        Optional[Path],
+        typer.Option("--archive", "-a", help="Archive raw results to directory for replay")
+    ] = None,
 ) -> None:
     """Execute full benchmark with RAM gradient and disk optimization.
 
     The benchmark exports, loads, and benchmarks each paradigm sequentially,
     optionally cleaning up exports after each paradigm to save disk space.
+
+    With --archive, saves raw query results for later validation replay.
 
     Examples:
         btb-runner benchmark -s data/generated/small-1w -o results.json
@@ -567,6 +573,7 @@ def benchmark(
         btb-runner benchmark -s data/generated/small-1w --scenario config/scenarios/custom.yaml
         btb-runner benchmark -s data/generated/small-1w -p P1,M1 --ram "32,16,8"
         btb-runner benchmark -s data/generated/small-1w --no-cleanup  # Keep exports
+        btb-runner benchmark -s data/generated/small-1w --archive data/results/runs  # Save raw results
     """
     from .benchmark import BenchmarkOrchestrator, ScenarioConfig
     from .scenarios import get_scenario, load_scenario_from_yaml
@@ -667,7 +674,10 @@ def benchmark(
 
     # Run benchmark with disk optimization
     try:
-        orchestrator = BenchmarkOrchestrator(configs=configs)
+        orchestrator = BenchmarkOrchestrator(
+            configs=configs,
+            archive_path=archive,
+        )
         results = orchestrator.run_full_benchmark(
             source_dir=source_dir,
             export_dir=export_dir,
@@ -676,6 +686,8 @@ def benchmark(
             cleanup_exports=cleanup,
         )
         console.print(f"\n[green]Benchmark complete! Results saved to {output}[/green]")
+        if archive:
+            console.print(f"[green]Raw results archived to {archive}[/green]")
     except Exception as e:
         console.print(f"[red]Benchmark failed: {e}[/red]")
         raise typer.Exit(1)
@@ -2224,6 +2236,198 @@ def _build_paradigm_configs() -> dict:
 # =============================================================================
 # SCENARIOS COMMAND
 # =============================================================================
+
+# =============================================================================
+# ARCHIVE COMMANDS
+# =============================================================================
+
+@app.command("runs")
+def list_runs_cmd(
+    archive_dir: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Archive directory")
+    ] = Path("data/results/runs"),
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Number of runs to show")
+    ] = 10,
+) -> None:
+    """List archived benchmark runs.
+
+    Shows recent benchmark runs that can be replayed for validation.
+
+    Examples:
+        btb-runner runs
+        btb-runner runs --dir data/results/runs --limit 20
+    """
+    from .benchmark.archive import ResultsArchive
+
+    if not archive_dir.exists():
+        console.print(f"[yellow]No archive directory found: {archive_dir}[/yellow]")
+        console.print("[dim]Run a benchmark with --archive to create one[/dim]")
+        return
+
+    archive = ResultsArchive(archive_dir)
+    runs = archive.list_runs()[:limit]
+
+    if not runs:
+        console.print("[yellow]No archived runs found[/yellow]")
+        return
+
+    console.print(Panel.fit(
+        f"[bold blue]Archived Runs[/bold blue]\n"
+        f"Directory: {archive_dir}",
+        border_style="blue"
+    ))
+
+    table = Table(show_header=True)
+    table.add_column("Benchmark ID", style="cyan")
+    table.add_column("Paradigms")
+    table.add_column("Queries")
+    table.add_column("Git")
+    table.add_column("Date")
+
+    for run_id in runs:
+        try:
+            run = archive.load_run(run_id)
+            metadata = run.metadata
+            git_info = metadata.git_hash[:7] if metadata.git_hash else "-"
+            if metadata.git_dirty:
+                git_info += "*"
+            table.add_row(
+                run_id,
+                ", ".join(run.paradigms[:3]) + ("..." if len(run.paradigms) > 3 else ""),
+                str(len(run.queries)),
+                git_info,
+                metadata.start_time.strftime("%Y-%m-%d %H:%M") if metadata.start_time else "-",
+            )
+        except Exception as e:
+            table.add_row(run_id, "[red]Error[/red]", str(e)[:30], "-", "-")
+
+    console.print(table)
+    console.print(f"\n[dim]Use: btb-runner replay <benchmark_id> to replay validation[/dim]")
+
+
+@app.command("replay")
+def replay_validation_cmd(
+    benchmark_id: Annotated[
+        str,
+        typer.Argument(help="Benchmark ID to replay (from 'runs' command)")
+    ],
+    archive_dir: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Archive directory")
+    ] = Path("data/results/runs"),
+    reference: Annotated[
+        str,
+        typer.Option("--reference", "-r", help="Reference paradigm")
+    ] = "P1",
+    semantic: Annotated[
+        bool,
+        typer.Option("--semantic/--no-semantic", help="Enable semantic validation")
+    ] = True,
+    output: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Output JSON report")
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Show detailed results")
+    ] = False,
+) -> None:
+    """Replay validation on archived results.
+
+    Re-runs cross-paradigm validation on previously saved raw results
+    without re-executing queries. Useful for:
+    - Testing new validation rules
+    - Debugging validation issues
+    - Generating reports from past runs
+
+    Examples:
+        btb-runner replay 2026-01-11_153439
+        btb-runner replay 2026-01-11_153439 --semantic --reference P1
+        btb-runner replay 2026-01-11_153439 -o new_validation.json
+    """
+    from .benchmark.archive import ResultsArchive
+    from .core.cross_validator import CrossParadigmValidator, ValidationStatus
+
+    # Load archive
+    archive_path = archive_dir / benchmark_id
+    if not archive_path.exists():
+        # Try to find partial match
+        archive = ResultsArchive(archive_dir)
+        runs = archive.list_runs()
+        matches = [r for r in runs if benchmark_id in r]
+        if matches:
+            console.print(f"[yellow]Run '{benchmark_id}' not found. Did you mean:[/yellow]")
+            for m in matches[:5]:
+                console.print(f"  {m}")
+        else:
+            console.print(f"[red]Run not found: {benchmark_id}[/red]")
+            console.print(f"[dim]Use 'btb-runner runs' to list available runs[/dim]")
+        raise typer.Exit(1)
+
+    archive = ResultsArchive(archive_dir)
+    run = archive.load_run(benchmark_id)
+
+    console.print(Panel.fit(
+        f"[bold blue]Replay Validation[/bold blue]\n\n"
+        f"Run: {benchmark_id}\n"
+        f"Paradigms: {', '.join(run.paradigms)}\n"
+        f"Queries: {len(run.queries)}\n"
+        f"Reference: {reference}\n"
+        f"Semantic: {'Yes' if semantic else 'No'}",
+        border_style="blue"
+    ))
+
+    # Convert to BenchmarkResults
+    results = run.to_benchmark_results()
+
+    # Setup validator
+    semantic_path = None
+    if semantic:
+        semantic_path = Path(__file__).parents[2] / "config" / "semantic_definitions.yaml"
+        if not semantic_path.exists():
+            semantic_path = Path("config/semantic_definitions.yaml")
+
+    validator = CrossParadigmValidator(
+        reference=reference,
+        float_tolerance=0.01,
+        semantic_definitions_path=semantic_path if semantic and semantic_path.exists() else None,
+    )
+
+    # Run validation
+    report = validator.validate(results)
+
+    # Display results (simplified)
+    console.print("\n")
+    summary_table = Table(title="Validation Summary", show_header=True)
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Count", justify="right")
+
+    summary_table.add_row("Equivalent", f"[green]{report.equivalent_count}[/green]")
+    summary_table.add_row("Degraded", f"[yellow]{report.degraded_count}[/yellow]")
+    summary_table.add_row("Skip", f"[dim]{report.skip_count}[/dim]")
+    summary_table.add_row("Mismatch", f"[red]{report.mismatch_count}[/red]")
+    console.print(summary_table)
+
+    # Show mismatches if verbose
+    if verbose and report.mismatch_count > 0:
+        console.print("\n[bold red]Mismatches:[/bold red]")
+        for query_id, paradigm_results in report.comparisons.items():
+            for paradigm, cmp in paradigm_results.items():
+                if cmp.status == ValidationStatus.MISMATCH:
+                    console.print(f"  {query_id} ({paradigm}): {cmp.reason or 'Unknown'}")
+                    if cmp.semantic_status:
+                        console.print(f"    Semantic: {cmp.semantic_status}")
+
+    # Save report
+    if output:
+        report.to_json(output)
+        console.print(f"\n[green]Report saved to {output}[/green]")
+
+    console.print(f"\n[green]Replay complete![/green]")
+
 
 @app.command("scenarios")
 def list_scenarios_cmd() -> None:

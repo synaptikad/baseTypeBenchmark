@@ -40,6 +40,7 @@ from .results import (
     LevelResult,
     QueryResult,
 )
+from .archive import ResultsArchive
 
 
 console = Console()
@@ -124,16 +125,23 @@ class BenchmarkOrchestrator:
         self,
         configs: dict[str, Any],
         compose_file: Path | None = None,
+        archive_path: Path | None = None,
     ):
         """Initialize orchestrator.
 
         Args:
             configs: Dict mapping paradigm to connection config
             compose_file: Path to docker-compose.yml
+            archive_path: Path for results archive (enables raw result storage)
         """
         self.configs = configs
         self.isolation = IsolationManager(compose_file=compose_file)
         self._timeseries_loaded = False  # Track if TS loaded (Option A)
+
+        # Results archive for raw data storage
+        self._archive: ResultsArchive | None = None
+        if archive_path:
+            self._archive = ResultsArchive(archive_path)
 
     def run_full_benchmark(
         self,
@@ -169,6 +177,20 @@ class BenchmarkOrchestrator:
         queries = scenario.queries
         if not queries:
             queries = self._get_all_queries()
+
+        # Start archive if enabled
+        if self._archive:
+            self._archive.start_run(
+                benchmark_id=results.benchmark_id,
+                paradigms=scenario.paradigms,
+                queries=queries,
+                data_profile=scenario.data_profile,
+                ram_levels_mb=scenario.ram_levels_mb,
+                n_warmup=scenario.n_warmup,
+                n_runs=scenario.n_runs,
+                n_variants=scenario.n_variants,
+                timeout_seconds=scenario.timeout_seconds,
+            )
 
         disk_mode = "optimisé" if cleanup_exports else "persistant"
         console.print(Panel.fit(
@@ -213,6 +235,12 @@ class BenchmarkOrchestrator:
                 console.print(f"[yellow]Warning: Failed to stop {paradigm}: {e}[/yellow]")
 
         results.end_time = datetime.now()
+
+        # Finalize archive
+        if self._archive:
+            self._archive.finalize_run(benchmark_summary=results.to_dict())
+            archive_path = self._archive.base_path / results.benchmark_id
+            console.print(f"\n[green]Results archived to {archive_path}[/green]")
 
         # Export results
         if output_path:
@@ -279,6 +307,7 @@ class BenchmarkOrchestrator:
 
                 # Convert gradient results
                 results.baseline_peak_mb = gradient_result.baseline_peak_mb
+                results.ram_plateau_mb = gradient_result.ram_plateau_mb
 
                 for level in gradient_result.levels:
                     level_result = LevelResult(
@@ -309,6 +338,18 @@ class BenchmarkOrchestrator:
                             column_names=stats.column_names,
                         )
 
+                        # Archive raw results (all rows, not just sample)
+                        if self._archive and stats.all_rows:
+                            self._archive.save_query_result(
+                                query_id=qid,
+                                paradigm=paradigm,
+                                rows=stats.all_rows,
+                                column_names=stats.column_names or [],
+                                parameters={},  # TODO: capture from gradient executor
+                                execution_time_ms=stats.avg_ms,
+                                ram_limit_mb=level.limit_mb,
+                            )
+
                     results.levels.append(level_result)
 
             finally:
@@ -326,7 +367,13 @@ class BenchmarkOrchestrator:
                 shutil.rmtree(paradigm_export_dir)
 
         # Print paradigm summary
-        console.print(f"  [green]RAM viable: {results.ram_viable_mb} MB[/green]")
+        if results.ram_plateau_mb and results.ram_plateau_mb != results.ram_viable_mb:
+            console.print(
+                f"  [green]RAM viable: {results.ram_viable_mb} MB, "
+                f"plateau: {results.ram_plateau_mb} MB[/green]"
+            )
+        else:
+            console.print(f"  [green]RAM viable: {results.ram_viable_mb} MB[/green]")
 
         return results
 

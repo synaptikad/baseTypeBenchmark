@@ -94,6 +94,14 @@ class QueryStats:
         return None
 
     @property
+    def all_rows(self) -> list[dict] | None:
+        """All rows from first successful run (for archiving)."""
+        for r in self.runs:
+            if r.status == RunStatus.SUCCESS and r.result.rows:
+                return r.result.rows
+        return None
+
+    @property
     def row_hash(self) -> str | None:
         """SHA256 hash of full result for integrity verification."""
         import hashlib
@@ -185,6 +193,11 @@ class GradientLevel:
     def is_success(self) -> bool:
         return self.status == "success"
 
+    @property
+    def total_latency_ms(self) -> float:
+        """Sum of avg latencies across all queries (for plateau detection)."""
+        return sum(stats.avg_ms for stats in self.query_stats.values())
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON export."""
         return {
@@ -226,6 +239,18 @@ class GradientResult:
         return min(l.limit_mb for l in successful)
 
     @property
+    def ram_plateau_mb(self) -> int | None:
+        """RAM level where performance plateaued (last successful level tested).
+
+        In ascending gradient (4GB → 8GB → 16GB → ...), this is the highest
+        RAM level tested before stopping due to plateau detection.
+        """
+        successful = [l for l in self.levels if l.is_success]
+        if not successful:
+            return None
+        return max(l.limit_mb for l in successful)
+
+    @property
     def all_oom(self) -> bool:
         """Check if all levels resulted in OOM."""
         return all(l.status == "oom" for l in self.levels)
@@ -236,6 +261,7 @@ class GradientResult:
             "paradigm": self.paradigm,
             "baseline_peak_mb": self.baseline_peak_mb,
             "ram_viable_mb": self.ram_viable_mb,
+            "ram_plateau_mb": self.ram_plateau_mb,
             "levels": [l.to_dict() for l in self.levels],
         }
 
@@ -278,6 +304,10 @@ class RAMGradientExecutor:
     DEFAULT_TIMED_RUNS = 10
     DEFAULT_VARIANTS = 3
 
+    # Plateau detection threshold (ratio of current/previous total latency)
+    # If ratio >= threshold, consider it a plateau (less than 5% improvement)
+    PLATEAU_THRESHOLD = 0.95
+
     def __init__(
         self,
         paradigm: str,
@@ -287,6 +317,7 @@ class RAMGradientExecutor:
         n_runs: int = DEFAULT_TIMED_RUNS,
         n_variants: int = DEFAULT_VARIANTS,
         timeout_seconds: float = 300.0,
+        plateau_threshold: float = PLATEAU_THRESHOLD,
         verbose: bool = True,
     ):
         """Initialize gradient executor.
@@ -308,6 +339,7 @@ class RAMGradientExecutor:
         self.n_runs = n_runs
         self.n_variants = n_variants
         self.timeout = timeout_seconds
+        self.plateau_threshold = plateau_threshold
         self.verbose = verbose
 
         self._docker = DockerClient()
@@ -345,7 +377,9 @@ class RAMGradientExecutor:
         # Measure baseline (run query without RAM limit, after resetting load peak)
         result.baseline_peak_mb = self._measure_baseline(queries)
 
-        # Run gradient (descending to detect OOM early)
+        # Run gradient (ascending: low RAM → high RAM, stop at plateau)
+        prev_total_latency: float | None = None
+
         for i, limit_mb in enumerate(levels_mb):
             if on_progress:
                 on_progress(f"RAM {limit_mb}MB", i + 1, len(levels_mb))
@@ -365,6 +399,30 @@ class RAMGradientExecutor:
             # Early termination on OOM
             if level_result.status == "oom":
                 break
+
+            # Plateau detection: compare total latency with previous level
+            if level_result.is_success and prev_total_latency is not None:
+                current_total = level_result.total_latency_ms
+                if current_total > 0 and prev_total_latency > 0:
+                    ratio = current_total / prev_total_latency
+                    improvement_pct = (1 - ratio) * 100
+
+                    if ratio >= self.plateau_threshold:
+                        # Plateau detected: less than 5% improvement
+                        if self.verbose:
+                            self._console.print(
+                                f"  [yellow]Plateau detected at {limit_mb}MB "
+                                f"({improvement_pct:+.1f}% vs previous)[/yellow]"
+                            )
+                        break
+                    elif self.verbose:
+                        self._console.print(
+                            f"  [dim]RAM {limit_mb}MB: {improvement_pct:+.1f}% improvement[/dim]"
+                        )
+
+            # Update previous total latency for next iteration
+            if level_result.is_success:
+                prev_total_latency = level_result.total_latency_ms
 
         return result
 
