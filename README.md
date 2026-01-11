@@ -88,6 +88,24 @@ Voir [queries/catalog.yaml](queries/catalog.yaml) pour les 34 définitions compl
 | `row_count` | Nombre de lignes retournées |
 | `success_rate` | Taux de succès des exécutions |
 
+### Mesure mémoire (cgroups v2)
+
+Le benchmark utilise `memory.peak` de cgroups v2 pour mesurer précisément la consommation mémoire **par query**. Ceci nécessite Linux avec kernel >= 5.10.
+
+**Important** : Pour des mesures per-query précises, le benchmark doit être exécuté avec `sudo` :
+
+```bash
+# Métriques mémoire précises (reset memory.peak entre chaque query)
+sudo btb-runner benchmark -s data/generated/small-2d -p P1,M1 --ram 32,16,8
+
+# Sans sudo : métriques mémoire en mode "fallback" (moins précis)
+btb-runner benchmark -s data/generated/small-2d -p P1,M1 --ram 32,16,8
+```
+
+**Pourquoi sudo ?** Les fichiers `memory.peak` dans `/sys/fs/cgroup/` appartiennent à root. Le reset du compteur peak (écriture de "0") nécessite les droits root. Sans ces droits, le benchmark fonctionne mais utilise le peak global du container (moins granulaire).
+
+**Sécurité** : Le code n'exécute aucun subprocess via sudo. L'utilisateur choisit explicitement de lancer le processus Python avec les droits root.
+
 ---
 
 ## Validation Cross-Paradigme
