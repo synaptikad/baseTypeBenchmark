@@ -1,0 +1,39 @@
+name: "BOS Digital Twin"
+description: "Digital twin platform with graph navigation and high-frequency ingestion"
+profile: mixed
+
+paradigms:
+  - P1
+  - M1
+  - M2
+
+sequence:
+  # Graph context navigation (FEEDS/SERVES traversals)
+  - query: Q1
+    repeat: 10
+    think_time_ms: 100
+
+  - query: Q2
+    repeat: 5
+    think_time_ms: 100
+
+  # High-frequency timeseries ingestion (~350/s target)
+  - query: QW1
+    repeat: 350
+    batch_size: 100
+    think_time_ms: 0
+
+  # Dashboard queries
+  - query: Q7
+    repeat: 5
+
+  - query: Q12
+    repeat: 1
+
+duration_seconds: 120
+loop: true
+
+metrics:
+  throughput: true
+  latency_distribution: true
+  error_rate: true

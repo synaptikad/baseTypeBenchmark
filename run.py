@@ -281,6 +281,7 @@ def menu_benchmark():
         console.print("[cyan]2[/cyan]. Standard        [dim]All paradigms, full suite[/dim]")
         console.print("[cyan]3[/cyan]. RAM gradient    [dim]Fine-grained memory test[/dim]")
         console.print("[cyan]4[/cyan]. Custom")
+        console.print("[cyan]5[/cyan]. Workload test   [dim]Stress testing with query sequences[/dim]")
         console.print()
         console.print("[cyan]d[/cyan]. Debug query     [dim]Run single query[/dim]")
         console.print("[cyan]v[/cyan]. Validate        [dim]Check query matrix[/dim]")
@@ -288,7 +289,7 @@ def menu_benchmark():
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
-        choice = Prompt.ask("", choices=["1", "2", "3", "4", "d", "v", "b"], default="1", show_choices=False)
+        choice = Prompt.ask("", choices=["1", "2", "3", "4", "5", "d", "v", "b"], default="1", show_choices=False)
 
         if choice == "b":
             return
@@ -303,6 +304,16 @@ def menu_benchmark():
                 wait()
                 continue
             run_benchmark(choice, datasets)
+        elif choice == "5":
+            if not docker_ok:
+                console.print("\n[red]Start Docker first.[/red]")
+                wait()
+                continue
+            if not datasets:
+                console.print("\n[yellow]Generate a dataset first (Dataset > Generate).[/yellow]")
+                wait()
+                continue
+            menu_workload(datasets)
         elif choice == "d":
             debug_query()
         elif choice == "v":
@@ -417,6 +428,122 @@ def debug_query():
     query = Prompt.ask("Query ID", default="Q1")
 
     btb("run-query", query, "-p", paradigm)
+    wait()
+
+
+def menu_workload(datasets: list[Path]):
+    """Workload testing submenu."""
+    WORKLOADS = [
+        ("dashboard_refresh", "Dashboard Refresh", "Read-heavy, ~5min"),
+        ("iot_ingestion", "IoT Ingestion", "Write-heavy, ~1min"),
+        ("mixed_middleware", "Mixed Middleware", "50/50 R/W, ~3min"),
+        ("bos_twin", "BOS Twin", "Digital twin simulation, ~2min"),
+        ("graph_stress", "Graph Stress", "Graph-intensive, ~3min"),
+        ("timeseries_stress", "Timeseries Stress", "TS aggregations, ~3min"),
+    ]
+
+    while True:
+        header("Workload Testing")
+
+        console.print("[bold]Predefined Workloads:[/bold]\n")
+        for i, (name, label, desc) in enumerate(WORKLOADS, 1):
+            console.print(f"[cyan]{i}[/cyan]. {label:<20} [dim]{desc}[/dim]")
+
+        console.print()
+        console.print(f"[cyan]{len(WORKLOADS) + 1}[/cyan]. Custom workload")
+        console.print()
+        console.print("[cyan]b[/cyan]. Back")
+        console.print()
+
+        choices = [str(i) for i in range(1, len(WORKLOADS) + 2)] + ["b"]
+        choice = Prompt.ask("", choices=choices, default="1", show_choices=False)
+
+        if choice == "b":
+            return
+
+        idx = int(choice) - 1
+        if idx < len(WORKLOADS):
+            workload_name = WORKLOADS[idx][0]
+            run_workload(workload_name, datasets)
+        else:
+            run_custom_workload(datasets)
+
+
+def run_workload(workload_name: str, datasets: list[Path]):
+    """Run a predefined workload."""
+    header(f"Workload: {workload_name}")
+
+    # Select dataset
+    console.print("[bold]Dataset:[/bold]")
+    idx = select_from_list(datasets)
+    if idx is None:
+        return
+    source = datasets[idx]
+
+    # Select paradigms
+    console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
+    paradigms = Prompt.ask("Select", default="P1,M1")
+    if paradigms.upper() == "ALL":
+        paradigms = "P1,P2,M1,M2,O2"
+
+    # Duration override
+    duration_str = Prompt.ask("\nDuration override (seconds, empty=default)", default="")
+    duration_args = ["--duration", duration_str] if duration_str.strip() else []
+
+    # Output file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output = RESULTS_DIR / f"workload_{workload_name}_{timestamp}.json"
+
+    console.print(f"\n[yellow]Running workload: {workload_name}[/yellow]")
+    console.print(f"  Paradigms: {paradigms}")
+    console.print(f"  Dataset: {source.name}")
+
+    if not Confirm.ask("\nStart?", default=True):
+        return
+
+    btb("workload", workload_name, "-s", str(source), "-p", paradigms,
+        "-o", str(output), *duration_args)
+
+    if output.exists():
+        console.print(f"\n[green]Results saved: {output.name}[/green]")
+
+    wait()
+
+
+def run_custom_workload(datasets: list[Path]):
+    """Run a custom workload from YAML file."""
+    header("Custom Workload")
+
+    workload_path = Prompt.ask("Path to workload YAML", default="config/workloads/custom.yaml")
+
+    if not Path(workload_path).exists():
+        console.print(f"[red]File not found: {workload_path}[/red]")
+        wait()
+        return
+
+    # Select dataset
+    console.print("\n[bold]Dataset:[/bold]")
+    idx = select_from_list(datasets)
+    if idx is None:
+        return
+    source = datasets[idx]
+
+    # Select paradigms
+    console.print("\n[bold]Paradigms:[/bold]")
+    paradigms = Prompt.ask("Select", default="P1,M1")
+
+    # Output
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output = RESULTS_DIR / f"workload_custom_{timestamp}.json"
+
+    if not Confirm.ask("\nStart?", default=True):
+        return
+
+    btb("workload", workload_path, "-s", str(source), "-p", paradigms, "-o", str(output))
+
+    if output.exists():
+        console.print(f"\n[green]Results saved: {output.name}[/green]")
+
     wait()
 
 

@@ -1,0 +1,38 @@
+name: "Timeseries Stress"
+description: "Timeseries-intensive with aggregations, drift detection, and sliding windows"
+profile: timeseries_stress
+
+paradigms:
+  - P1
+  - P2
+  - M1
+  - M2
+
+sequence:
+  # Hourly aggregation (time_bucket)
+  - query: Q6
+    repeat: 30
+
+  # Drift detection
+  - query: Q7
+    repeat: 20
+
+  # Rolling average / sliding windows
+  - query: Q9
+    repeat: 15
+
+  # Peak detection
+  - query: Q10
+    repeat: 15
+
+  # Anomaly detection
+  - query: Q11
+    repeat: 10
+
+duration_seconds: 180
+loop: true
+
+metrics:
+  throughput: true
+  latency_distribution: true
+  error_rate: true

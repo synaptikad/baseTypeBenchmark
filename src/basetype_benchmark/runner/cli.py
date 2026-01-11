@@ -2051,6 +2051,177 @@ def _generate_html_report(report, output_path: Path) -> None:
 
 
 # =============================================================================
+# WORKLOAD COMMANDS
+# =============================================================================
+
+@app.command("workloads")
+def list_workloads_cmd() -> None:
+    """List available workload scenarios.
+
+    Shows predefined workloads for stress testing.
+    """
+    from .workload import WORKLOADS, WORKLOAD_INFO
+
+    console.print(Panel.fit(
+        "[bold blue]Available Workloads[/bold blue]",
+        border_style="blue"
+    ))
+
+    table = Table(show_header=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+    table.add_column("Profile")
+    table.add_column("Paradigms")
+    table.add_column("Duration")
+
+    for name, workload in WORKLOADS.items():
+        info = WORKLOAD_INFO.get(name, {})
+        table.add_row(
+            name,
+            info.get("description", workload.description[:40]),
+            workload.profile.value,
+            ", ".join(workload.paradigms[:3]) + ("..." if len(workload.paradigms) > 3 else ""),
+            info.get("duration", f"~{workload.duration_seconds}s"),
+        )
+
+    console.print(table)
+
+    console.print("\n[dim]Use: btb-runner workload <name> --paradigms P1,M1[/dim]")
+
+
+@app.command("workload")
+def run_workload_cmd(
+    name: Annotated[str, typer.Argument(help="Workload name or path to YAML file")],
+    source: Annotated[
+        Path,
+        typer.Option("-s", "--source", help="Dataset path (Parquet)")
+    ] = None,
+    paradigms: Annotated[
+        str,
+        typer.Option("-p", "--paradigms", help="Paradigms to test (comma-separated)")
+    ] = None,
+    duration: Annotated[
+        int,
+        typer.Option("-d", "--duration", help="Override duration (seconds)")
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("-o", "--output", help="Output JSON file")
+    ] = None,
+) -> None:
+    """Run a workload scenario.
+
+    Executes query sequences to test throughput under load.
+
+    Examples:
+        btb-runner workload dashboard_refresh -s data/generated/small-1w
+        btb-runner workload bos_twin -p M1,M2 -d 60
+        btb-runner workload config/workloads/custom.yaml
+    """
+    from .workload import load_or_get_workload, WorkloadOrchestrator
+    from .ram.isolation import IsolationManager
+
+    # Load workload
+    try:
+        workload = load_or_get_workload(name)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Override duration if specified
+    if duration:
+        workload.duration_seconds = duration
+
+    # Parse paradigms
+    paradigm_list = paradigms.split(",") if paradigms else workload.paradigms
+
+    console.print(Panel.fit(
+        f"[bold blue]Workload: {workload.name}[/bold blue]\n"
+        f"Profile: {workload.profile.value}\n"
+        f"Paradigms: {', '.join(paradigm_list)}\n"
+        f"Duration: {workload.duration_seconds}s, Loop: {workload.loop}",
+        border_style="blue"
+    ))
+
+    # Setup isolation manager
+    isolation = IsolationManager()
+
+    # Build configs
+    configs = _build_paradigm_configs()
+
+    # Create orchestrator
+    orchestrator = WorkloadOrchestrator(
+        isolation=isolation,
+        configs=configs,
+        timeout_seconds=60.0,
+        verbose=True,
+    )
+
+    # Run workload
+    try:
+        results = orchestrator.run_workload(
+            scenario=workload,
+            paradigms=paradigm_list,
+            data_path=source,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted[/yellow]")
+        raise typer.Exit(1)
+
+    # Print summary
+    console.print("\n")
+    console.print(Panel.fit("[bold green]Workload Complete[/bold green]", border_style="green"))
+
+    table = Table(show_header=True)
+    table.add_column("Paradigm", style="cyan")
+    table.add_column("QPS", justify="right")
+    table.add_column("p50 (ms)", justify="right")
+    table.add_column("p95 (ms)", justify="right")
+    table.add_column("Errors", justify="right")
+    table.add_column("Peak (MB)", justify="right")
+
+    for paradigm, result in results.results.items():
+        table.add_row(
+            paradigm,
+            f"{result.qps:.1f}",
+            f"{result.latency_p50_ms:.1f}",
+            f"{result.latency_p95_ms:.1f}",
+            f"{result.total_errors}" if result.total_errors else "[green]0[/green]",
+            f"{result.scenario_memory_peak_mb:.0f}" if result.scenario_memory_peak_mb else "-",
+        )
+
+    console.print(table)
+
+    # Save results
+    if output:
+        results.to_json(str(output))
+        console.print(f"\n[dim]Results saved to: {output}[/dim]")
+
+
+def _build_paradigm_configs() -> dict:
+    """Build connection configs for all paradigms."""
+    from .config import (
+        PostgresConfig,
+        MemgraphConfig,
+        OxigraphConfig,
+        HybridConfig,
+    )
+
+    # Default configs (can be overridden via environment)
+    pg_config = PostgresConfig()
+    mg_config = MemgraphConfig()
+    ox_config = OxigraphConfig()
+
+    return {
+        "P1": pg_config,
+        "P2": pg_config,
+        "M1": mg_config,
+        "M2": HybridConfig(graph=mg_config, timeseries=pg_config),
+        "O2": HybridConfig(graph=ox_config, timeseries=pg_config),
+    }
+
+
+# =============================================================================
 # SCENARIOS COMMAND
 # =============================================================================
 

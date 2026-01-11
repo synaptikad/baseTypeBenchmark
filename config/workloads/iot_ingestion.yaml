@@ -1,0 +1,29 @@
+name: "IoT Gateway Ingestion"
+description: "Simulates IoT gateway ingesting sensor data at high frequency"
+profile: write_heavy
+
+paradigms:
+  - P1
+  - P2
+  - M1
+  - M2
+
+sequence:
+  # High-frequency timeseries append
+  - query: QW1
+    repeat: 100
+    batch_size: 100
+    think_time_ms: 10
+
+  # Occasional metadata update
+  - query: QW2
+    repeat: 5
+    think_time_ms: 100
+
+duration_seconds: 60
+loop: true
+
+metrics:
+  throughput: true
+  latency_distribution: true
+  error_rate: true

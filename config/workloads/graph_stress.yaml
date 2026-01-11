@@ -1,0 +1,45 @@
+name: "Graph Stress"
+description: "Graph-intensive workload with deep traversals and path algorithms"
+profile: graph_stress
+
+paradigms:
+  - P1
+  - M1
+  - M2
+  - O2
+
+sequence:
+  # Basic traversals
+  - query: Q1
+    repeat: 20
+
+  - query: Q2
+    repeat: 20
+
+  - query: Q3
+    repeat: 20
+
+  # Hierarchy traversals
+  - query: Q4
+    repeat: 10
+
+  - query: Q5
+    repeat: 10
+
+  # Path algorithms (graph-native)
+  - query: Q20
+    repeat: 5
+
+  - query: Q21
+    repeat: 5
+
+  - query: Q22
+    repeat: 5
+
+duration_seconds: 180
+loop: true
+
+metrics:
+  throughput: true
+  latency_distribution: true
+  error_rate: true

@@ -1,0 +1,34 @@
+name: "Dashboard Refresh"
+description: "Simulates a dashboard refreshing every 5 seconds with read-heavy queries"
+profile: read_heavy
+
+paradigms:
+  - P1
+  - M1
+  - M2
+
+sequence:
+  # Initial data load
+  - query: Q12
+    repeat: 1
+
+  # Repeated refresh cycle
+  - query: Q6
+    repeat: 10
+    think_time_ms: 5000
+
+  - query: Q7
+    repeat: 5
+    think_time_ms: 5000
+
+  - query: Q13
+    repeat: 5
+    think_time_ms: 5000
+
+duration_seconds: 300
+loop: true
+
+metrics:
+  throughput: true
+  latency_distribution: true
+  error_rate: true

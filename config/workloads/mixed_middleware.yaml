@@ -1,0 +1,40 @@
+name: "Mixed Middleware"
+description: "Realistic middleware with alternating reads and writes (50/50)"
+profile: mixed
+
+paradigms:
+  - P1
+  - P2
+  - M1
+  - M2
+  - O2
+
+sequence:
+  # Write batch
+  - query: QW1
+    repeat: 50
+    batch_size: 10
+
+  # Read queries
+  - query: Q1
+    repeat: 5
+
+  - query: Q8
+    repeat: 3
+
+  # More writes
+  - query: QW1
+    repeat: 50
+    batch_size: 10
+
+  # Analytics query
+  - query: Q7
+    repeat: 1
+
+duration_seconds: 180
+loop: true
+
+metrics:
+  throughput: true
+  latency_distribution: true
+  error_rate: true
