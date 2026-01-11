@@ -369,10 +369,25 @@ def run_benchmark(mode: str, datasets: list[Path]):
                 paradigms = "P1,P2,M1,M2,O2"
             paradigms_used = paradigms
 
-            ram = Prompt.ask("RAM levels (GB)", default="64,48,32,24,16,12,8,4")
+            # RAM range selection
+            console.print("\n[bold]RAM Range:[/bold]")
+            console.print("[dim]Available: 128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2, 1, 0.5 GB[/dim]")
+            ram_max = Prompt.ask("Max RAM (GB)", default="128")
+            ram_min = Prompt.ask("Min RAM (GB)", default="0.5")
+
+            # Generate RAM levels between max and min
+            all_levels = [128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2, 1, 0.5]
+            try:
+                max_val = float(ram_max)
+                min_val = float(ram_min)
+                ram_levels = [l for l in all_levels if min_val <= l <= max_val]
+                ram = ",".join(str(int(l) if l >= 1 else l) for l in ram_levels)
+            except ValueError:
+                ram = "64,48,32,24,16,12,8,4"
 
             output = RESULTS_DIR / f"gradient_{paradigms.replace(',', '-')}_{timestamp}.json"
-            console.print(f"\n[yellow]RAM gradient: {paradigms}, levels={ram}[/yellow]")
+            console.print(f"\n[yellow]RAM gradient: {paradigms}[/yellow]")
+            console.print(f"[yellow]Levels: {ram}[/yellow]")
             if Confirm.ask("Start?", default=True):
                 btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
                     "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup")
