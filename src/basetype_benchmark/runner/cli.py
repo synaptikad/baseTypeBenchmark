@@ -1502,6 +1502,10 @@ def validate_cmd(
         bool,
         typer.Option("--fail-on-mismatch", help="Exit with code 1 if any mismatch found")
     ] = False,
+    cross_matrix: Annotated[
+        bool,
+        typer.Option("--cross-matrix", "-x", help="Compare all paradigm pairs (not just vs reference)")
+    ] = False,
 ) -> None:
     """Validate query results across paradigms.
 
@@ -1516,8 +1520,9 @@ def validate_cmd(
         btb-runner validate results.json --reference P1 --verbose
         btb-runner validate results.json -o validation_report.json
         btb-runner validate results.json --html docs/validation.html --fail-on-mismatch
+        btb-runner validate results.json --cross-matrix  # Compare all pairs
     """
-    from .core.cross_validator import CrossParadigmValidator, ValidationStatus
+    from .core.cross_validator import CrossParadigmValidator, ValidationStatus, CrossValidationMatrix
     from .benchmark.results import BenchmarkResults
 
     # Validate input file
@@ -1541,8 +1546,8 @@ def validate_cmd(
         console.print(f"[red]Failed to load results: {e}[/red]")
         raise typer.Exit(1)
 
-    # Validate reference paradigm exists
-    if reference not in results.results:
+    # Validate reference paradigm exists (only for non-matrix mode)
+    if not cross_matrix and reference not in results.results:
         console.print(f"[red]Reference paradigm '{reference}' not found in results[/red]")
         console.print(f"Available paradigms: {', '.join(results.results.keys())}")
         raise typer.Exit(1)
@@ -1553,6 +1558,35 @@ def validate_cmd(
             reference=reference,
             float_tolerance=tolerance,
         )
+
+        if cross_matrix:
+            # Cross-validation matrix mode
+            matrix = validator.validate_matrix(results)
+            _display_cross_matrix(matrix, verbose)
+
+            # Save reports
+            if output:
+                matrix.to_json(output)
+                console.print(f"\n[green]JSON matrix report saved to {output}[/green]")
+
+            if html:
+                _generate_matrix_html_report(matrix, html)
+                console.print(f"[green]HTML matrix report saved to {html}[/green]")
+
+            # Check for mismatches
+            total_mismatch = sum(
+                pair.mismatch
+                for pa_map in matrix.matrix.values()
+                for pair in pa_map.values()
+            ) // 2  # Divide by 2 because matrix is mirrored
+
+            if fail_on_mismatch and total_mismatch > 0:
+                console.print(f"\n[red]Validation failed: {total_mismatch} mismatches found[/red]")
+                raise typer.Exit(1)
+
+            console.print(f"\n[green]Cross-matrix validation complete![/green]")
+            return
+
         report = validator.validate(results)
     except Exception as e:
         console.print(f"[red]Validation failed: {e}[/red]")
@@ -1674,6 +1708,214 @@ def validate_cmd(
         raise typer.Exit(1)
 
     console.print(f"\n[green]Validation complete![/green]")
+
+
+def _display_cross_matrix(matrix, verbose: bool = False) -> None:
+    """Display cross-validation matrix in terminal."""
+    from .core.cross_validator import ValidationStatus
+
+    console.print("\n")
+
+    # Create equivalence rate matrix table
+    matrix_table = Table(
+        title="Cross-Validation Matrix (Equivalence Rate %)",
+        show_header=True,
+        header_style="bold"
+    )
+    matrix_table.add_column("", style="bold cyan")
+    for paradigm in matrix.paradigms:
+        matrix_table.add_column(paradigm, justify="center")
+
+    for pa in matrix.paradigms:
+        row = [pa]
+        for pb in matrix.paradigms:
+            if pa == pb:
+                row.append("[dim]—[/dim]")
+            elif pb in matrix.matrix.get(pa, {}):
+                pair = matrix.matrix[pa][pb]
+                rate = pair.equivalence_rate
+                if rate >= 90:
+                    color = "green"
+                elif rate >= 70:
+                    color = "yellow"
+                else:
+                    color = "red"
+                row.append(f"[{color}]{rate:.0f}%[/{color}]")
+            else:
+                row.append("[dim]—[/dim]")
+        matrix_table.add_row(*row)
+
+    console.print(matrix_table)
+
+    # Show detailed stats table
+    console.print("\n")
+    stats_table = Table(title="Pair Statistics", show_header=True)
+    stats_table.add_column("Pair", style="cyan")
+    stats_table.add_column("Equivalent", justify="right", style="green")
+    stats_table.add_column("Degraded", justify="right", style="yellow")
+    stats_table.add_column("Skip", justify="right", style="dim")
+    stats_table.add_column("Mismatch", justify="right", style="red")
+    stats_table.add_column("Rate", justify="right")
+
+    seen = set()
+    for pa in matrix.paradigms:
+        for pb, pair in matrix.matrix.get(pa, {}).items():
+            pair_key = tuple(sorted([pa, pb]))
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+
+            rate = pair.equivalence_rate
+            if rate >= 90:
+                rate_str = f"[green]{rate:.1f}%[/green]"
+            elif rate >= 70:
+                rate_str = f"[yellow]{rate:.1f}%[/yellow]"
+            else:
+                rate_str = f"[red]{rate:.1f}%[/red]"
+
+            stats_table.add_row(
+                f"{pa} ↔ {pb}",
+                str(pair.equivalent),
+                str(pair.degraded),
+                str(pair.skip),
+                str(pair.mismatch),
+                rate_str,
+            )
+
+    console.print(stats_table)
+
+    # Verbose: show mismatches per pair
+    if verbose:
+        has_mismatches = False
+        for qid, pa_map in matrix.query_details.items():
+            for pa, pb_map in pa_map.items():
+                for pb, cmp in pb_map.items():
+                    if cmp.status == ValidationStatus.MISMATCH:
+                        if not has_mismatches:
+                            console.print("\n[bold red]Mismatches:[/bold red]\n")
+                            has_mismatches = True
+                        console.print(f"  [bold]{qid}[/bold] ({pa} vs {pb}):")
+                        console.print(f"    Row count: {cmp.row_count_ref} vs {cmp.row_count_cmp}")
+                        if cmp.reason:
+                            console.print(f"    Reason: {cmp.reason}")
+
+
+def _generate_matrix_html_report(matrix, output_path: Path) -> None:
+    """Generate HTML report for cross-validation matrix."""
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cross-Validation Matrix Report</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        h1, h2 {{ color: #1a1a2e; }}
+        .matrix-container {{ overflow-x: auto; }}
+        table {{ border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ padding: 12px 15px; text-align: center; border: 1px solid #dee2e6; }}
+        th {{ background: #343a40; color: white; }}
+        .rate-high {{ background: #d4edda; color: #155724; font-weight: bold; }}
+        .rate-medium {{ background: #fff3cd; color: #856404; font-weight: bold; }}
+        .rate-low {{ background: #f8d7da; color: #721c24; font-weight: bold; }}
+        .diagonal {{ background: #e9ecef; color: #6c757d; }}
+        .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
+        .stat-card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }}
+        .stat-value {{ font-size: 2em; font-weight: bold; color: #1a1a2e; }}
+        .stat-label {{ color: #6c757d; }}
+        .footer {{ margin-top: 30px; text-align: center; color: #6c757d; font-size: 0.9em; }}
+    </style>
+</head>
+<body>
+    <h1>Cross-Validation Matrix Report</h1>
+    <p><strong>Benchmark:</strong> {matrix.benchmark_id}</p>
+    <p><strong>Paradigms:</strong> {', '.join(matrix.paradigms)}</p>
+    <p><strong>Timestamp:</strong> {matrix.timestamp.isoformat()}</p>
+
+    <h2>Equivalence Rate Matrix</h2>
+    <div class="matrix-container">
+        <table>
+            <tr>
+                <th></th>
+"""
+
+    # Header row
+    for p in matrix.paradigms:
+        html_content += f"                <th>{p}</th>\n"
+    html_content += "            </tr>\n"
+
+    # Data rows
+    for pa in matrix.paradigms:
+        html_content += f"            <tr>\n                <th>{pa}</th>\n"
+        for pb in matrix.paradigms:
+            if pa == pb:
+                html_content += '                <td class="diagonal">—</td>\n'
+            elif pb in matrix.matrix.get(pa, {}):
+                pair = matrix.matrix[pa][pb]
+                rate = pair.equivalence_rate
+                if rate >= 90:
+                    css_class = "rate-high"
+                elif rate >= 70:
+                    css_class = "rate-medium"
+                else:
+                    css_class = "rate-low"
+                html_content += f'                <td class="{css_class}">{rate:.0f}%</td>\n'
+            else:
+                html_content += '                <td class="diagonal">—</td>\n'
+        html_content += "            </tr>\n"
+
+    html_content += """        </table>
+    </div>
+
+    <h2>Pair Statistics</h2>
+    <table>
+        <tr>
+            <th>Pair</th>
+            <th>Equivalent</th>
+            <th>Degraded</th>
+            <th>Skip</th>
+            <th>Mismatch</th>
+            <th>Equivalence Rate</th>
+        </tr>
+"""
+
+    seen = set()
+    for pa in matrix.paradigms:
+        for pb, pair in matrix.matrix.get(pa, {}).items():
+            pair_key = tuple(sorted([pa, pb]))
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+
+            rate = pair.equivalence_rate
+            if rate >= 90:
+                css_class = "rate-high"
+            elif rate >= 70:
+                css_class = "rate-medium"
+            else:
+                css_class = "rate-low"
+
+            html_content += f"""        <tr>
+            <td><strong>{pa} ↔ {pb}</strong></td>
+            <td>{pair.equivalent}</td>
+            <td>{pair.degraded}</td>
+            <td>{pair.skip}</td>
+            <td>{pair.mismatch}</td>
+            <td class="{css_class}">{rate:.1f}%</td>
+        </tr>
+"""
+
+    html_content += """    </table>
+
+    <div class="footer">
+        <p>Generated by BaseType Benchmark V3</p>
+    </div>
+</body>
+</html>
+"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
 
 def _generate_html_report(report, output_path: Path) -> None:

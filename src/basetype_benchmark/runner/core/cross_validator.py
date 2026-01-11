@@ -187,6 +187,81 @@ class ValidationReport:
             json.dump(self.to_dict(), f, indent=indent, default=str)
 
 
+@dataclass
+class PairComparison:
+    """Summary of comparison between two paradigms."""
+    paradigm_a: str
+    paradigm_b: str
+    equivalent: int = 0
+    mismatch: int = 0
+    degraded: int = 0
+    skip: int = 0
+    total: int = 0
+
+    @property
+    def equivalence_rate(self) -> float:
+        """Percentage of equivalent queries (excluding skip)."""
+        comparable = self.total - self.skip
+        if comparable == 0:
+            return 0.0
+        return (self.equivalent / comparable) * 100
+
+    def to_dict(self) -> dict:
+        return {
+            "paradigm_a": self.paradigm_a,
+            "paradigm_b": self.paradigm_b,
+            "equivalent": self.equivalent,
+            "mismatch": self.mismatch,
+            "degraded": self.degraded,
+            "skip": self.skip,
+            "total": self.total,
+            "equivalence_rate": round(self.equivalence_rate, 1),
+        }
+
+
+@dataclass
+class CrossValidationMatrix:
+    """Complete cross-validation matrix for all paradigm pairs."""
+    validation_id: str
+    benchmark_id: str
+    paradigms: list[str]
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    # Matrix: paradigm_a -> paradigm_b -> PairComparison
+    matrix: dict[str, dict[str, PairComparison]] = field(default_factory=dict)
+
+    # Per-query details: query_id -> paradigm_a -> paradigm_b -> ComparisonResult
+    query_details: dict[str, dict[str, dict[str, ComparisonResult]]] = field(default_factory=dict)
+
+    def get_pair(self, a: str, b: str) -> PairComparison | None:
+        """Get comparison for a specific pair."""
+        return self.matrix.get(a, {}).get(b)
+
+    def to_dict(self) -> dict:
+        return {
+            "validation_id": self.validation_id,
+            "benchmark_id": self.benchmark_id,
+            "paradigms": self.paradigms,
+            "timestamp": self.timestamp.isoformat(),
+            "matrix": {
+                pa: {pb: cmp.to_dict() for pb, cmp in pb_map.items()}
+                for pa, pb_map in self.matrix.items()
+            },
+            "query_details": {
+                qid: {
+                    pa: {pb: cmp.to_dict() for pb, cmp in pb_map.items()}
+                    for pa, pb_map in pa_map.items()
+                }
+                for qid, pa_map in self.query_details.items()
+            },
+        }
+
+    def to_json(self, path: Path, indent: int = 2) -> None:
+        """Export matrix to JSON file."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=indent, default=str)
+
+
 class CrossParadigmValidator:
     """Validates query results across paradigms.
 
@@ -203,6 +278,86 @@ class CrossParadigmValidator:
         self.reference = reference
         self.float_tolerance = float_tolerance
         self.rules = rules or EQUIVALENCE_RULES
+
+    def validate_matrix(self, results: BenchmarkResults) -> CrossValidationMatrix:
+        """Validate all paradigm pairs (cross-validation matrix).
+
+        Compares every paradigm against every other paradigm.
+        Useful for identifying which paradigms agree with each other.
+
+        Args:
+            results: Complete benchmark results
+
+        Returns:
+            CrossValidationMatrix with all pairwise comparisons
+        """
+        paradigms = list(results.results.keys())
+
+        matrix = CrossValidationMatrix(
+            validation_id=f"{results.benchmark_id}_cross_matrix",
+            benchmark_id=results.benchmark_id,
+            paradigms=paradigms,
+        )
+
+        # Get all query IDs
+        query_ids = set()
+        for paradigm in results.results.values():
+            for level in paradigm.levels:
+                if level.status == "success":
+                    query_ids.update(level.queries.keys())
+                    break
+
+        # Compare each pair of paradigms
+        for i, paradigm_a in enumerate(paradigms):
+            matrix.matrix[paradigm_a] = {}
+            for paradigm_b in paradigms[i + 1:]:  # Only upper triangle
+                pair = PairComparison(
+                    paradigm_a=paradigm_a,
+                    paradigm_b=paradigm_b,
+                    total=len(query_ids),
+                )
+
+                for query_id in sorted(query_ids):
+                    # Get results for both paradigms
+                    result_a = self._get_query_result(
+                        results.results[paradigm_a], query_id
+                    )
+                    result_b = self._get_query_result(
+                        results.results[paradigm_b], query_id
+                    )
+
+                    # Compare using paradigm_a as reference
+                    old_ref = self.reference
+                    self.reference = paradigm_a
+                    comparison = self._compare_query(
+                        query_id, result_a, result_b, paradigm_b
+                    )
+                    self.reference = old_ref
+
+                    # Store in query_details
+                    if query_id not in matrix.query_details:
+                        matrix.query_details[query_id] = {}
+                    if paradigm_a not in matrix.query_details[query_id]:
+                        matrix.query_details[query_id][paradigm_a] = {}
+                    matrix.query_details[query_id][paradigm_a][paradigm_b] = comparison
+
+                    # Update pair counts
+                    if comparison.status == ValidationStatus.EQUIVALENT:
+                        pair.equivalent += 1
+                    elif comparison.status == ValidationStatus.MISMATCH:
+                        pair.mismatch += 1
+                    elif comparison.status == ValidationStatus.DEGRADED:
+                        pair.degraded += 1
+                    elif comparison.status == ValidationStatus.SKIP:
+                        pair.skip += 1
+
+                matrix.matrix[paradigm_a][paradigm_b] = pair
+                # Mirror for easy lookup
+                if paradigm_b not in matrix.matrix:
+                    matrix.matrix[paradigm_b] = {}
+                matrix.matrix[paradigm_b][paradigm_a] = pair
+
+        return matrix
 
     def validate(self, results: BenchmarkResults) -> ValidationReport:
         """Validate all paradigms in benchmark results.
