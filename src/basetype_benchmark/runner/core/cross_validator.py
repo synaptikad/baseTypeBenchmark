@@ -58,7 +58,6 @@ EQUIVALENCE_RULES = {
         "O2": {
             "Q6": "SPARQL lacks time_bucket aggregation",
             "Q15": "Date arithmetic approximation (365/30 days)",
-            "Q23": "Fixed 3-hop limit (can't parameterize depth)",
         },
     },
 
@@ -76,6 +75,7 @@ EQUIVALENCE_RULES = {
         "O2": {
             "Q20": "SPARQL lacks shortestPath algorithm",
             "Q21": "SPARQL lacks allShortestPaths algorithm",
+            "Q23": "SPARQL path enumeration causes combinatorial explosion (5322 rows vs 30)",
         },
     },
 }

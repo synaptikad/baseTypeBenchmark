@@ -967,7 +967,7 @@ queries:
       P2: {status: NATIVE, note: "CTE récursif avec depth <= N fonctionnel"}
       M1: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
       M2: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
-      O2: {status: DEGRADED, note: "Property path avec limite partiel"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL path enumeration causes combinatorial explosion (5322 rows vs 30)"}
 
   # -------------------------------------------------------------------------
   # WRITE WORKLOADS (QW1-QW3)
