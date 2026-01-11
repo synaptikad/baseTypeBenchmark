@@ -294,8 +294,13 @@ class HybridRunner:
         import re
 
         def camel_to_snake(name: str) -> str:
-            """Convert camelCase to snake_case (e.g., dateStart -> date_start)."""
-            return re.sub(r'([a-z])([A-Z])', r'\1_\2', name).lower()
+            """Convert camelCase to snake_case (e.g., dateStart -> date_start).
+
+            Also handles cases like co2Factor -> co2_factor (digit before uppercase).
+            """
+            # Handle letter/digit followed by uppercase
+            result = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', name)
+            return result.lower()
 
         # Build params dict for named placeholders %(name)s
         # SQL uses lowercase_snake param names
@@ -389,6 +394,19 @@ class HybridRunner:
             if isinstance(ids, list):
                 return [str(id) for id in ids]
             return [str(ids)] if ids else []
+
+        # Case 4: O2 Q13 format - rows with (point_id, quantity) at row level
+        # This handles SPARQL queries that return individual (point_id, quantity) pairs
+        if "point_id" in sample_row and "quantity" in sample_row:
+            result = {}
+            for row in rows:
+                pid = row.get("point_id")
+                qty = row.get("quantity")
+                if pid and qty:
+                    if qty not in result:
+                        result[qty] = []
+                    result[qty].append(str(pid))
+            return result if result else []
 
         # Fallback: auto-detect column
         if column is None:

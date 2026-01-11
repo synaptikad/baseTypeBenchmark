@@ -22,7 +22,7 @@ ram_gradient:
   levels_gb: [64, 48, 32, 24, 16, 12, 8, 4]
 
 execution:
-  warmup_runs: 3
+  warmup_runs: 0
   timed_runs: 10
   variants: 3
   timeout_seconds: 300

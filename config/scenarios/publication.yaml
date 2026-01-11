@@ -22,7 +22,7 @@ ram_gradient:
   levels_gb: [128, 96, 64, 48, 32, 24, 16, 12, 8, 4]
 
 execution:
-  warmup_runs: 5      # More warmup for stable results
+  warmup_runs: 0
   timed_runs: 30      # High sample count for statistics
   variants: 5         # Multiple parameter variations
   timeout_seconds: 600  # 10 min timeout for complex queries
