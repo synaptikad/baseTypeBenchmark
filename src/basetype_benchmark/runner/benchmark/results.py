@@ -120,6 +120,7 @@ class ParadigmResults:
     paradigm: str
     levels: list[LevelResult] = field(default_factory=list)
     baseline_peak_mb: float = 0.0
+    _ram_plateau_mb: int | None = None  # Set by gradient detector
 
     @property
     def ram_viable_mb(self) -> int | None:
@@ -130,6 +131,18 @@ class ParadigmResults:
         return min(l.limit_mb for l in successful)
 
     @property
+    def ram_plateau_mb(self) -> int | None:
+        """RAM level where performance plateaus (no more improvement).
+
+        Set by gradient executor when plateau is detected.
+        """
+        return self._ram_plateau_mb
+
+    @ram_plateau_mb.setter
+    def ram_plateau_mb(self, value: int | None) -> None:
+        self._ram_plateau_mb = value
+
+    @property
     def ram_baseline_mb(self) -> float:
         """Baseline RAM usage."""
         return self.baseline_peak_mb
@@ -138,6 +151,7 @@ class ParadigmResults:
         return {
             "paradigm": self.paradigm,
             "ram_viable_mb": self.ram_viable_mb,
+            "ram_plateau_mb": self.ram_plateau_mb,
             "ram_baseline_mb": round(self.baseline_peak_mb, 1),
             "levels": [l.to_dict() for l in self.levels],
         }
@@ -178,6 +192,10 @@ class BenchmarkResults:
         return {
             "ram_viable": {
                 p: r.ram_viable_mb
+                for p, r in self.results.items()
+            },
+            "ram_plateau": {
+                p: r.ram_plateau_mb
                 for p, r in self.results.items()
             },
             "ram_baseline": {
@@ -235,6 +253,7 @@ class BenchmarkResults:
                 paradigm=paradigm,
                 baseline_peak_mb=pdata.get("ram_baseline_mb", 0),
             )
+            pr.ram_plateau_mb = pdata.get("ram_plateau_mb")
 
             for ldata in pdata.get("levels", []):
                 level = LevelResult(

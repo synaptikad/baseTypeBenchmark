@@ -547,6 +547,21 @@ class CrossParadigmValidator:
         comparison.hash_cmp = cmp_result.row_hash
         comparison.hash_match = (ref_result.row_hash == cmp_result.row_hash)
 
+        # Run semantic validation FIRST (always, if configured)
+        # This ensures we get semantic status even for hash-matched or degraded queries
+        if self.semantic_validator:
+            from .semantic_validator import SemanticStatus
+
+            semantic_result = self.semantic_validator.validate(
+                query_id,
+                ref_result, self.reference,
+                cmp_result, cmp_paradigm,
+                parameters or {}
+            )
+
+            comparison.semantic_status = semantic_result.status.value
+            comparison.semantic_details = semantic_result.to_dict()
+
         # Check for known DEGRADED status
         degraded = self.rules.get("degraded_queries", {})
         if query_id in degraded.get(cmp_paradigm, {}):
@@ -577,6 +592,18 @@ class CrossParadigmValidator:
             else:
                 comparison.status = ValidationStatus.MISMATCH
                 comparison.reason = f"{len(diffs)} row differences found"
+
+                # Check if semantically equivalent despite row differences
+                if self.semantic_validator and comparison.semantic_status:
+                    from .semantic_validator import SemanticStatus
+                    if comparison.semantic_status == SemanticStatus.EQUIVALENT.value:
+                        comparison.status = ValidationStatus.EQUIVALENT
+                        semantic_reason = comparison.semantic_details.get("reason", "")
+                        comparison.reason = f"Semantically equivalent: {semantic_reason}"
+                    elif comparison.semantic_status == SemanticStatus.DEGRADED.value:
+                        comparison.status = ValidationStatus.DEGRADED
+                        semantic_reason = comparison.semantic_details.get("reason", "")
+                        comparison.reason = f"Semantically degraded: {semantic_reason}"
         else:
             # No sample rows, fall back to row count
             if comparison.row_count_match:
@@ -585,29 +612,6 @@ class CrossParadigmValidator:
             else:
                 comparison.status = ValidationStatus.MISMATCH
                 comparison.reason = f"Row count mismatch: {comparison.row_count_ref} vs {comparison.row_count_cmp}"
-
-        # Semantic validation (compares INFORMATION, not rows)
-        if self.semantic_validator:
-            from .semantic_validator import SemanticStatus
-
-            semantic_result = self.semantic_validator.validate(
-                query_id,
-                ref_result, self.reference,
-                cmp_result, cmp_paradigm,
-                parameters or {}
-            )
-
-            comparison.semantic_status = semantic_result.status.value
-            comparison.semantic_details = semantic_result.to_dict()
-
-            # Override syntactic MISMATCH if semantically EQUIVALENT
-            if comparison.status == ValidationStatus.MISMATCH:
-                if semantic_result.status == SemanticStatus.EQUIVALENT:
-                    comparison.status = ValidationStatus.EQUIVALENT
-                    comparison.reason = f"Semantically equivalent: {semantic_result.reason}"
-                elif semantic_result.status == SemanticStatus.DEGRADED:
-                    comparison.status = ValidationStatus.DEGRADED
-                    comparison.reason = f"Semantically degraded: {semantic_result.reason}"
 
         return comparison
 
