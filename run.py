@@ -263,6 +263,10 @@ def delete_dataset():
 # 2. BENCHMARK
 # =============================================================================
 
+# RAM levels available for selection
+RAM_LEVELS = [128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2, 1, 0.5]
+
+
 def menu_benchmark():
     while True:
         header("Benchmark")
@@ -277,11 +281,7 @@ def menu_benchmark():
         if not datasets:
             console.print("[yellow]No datasets available[/yellow]\n")
 
-        console.print("[cyan]1[/cyan]. Quick test      [dim]P1+M1, 3 queries, ~5min[/dim]")
-        console.print("[cyan]2[/cyan]. Standard        [dim]All paradigms, full suite[/dim]")
-        console.print("[cyan]3[/cyan]. RAM gradient    [dim]Fine-grained memory test[/dim]")
-        console.print("[cyan]4[/cyan]. Custom")
-        console.print("[cyan]5[/cyan]. Workload test   [dim]Stress testing with query sequences[/dim]")
+        console.print("[cyan]1[/cyan]. Run benchmark   [dim]Simple or Scenario, Single RAM or Gradient[/dim]")
         console.print()
         console.print("[cyan]d[/cyan]. Debug query     [dim]Run single query[/dim]")
         console.print("[cyan]v[/cyan]. Validate        [dim]Check query matrix[/dim]")
@@ -289,12 +289,12 @@ def menu_benchmark():
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
-        choice = Prompt.ask("", choices=["1", "2", "3", "4", "5", "d", "v", "b"], default="1", show_choices=False)
+        choice = Prompt.ask("", choices=["1", "d", "v", "b"], default="1", show_choices=False)
 
         if choice == "b":
             return
 
-        if choice in ["1", "2", "3", "4"]:
+        if choice == "1":
             if not docker_ok:
                 console.print("\n[red]Start Docker first.[/red]")
                 wait()
@@ -303,17 +303,7 @@ def menu_benchmark():
                 console.print("\n[yellow]Generate a dataset first (Dataset > Generate).[/yellow]")
                 wait()
                 continue
-            run_benchmark(choice, datasets)
-        elif choice == "5":
-            if not docker_ok:
-                console.print("\n[red]Start Docker first.[/red]")
-                wait()
-                continue
-            if not datasets:
-                console.print("\n[yellow]Generate a dataset first (Dataset > Generate).[/yellow]")
-                wait()
-                continue
-            menu_workload(datasets)
+            run_benchmark_wizard(datasets)
         elif choice == "d":
             debug_query()
         elif choice == "v":
@@ -321,106 +311,143 @@ def menu_benchmark():
             wait()
 
 
-def run_benchmark(mode: str, datasets: list[Path]):
+def run_benchmark_wizard(datasets: list[Path]):
+    """Unified benchmark wizard: Dataset → Type → Mode → Paradigms → RAM."""
     header("Run Benchmark")
 
-    # Select dataset
-    console.print("[bold]Dataset:[/bold]")
+    # 1. Select dataset
+    console.print("[bold]1. Dataset[/bold]")
     idx = select_from_list(datasets)
     if idx is None:
         return
     source = datasets[idx]
 
+    # 2. Select type
+    console.print("\n[bold]2. Type[/bold]")
+    console.print("  [cyan]1[/cyan]. Simple    [dim]Isolated queries, reset between each[/dim]")
+    console.print("  [cyan]2[/cyan]. Scenario  [dim]Query sequences, realistic load[/dim]")
+    console.print()
+    bench_type = Prompt.ask("Select", choices=["1", "2"], default="1")
+
+    # 3. Select mode
+    console.print("\n[bold]3. Mode[/bold]")
+    console.print("  [cyan]1[/cyan]. Single RAM   [dim]Fixed memory limit[/dim]")
+    console.print("  [cyan]2[/cyan]. Gradient     [dim]Sweep RAM levels, find plateau[/dim]")
+    console.print()
+    bench_mode = Prompt.ask("Select", choices=["1", "2"], default="2")
+
+    # 4. Select paradigms
+    console.print("\n[bold]4. Paradigms[/bold]: P1, P2, M1, M2, O2 (or ALL)")
+    paradigms = Prompt.ask("Select", default="ALL")
+    if paradigms.upper() == "ALL":
+        paradigms = "P1,P2,M1,M2,O2"
+
+    # 5. Select RAM
+    if bench_mode == "1":
+        # Single RAM
+        console.print("\n[bold]5. RAM (GB)[/bold]")
+        console.print(f"[dim]Available: {', '.join(str(l) for l in RAM_LEVELS)}[/dim]")
+        ram = Prompt.ask("Select", default="64")
+    else:
+        # Gradient
+        console.print("\n[bold]5. RAM Range[/bold]")
+        console.print(f"[dim]Available: {', '.join(str(l) for l in RAM_LEVELS)} GB[/dim]")
+        ram_max = Prompt.ask("Max RAM (GB)", default="128")
+        ram_min = Prompt.ask("Min RAM (GB)", default="0.5")
+
+        try:
+            max_val = float(ram_max)
+            min_val = float(ram_min)
+            # Ascending order for gradient (low → high, stop at plateau)
+            ram_levels = sorted([l for l in RAM_LEVELS if min_val <= l <= max_val])
+            ram = ",".join(str(int(l) if l >= 1 else l) for l in ram_levels)
+        except ValueError:
+            ram = "0.5,1,2,4,8,16,32,64"
+
+    # 6. For Scenario type, select workload
+    workload_name = None
+    if bench_type == "2":
+        console.print("\n[bold]6. Workload[/bold]")
+        workloads = [
+            ("dashboard_refresh", "Dashboard Refresh", "Read-heavy"),
+            ("iot_ingestion", "IoT Ingestion", "Write-heavy"),
+            ("mixed_middleware", "Mixed Middleware", "50/50 R/W"),
+            ("bos_twin", "BOS Twin", "Digital twin"),
+            ("graph_stress", "Graph Stress", "Graph-intensive"),
+            ("timeseries_stress", "Timeseries Stress", "TS aggregations"),
+        ]
+        for i, (name, label, desc) in enumerate(workloads, 1):
+            console.print(f"  [cyan]{i}[/cyan]. {label:<20} [dim]{desc}[/dim]")
+        console.print()
+        wl_idx = IntPrompt.ask("Select", default=4)
+        if 1 <= wl_idx <= len(workloads):
+            workload_name = workloads[wl_idx - 1][0]
+        else:
+            workload_name = "bos_twin"
+
+    # Summary
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]Configuration[/bold]\n\n"
+        f"Dataset:   {source.name}\n"
+        f"Type:      {'Simple' if bench_type == '1' else 'Scenario'}"
+        + (f" ({workload_name})" if workload_name else "") + "\n"
+        f"Mode:      {'Single RAM' if bench_mode == '1' else 'Gradient'}\n"
+        f"Paradigms: {paradigms}\n"
+        f"RAM:       {ram} GB",
+        border_style="blue"
+    ))
+
+    if not Confirm.ask("\nStart?", default=True):
+        return
+
+    # Execute
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    output = None  # Track output file for post-benchmark validation
-    paradigms_used = ""  # Track paradigms for validation check
-
-    # Use temporary directory for exports (on-demand, cleaned after use)
     import tempfile
     with tempfile.TemporaryDirectory(prefix="btb_export_") as tmp_export:
         tmp_export_path = Path(tmp_export)
-        console.print(f"[dim]Temporary export dir: {tmp_export_path}[/dim]\n")
+        console.print(f"\n[dim]Temporary export dir: {tmp_export_path}[/dim]")
 
-        if mode == "1":
-            # Quick
-            output = RESULTS_DIR / f"quick_{timestamp}.json"
-            paradigms_used = "P1,M1"
-            console.print(f"\n[yellow]Quick test: P1+M1, 3 runs, 32-16-8 GB[/yellow]")
-            if Confirm.ask("Start?", default=True):
-                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", paradigms_used, "--ram", "32,16,8", "--runs", "3", "--cleanup")
+        if bench_type == "1":
+            # Simple benchmark
+            type_label = "simple"
+            output = RESULTS_DIR / f"{type_label}_{bench_mode == '2' and 'gradient' or 'single'}_{timestamp}.json"
 
-        elif mode == "2":
-            # Standard
-            output = RESULTS_DIR / f"standard_{timestamp}.json"
-            paradigms_used = "P1,P2,M1,M2,O2"
-            console.print(f"\n[yellow]Standard: All paradigms, 10 runs, 64-32-16-8 GB[/yellow]")
-            if Confirm.ask("Start?", default=True):
-                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", paradigms_used, "--ram", "64,32,16,8", "--runs", "10", "--cleanup")
+            btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
+                "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup")
+        else:
+            # Scenario benchmark
+            output = RESULTS_DIR / f"scenario_{workload_name}_{timestamp}.json"
 
-        elif mode == "3":
-            # RAM gradient
-            console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
-            paradigms = Prompt.ask("Select", default="M1")
-            if paradigms.upper() == "ALL":
-                paradigms = "P1,P2,M1,M2,O2"
-            paradigms_used = paradigms
+            if bench_mode == "1":
+                # Single RAM workload
+                btb("workload", workload_name, "-s", str(source), "-p", paradigms, "-o", str(output))
+            else:
+                # Gradient workload (new feature - run workload at each RAM level)
+                console.print("\n[yellow]Running workload gradient...[/yellow]")
+                ram_list = ram.split(",")
+                for ram_level in ram_list:
+                    console.print(f"\n[cyan]RAM: {ram_level} GB[/cyan]")
+                    level_output = RESULTS_DIR / f"scenario_{workload_name}_{ram_level}gb_{timestamp}.json"
+                    # TODO: Need to implement RAM limit for workload
+                    # For now, just run workload (RAM limit not yet applied to workload mode)
+                    btb("workload", workload_name, "-s", str(source), "-p", paradigms,
+                        "-o", str(level_output), "-d", "60")  # 60s per level
+                output = RESULTS_DIR / f"scenario_{workload_name}_gradient_{timestamp}"
 
-            # RAM range selection
-            console.print("\n[bold]RAM Range:[/bold]")
-            console.print("[dim]Available: 128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2, 1, 0.5 GB[/dim]")
-            ram_max = Prompt.ask("Max RAM (GB)", default="128")
-            ram_min = Prompt.ask("Min RAM (GB)", default="0.5")
+    console.print("\n[dim]Export directory cleaned.[/dim]")
 
-            # Generate RAM levels between max and min
-            all_levels = [128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2, 1, 0.5]
-            try:
-                max_val = float(ram_max)
-                min_val = float(ram_min)
-                ram_levels = [l for l in all_levels if min_val <= l <= max_val]
-                ram = ",".join(str(int(l) if l >= 1 else l) for l in ram_levels)
-            except ValueError:
-                ram = "64,48,32,24,16,12,8,4"
-
-            output = RESULTS_DIR / f"gradient_{paradigms.replace(',', '-')}_{timestamp}.json"
-            console.print(f"\n[yellow]RAM gradient: {paradigms}[/yellow]")
-            console.print(f"[yellow]Levels: {ram}[/yellow]")
-            if Confirm.ask("Start?", default=True):
-                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup")
-
-        elif mode == "4":
-            # Custom
-            console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
-            paradigms = Prompt.ask("Select", default="ALL")
-            if paradigms.upper() == "ALL":
-                paradigms = "P1,P2,M1,M2,O2"
-            paradigms_used = paradigms
-            console.print("[bold]RAM levels (GB):[/bold] 128, 64, 32, 16, 8, 4, 2, 1, 0.5")
-            ram = Prompt.ask("Select", default="128,64,32,16,8,4,2,1,0.5")
-            runs = IntPrompt.ask("Runs", default=5)
-
-            output = RESULTS_DIR / f"custom_{timestamp}.json"
-            console.print(f"\n[yellow]Custom: {paradigms}, RAM={ram}, runs={runs}[/yellow]")
-            if Confirm.ask("Start?", default=True):
-                btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                    "-p", paradigms, "--ram", ram, "--runs", str(runs), "--cleanup")
-
-    # Temporary directory auto-cleaned on exit
-    console.print("[dim]Export directory cleaned.[/dim]")
-
-    # Post-benchmark validation (if multi-paradigm and output exists)
-    if output and output.exists():
-        paradigm_count = len(paradigms_used.split(","))
+    # Post-benchmark
+    if bench_type == "1" and output and output.exists():
+        paradigm_count = len(paradigms.split(","))
         if paradigm_count >= 2:
             console.print()
             console.print(Panel.fit(
                 "[bold green]Benchmark Complete![/bold green]\n\n"
                 f"Results: {output.name}\n"
-                f"Paradigms: {paradigms_used}",
+                f"Paradigms: {paradigms}",
                 border_style="green"
             ))
             console.print()
@@ -429,7 +456,8 @@ def run_benchmark(mode: str, datasets: list[Path]):
                 run_validation(output)
         else:
             console.print(f"\n[green]Benchmark complete: {output.name}[/green]")
-            console.print("[dim]Single paradigm - validation not applicable[/dim]")
+    else:
+        console.print(f"\n[green]Workload complete![/green]")
 
     wait()
 
@@ -443,121 +471,6 @@ def debug_query():
     btb("run-query", query, "-p", paradigm)
     wait()
 
-
-def menu_workload(datasets: list[Path]):
-    """Workload testing submenu."""
-    WORKLOADS = [
-        ("dashboard_refresh", "Dashboard Refresh", "Read-heavy, ~5min"),
-        ("iot_ingestion", "IoT Ingestion", "Write-heavy, ~1min"),
-        ("mixed_middleware", "Mixed Middleware", "50/50 R/W, ~3min"),
-        ("bos_twin", "BOS Twin", "Digital twin simulation, ~2min"),
-        ("graph_stress", "Graph Stress", "Graph-intensive, ~3min"),
-        ("timeseries_stress", "Timeseries Stress", "TS aggregations, ~3min"),
-    ]
-
-    while True:
-        header("Workload Testing")
-
-        console.print("[bold]Predefined Workloads:[/bold]\n")
-        for i, (name, label, desc) in enumerate(WORKLOADS, 1):
-            console.print(f"[cyan]{i}[/cyan]. {label:<20} [dim]{desc}[/dim]")
-
-        console.print()
-        console.print(f"[cyan]{len(WORKLOADS) + 1}[/cyan]. Custom workload")
-        console.print()
-        console.print("[cyan]b[/cyan]. Back")
-        console.print()
-
-        choices = [str(i) for i in range(1, len(WORKLOADS) + 2)] + ["b"]
-        choice = Prompt.ask("", choices=choices, default="1", show_choices=False)
-
-        if choice == "b":
-            return
-
-        idx = int(choice) - 1
-        if idx < len(WORKLOADS):
-            workload_name = WORKLOADS[idx][0]
-            run_workload(workload_name, datasets)
-        else:
-            run_custom_workload(datasets)
-
-
-def run_workload(workload_name: str, datasets: list[Path]):
-    """Run a predefined workload."""
-    header(f"Workload: {workload_name}")
-
-    # Select dataset
-    console.print("[bold]Dataset:[/bold]")
-    idx = select_from_list(datasets)
-    if idx is None:
-        return
-    source = datasets[idx]
-
-    # Select paradigms
-    console.print("\n[bold]Paradigms:[/bold] P1, P2, M1, M2, O2 (or ALL)")
-    paradigms = Prompt.ask("Select", default="P1,M1")
-    if paradigms.upper() == "ALL":
-        paradigms = "P1,P2,M1,M2,O2"
-
-    # Duration override
-    duration_str = Prompt.ask("\nDuration override (seconds, empty=default)", default="")
-    duration_args = ["--duration", duration_str] if duration_str.strip() else []
-
-    # Output file
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output = RESULTS_DIR / f"workload_{workload_name}_{timestamp}.json"
-
-    console.print(f"\n[yellow]Running workload: {workload_name}[/yellow]")
-    console.print(f"  Paradigms: {paradigms}")
-    console.print(f"  Dataset: {source.name}")
-
-    if not Confirm.ask("\nStart?", default=True):
-        return
-
-    btb("workload", workload_name, "-s", str(source), "-p", paradigms,
-        "-o", str(output), *duration_args)
-
-    if output.exists():
-        console.print(f"\n[green]Results saved: {output.name}[/green]")
-
-    wait()
-
-
-def run_custom_workload(datasets: list[Path]):
-    """Run a custom workload from YAML file."""
-    header("Custom Workload")
-
-    workload_path = Prompt.ask("Path to workload YAML", default="config/workloads/custom.yaml")
-
-    if not Path(workload_path).exists():
-        console.print(f"[red]File not found: {workload_path}[/red]")
-        wait()
-        return
-
-    # Select dataset
-    console.print("\n[bold]Dataset:[/bold]")
-    idx = select_from_list(datasets)
-    if idx is None:
-        return
-    source = datasets[idx]
-
-    # Select paradigms
-    console.print("\n[bold]Paradigms:[/bold]")
-    paradigms = Prompt.ask("Select", default="P1,M1")
-
-    # Output
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output = RESULTS_DIR / f"workload_custom_{timestamp}.json"
-
-    if not Confirm.ask("\nStart?", default=True):
-        return
-
-    btb("workload", workload_path, "-s", str(source), "-p", paradigms, "-o", str(output))
-
-    if output.exists():
-        console.print(f"\n[green]Results saved: {output.name}[/green]")
-
-    wait()
 
 
 def run_validation(results_path: Path, generate_reports: bool = True):
