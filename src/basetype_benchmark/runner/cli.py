@@ -1731,18 +1731,20 @@ def _display_cross_matrix(matrix, verbose: bool = False) -> None:
         for pb in matrix.paradigms:
             if pa == pb:
                 row.append("[dim]—[/dim]")
-            elif pb in matrix.matrix.get(pa, {}):
-                pair = matrix.matrix[pa][pb]
-                rate = pair.equivalence_rate
-                if rate >= 90:
-                    color = "green"
-                elif rate >= 70:
-                    color = "yellow"
-                else:
-                    color = "red"
-                row.append(f"[{color}]{rate:.0f}%[/{color}]")
             else:
-                row.append("[dim]—[/dim]")
+                # Try both directions since matrix stores pairs in both orders
+                pair = matrix.matrix.get(pa, {}).get(pb) or matrix.matrix.get(pb, {}).get(pa)
+                if pair:
+                    rate = pair.equivalence_rate
+                    if rate >= 90:
+                        color = "green"
+                    elif rate >= 70:
+                        color = "yellow"
+                    else:
+                        color = "red"
+                    row.append(f"[{color}]{rate:.0f}%[/{color}]")
+                else:
+                    row.append("[dim]—[/dim]")
         matrix_table.add_row(*row)
 
     console.print(matrix_table)
@@ -1850,18 +1852,20 @@ def _generate_matrix_html_report(matrix, output_path: Path) -> None:
         for pb in matrix.paradigms:
             if pa == pb:
                 html_content += '                <td class="diagonal">—</td>\n'
-            elif pb in matrix.matrix.get(pa, {}):
-                pair = matrix.matrix[pa][pb]
-                rate = pair.equivalence_rate
-                if rate >= 90:
-                    css_class = "rate-high"
-                elif rate >= 70:
-                    css_class = "rate-medium"
-                else:
-                    css_class = "rate-low"
-                html_content += f'                <td class="{css_class}">{rate:.0f}%</td>\n'
             else:
-                html_content += '                <td class="diagonal">—</td>\n'
+                # Try both directions
+                pair = matrix.matrix.get(pa, {}).get(pb) or matrix.matrix.get(pb, {}).get(pa)
+                if pair:
+                    rate = pair.equivalence_rate
+                    if rate >= 90:
+                        css_class = "rate-high"
+                    elif rate >= 70:
+                        css_class = "rate-medium"
+                    else:
+                        css_class = "rate-low"
+                    html_content += f'                <td class="{css_class}">{rate:.0f}%</td>\n'
+                else:
+                    html_content += '                <td class="diagonal">—</td>\n'
         html_content += "            </tr>\n"
 
     html_content += """        </table>
