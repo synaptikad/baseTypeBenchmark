@@ -1573,12 +1573,12 @@ def validate_cmd(
                 _generate_matrix_html_report(matrix, html)
                 console.print(f"[green]HTML matrix report saved to {html}[/green]")
 
-            # Check for mismatches
+            # Check for mismatches (matrix is now asymmetric, count unique pairs)
             total_mismatch = sum(
-                pair.mismatch
-                for pa_map in matrix.matrix.values()
-                for pair in pa_map.values()
-            ) // 2  # Divide by 2 because matrix is mirrored
+                dc.mismatch
+                for ref_map in matrix.matrix.values()
+                for dc in ref_map.values()
+            ) // 2  # Divide by 2 because A→B and B→A count same mismatches
 
             if fail_on_mismatch and total_mismatch > 0:
                 console.print(f"\n[red]Validation failed: {total_mismatch} mismatches found[/red]")
@@ -1711,99 +1711,114 @@ def validate_cmd(
 
 
 def _display_cross_matrix(matrix, verbose: bool = False) -> None:
-    """Display cross-validation matrix in terminal."""
+    """Display asymmetric cross-validation matrix in terminal.
+
+    Row = Reference paradigm (ground truth)
+    Column = Compared paradigm
+    Cell = What the compared paradigm lacks vs reference
+    """
     from .core.cross_validator import ValidationStatus
 
     console.print("\n")
 
-    # Create equivalence rate matrix table
+    # Explanation
+    console.print("[dim]Matrix reads: Row→Column = what Column lacks when Row is reference[/dim]\n")
+
+    # Create coverage rate matrix table (asymmetric)
     matrix_table = Table(
-        title="Cross-Validation Matrix (Equivalence Rate %)",
+        title="Cross-Validation Matrix (Row=Ref → Column=Cmp)",
         show_header=True,
         header_style="bold"
     )
-    matrix_table.add_column("", style="bold cyan")
+    matrix_table.add_column("Ref↓ Cmp→", style="bold cyan")
     for paradigm in matrix.paradigms:
         matrix_table.add_column(paradigm, justify="center")
 
-    for pa in matrix.paradigms:
-        row = [pa]
-        for pb in matrix.paradigms:
-            if pa == pb:
+    for ref in matrix.paradigms:
+        row = [ref]
+        for cmp in matrix.paradigms:
+            if ref == cmp:
                 row.append("[dim]—[/dim]")
             else:
-                # Try both directions since matrix stores pairs in both orders
-                pair = matrix.matrix.get(pa, {}).get(pb) or matrix.matrix.get(pb, {}).get(pa)
-                if pair:
-                    rate = pair.equivalence_rate
-                    if rate >= 90:
-                        color = "green"
-                    elif rate >= 70:
-                        color = "yellow"
+                dc = matrix.matrix.get(ref, {}).get(cmp)
+                if dc:
+                    # Show: equivalent / (total - impossible_in_ref)
+                    answerable = dc.total - dc.impossible_in_ref
+                    if answerable > 0:
+                        rate = dc.coverage_rate
+                        lacks = dc.impossible_in_cmp + dc.degraded
+                        if rate >= 95:
+                            color = "green"
+                        elif rate >= 80:
+                            color = "yellow"
+                        else:
+                            color = "red"
+                        # Show rate and what's missing
+                        if lacks > 0:
+                            row.append(f"[{color}]{dc.equivalent}[/{color}][dim]/{answerable}[/dim] [yellow]-{lacks}[/yellow]")
+                        else:
+                            row.append(f"[{color}]{dc.equivalent}/{answerable}[/{color}]")
                     else:
-                        color = "red"
-                    row.append(f"[{color}]{rate:.0f}%[/{color}]")
+                        row.append("[dim]n/a[/dim]")
                 else:
                     row.append("[dim]—[/dim]")
         matrix_table.add_row(*row)
 
     console.print(matrix_table)
+    console.print("[dim]Format: equivalent/answerable [yellow]-lacks[/yellow] (impossible_in_cmp + degraded)[/dim]")
 
-    # Show detailed stats table
+    # Show detailed directional stats table
     console.print("\n")
-    stats_table = Table(title="Pair Statistics", show_header=True)
-    stats_table.add_column("Pair", style="cyan")
-    stats_table.add_column("Equivalent", justify="right", style="green")
-    stats_table.add_column("Degraded", justify="right", style="yellow")
-    stats_table.add_column("Skip", justify="right", style="dim")
-    stats_table.add_column("Mismatch", justify="right", style="red")
-    stats_table.add_column("Rate", justify="right")
+    stats_table = Table(title="Directional Comparison (Ref → Cmp)", show_header=True)
+    stats_table.add_column("Direction", style="cyan")
+    stats_table.add_column("≡", justify="right", style="green", header_style="green")
+    stats_table.add_column("Deg", justify="right", style="yellow", header_style="yellow")
+    stats_table.add_column("Cmp✗", justify="right", style="red", header_style="red")
+    stats_table.add_column("Ref✗", justify="right", style="dim", header_style="dim")
+    stats_table.add_column("Mis", justify="right", style="red bold", header_style="red bold")
+    stats_table.add_column("Cover%", justify="right")
 
-    seen = set()
-    for pa in matrix.paradigms:
-        for pb, pair in matrix.matrix.get(pa, {}).items():
-            pair_key = tuple(sorted([pa, pb]))
-            if pair_key in seen:
-                continue
-            seen.add(pair_key)
-
-            rate = pair.equivalence_rate
-            if rate >= 90:
-                rate_str = f"[green]{rate:.1f}%[/green]"
-            elif rate >= 70:
-                rate_str = f"[yellow]{rate:.1f}%[/yellow]"
+    for ref in matrix.paradigms:
+        for cmp, dc in matrix.matrix.get(ref, {}).items():
+            rate = dc.coverage_rate
+            if rate >= 95:
+                rate_str = f"[green]{rate:.0f}%[/green]"
+            elif rate >= 80:
+                rate_str = f"[yellow]{rate:.0f}%[/yellow]"
             else:
-                rate_str = f"[red]{rate:.1f}%[/red]"
+                rate_str = f"[red]{rate:.0f}%[/red]"
 
             stats_table.add_row(
-                f"{pa} ↔ {pb}",
-                str(pair.equivalent),
-                str(pair.degraded),
-                str(pair.skip),
-                str(pair.mismatch),
+                f"{ref} → {cmp}",
+                str(dc.equivalent),
+                str(dc.degraded),
+                str(dc.impossible_in_cmp),
+                str(dc.impossible_in_ref),
+                str(dc.mismatch),
                 rate_str,
             )
 
     console.print(stats_table)
+    console.print("[dim]≡=Equivalent  Deg=Degraded  Cmp✗=Impossible in Compared  Ref✗=Impossible in Ref  Mis=Mismatch[/dim]")
 
-    # Verbose: show mismatches per pair
+    # Verbose: show mismatches per direction
     if verbose:
         has_mismatches = False
-        for qid, pa_map in matrix.query_details.items():
-            for pa, pb_map in pa_map.items():
-                for pb, cmp in pb_map.items():
-                    if cmp.status == ValidationStatus.MISMATCH:
+        for qid, ref_map in matrix.query_details.items():
+            for ref, cmp_map in ref_map.items():
+                for cmp, comparison in cmp_map.items():
+                    if comparison.status == ValidationStatus.MISMATCH:
                         if not has_mismatches:
                             console.print("\n[bold red]Mismatches:[/bold red]\n")
                             has_mismatches = True
-                        console.print(f"  [bold]{qid}[/bold] ({pa} vs {pb}):")
-                        console.print(f"    Row count: {cmp.row_count_ref} vs {cmp.row_count_cmp}")
-                        if cmp.reason:
-                            console.print(f"    Reason: {cmp.reason}")
+                        console.print(f"  [bold]{qid}[/bold] ({ref} → {cmp}):")
+                        console.print(f"    Row count: {comparison.row_count_ref} vs {comparison.row_count_cmp}")
+                        if comparison.reason:
+                            console.print(f"    Reason: {comparison.reason}")
 
 
 def _generate_matrix_html_report(matrix, output_path: Path) -> None:
-    """Generate HTML report for cross-validation matrix."""
+    """Generate HTML report for asymmetric cross-validation matrix."""
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1811,20 +1826,18 @@ def _generate_matrix_html_report(matrix, output_path: Path) -> None:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cross-Validation Matrix Report</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1400px; margin: 0 auto; padding: 20px; }}
         h1, h2 {{ color: #1a1a2e; }}
         .matrix-container {{ overflow-x: auto; }}
         table {{ border-collapse: collapse; margin: 20px 0; }}
-        th, td {{ padding: 12px 15px; text-align: center; border: 1px solid #dee2e6; }}
+        th, td {{ padding: 10px 12px; text-align: center; border: 1px solid #dee2e6; }}
         th {{ background: #343a40; color: white; }}
-        .rate-high {{ background: #d4edda; color: #155724; font-weight: bold; }}
-        .rate-medium {{ background: #fff3cd; color: #856404; font-weight: bold; }}
-        .rate-low {{ background: #f8d7da; color: #721c24; font-weight: bold; }}
+        .rate-high {{ background: #d4edda; color: #155724; }}
+        .rate-medium {{ background: #fff3cd; color: #856404; }}
+        .rate-low {{ background: #f8d7da; color: #721c24; }}
         .diagonal {{ background: #e9ecef; color: #6c757d; }}
-        .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
-        .stat-card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }}
-        .stat-value {{ font-size: 2em; font-weight: bold; color: #1a1a2e; }}
-        .stat-label {{ color: #6c757d; }}
+        .lacks {{ color: #dc3545; font-size: 0.85em; }}
+        .note {{ background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; font-size: 0.9em; color: #6c757d; }}
         .footer {{ margin-top: 30px; text-align: center; color: #6c757d; font-size: 0.9em; }}
     </style>
 </head>
@@ -1834,11 +1847,16 @@ def _generate_matrix_html_report(matrix, output_path: Path) -> None:
     <p><strong>Paradigms:</strong> {', '.join(matrix.paradigms)}</p>
     <p><strong>Timestamp:</strong> {matrix.timestamp.isoformat()}</p>
 
-    <h2>Equivalence Rate Matrix</h2>
+    <div class="note">
+        <strong>How to read:</strong> Row = Reference (ground truth), Column = Compared paradigm.<br>
+        Cell shows: <code>equivalent/answerable</code> <span class="lacks">-lacks</span> (queries Column cannot answer)
+    </div>
+
+    <h2>Coverage Matrix (Row → Column)</h2>
     <div class="matrix-container">
         <table>
             <tr>
-                <th></th>
+                <th>Ref↓ Cmp→</th>
 """
 
     # Header row
@@ -1846,24 +1864,26 @@ def _generate_matrix_html_report(matrix, output_path: Path) -> None:
         html_content += f"                <th>{p}</th>\n"
     html_content += "            </tr>\n"
 
-    # Data rows
-    for pa in matrix.paradigms:
-        html_content += f"            <tr>\n                <th>{pa}</th>\n"
-        for pb in matrix.paradigms:
-            if pa == pb:
+    # Data rows (asymmetric)
+    for ref in matrix.paradigms:
+        html_content += f"            <tr>\n                <th>{ref}</th>\n"
+        for cmp in matrix.paradigms:
+            if ref == cmp:
                 html_content += '                <td class="diagonal">—</td>\n'
             else:
-                # Try both directions
-                pair = matrix.matrix.get(pa, {}).get(pb) or matrix.matrix.get(pb, {}).get(pa)
-                if pair:
-                    rate = pair.equivalence_rate
-                    if rate >= 90:
+                dc = matrix.matrix.get(ref, {}).get(cmp)
+                if dc:
+                    answerable = dc.total - dc.impossible_in_ref
+                    lacks = dc.impossible_in_cmp + dc.degraded
+                    rate = dc.coverage_rate
+                    if rate >= 95:
                         css_class = "rate-high"
-                    elif rate >= 70:
+                    elif rate >= 80:
                         css_class = "rate-medium"
                     else:
                         css_class = "rate-low"
-                    html_content += f'                <td class="{css_class}">{rate:.0f}%</td>\n'
+                    lacks_html = f' <span class="lacks">-{lacks}</span>' if lacks > 0 else ''
+                    html_content += f'                <td class="{css_class}">{dc.equivalent}/{answerable}{lacks_html}</td>\n'
                 else:
                     html_content += '                <td class="diagonal">—</td>\n'
         html_content += "            </tr>\n"
@@ -1871,41 +1891,37 @@ def _generate_matrix_html_report(matrix, output_path: Path) -> None:
     html_content += """        </table>
     </div>
 
-    <h2>Pair Statistics</h2>
+    <h2>Directional Statistics (Ref → Cmp)</h2>
     <table>
         <tr>
-            <th>Pair</th>
+            <th>Direction</th>
             <th>Equivalent</th>
             <th>Degraded</th>
-            <th>Skip</th>
+            <th>Cmp Impossible</th>
+            <th>Ref Impossible</th>
             <th>Mismatch</th>
-            <th>Equivalence Rate</th>
+            <th>Coverage</th>
         </tr>
 """
 
-    seen = set()
-    for pa in matrix.paradigms:
-        for pb, pair in matrix.matrix.get(pa, {}).items():
-            pair_key = tuple(sorted([pa, pb]))
-            if pair_key in seen:
-                continue
-            seen.add(pair_key)
-
-            rate = pair.equivalence_rate
-            if rate >= 90:
+    for ref in matrix.paradigms:
+        for cmp, dc in matrix.matrix.get(ref, {}).items():
+            rate = dc.coverage_rate
+            if rate >= 95:
                 css_class = "rate-high"
-            elif rate >= 70:
+            elif rate >= 80:
                 css_class = "rate-medium"
             else:
                 css_class = "rate-low"
 
             html_content += f"""        <tr>
-            <td><strong>{pa} ↔ {pb}</strong></td>
-            <td>{pair.equivalent}</td>
-            <td>{pair.degraded}</td>
-            <td>{pair.skip}</td>
-            <td>{pair.mismatch}</td>
-            <td class="{css_class}">{rate:.1f}%</td>
+            <td><strong>{ref} → {cmp}</strong></td>
+            <td>{dc.equivalent}</td>
+            <td>{dc.degraded}</td>
+            <td>{dc.impossible_in_cmp}</td>
+            <td>{dc.impossible_in_ref}</td>
+            <td>{dc.mismatch}</td>
+            <td class="{css_class}">{rate:.0f}%</td>
         </tr>
 """
 

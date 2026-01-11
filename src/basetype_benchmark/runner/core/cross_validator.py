@@ -188,54 +188,74 @@ class ValidationReport:
 
 
 @dataclass
-class PairComparison:
-    """Summary of comparison between two paradigms."""
-    paradigm_a: str
-    paradigm_b: str
-    equivalent: int = 0
-    mismatch: int = 0
-    degraded: int = 0
-    skip: int = 0
+class DirectionalComparison:
+    """Directional comparison: ref_paradigm -> cmp_paradigm.
+
+    Shows what cmp_paradigm lacks or differs when ref_paradigm is ground truth.
+    """
+    ref_paradigm: str              # Reference (ground truth)
+    cmp_paradigm: str              # Compared paradigm
+    equivalent: int = 0            # Queries with matching results
+    mismatch: int = 0              # Unexpected differences
+    degraded: int = 0              # Known limitations in cmp_paradigm
+    impossible_in_cmp: int = 0     # Queries cmp_paradigm cannot do
+    impossible_in_ref: int = 0     # Queries ref_paradigm cannot do (cmp can)
     total: int = 0
 
     @property
-    def equivalence_rate(self) -> float:
-        """Percentage of equivalent queries (excluding skip)."""
-        comparable = self.total - self.skip
+    def coverage_rate(self) -> float:
+        """Percentage of ref queries that cmp can answer (equivalent + degraded)."""
+        answerable_by_ref = self.total - self.impossible_in_ref
+        if answerable_by_ref == 0:
+            return 0.0
+        covered = self.equivalent + self.degraded
+        return (covered / answerable_by_ref) * 100
+
+    @property
+    def exact_match_rate(self) -> float:
+        """Percentage of exactly matching queries (excluding impossible)."""
+        comparable = self.total - self.impossible_in_ref - self.impossible_in_cmp
         if comparable == 0:
             return 0.0
         return (self.equivalent / comparable) * 100
 
     def to_dict(self) -> dict:
         return {
-            "paradigm_a": self.paradigm_a,
-            "paradigm_b": self.paradigm_b,
+            "ref_paradigm": self.ref_paradigm,
+            "cmp_paradigm": self.cmp_paradigm,
             "equivalent": self.equivalent,
             "mismatch": self.mismatch,
             "degraded": self.degraded,
-            "skip": self.skip,
+            "impossible_in_cmp": self.impossible_in_cmp,
+            "impossible_in_ref": self.impossible_in_ref,
             "total": self.total,
-            "equivalence_rate": round(self.equivalence_rate, 1),
+            "coverage_rate": round(self.coverage_rate, 1),
+            "exact_match_rate": round(self.exact_match_rate, 1),
         }
 
 
 @dataclass
 class CrossValidationMatrix:
-    """Complete cross-validation matrix for all paradigm pairs."""
+    """Complete cross-validation matrix for all paradigm pairs.
+
+    Matrix is ASYMMETRIC: matrix[A][B] shows what B lacks when A is reference.
+    This is different from matrix[B][A] which shows what A lacks when B is reference.
+    """
     validation_id: str
     benchmark_id: str
     paradigms: list[str]
     timestamp: datetime = field(default_factory=datetime.now)
 
-    # Matrix: paradigm_a -> paradigm_b -> PairComparison
-    matrix: dict[str, dict[str, PairComparison]] = field(default_factory=dict)
+    # Asymmetric matrix: ref_paradigm -> cmp_paradigm -> DirectionalComparison
+    # matrix[A][B] = "A as reference, what does B lack?"
+    matrix: dict[str, dict[str, DirectionalComparison]] = field(default_factory=dict)
 
-    # Per-query details: query_id -> paradigm_a -> paradigm_b -> ComparisonResult
+    # Per-query details: query_id -> ref_paradigm -> cmp_paradigm -> ComparisonResult
     query_details: dict[str, dict[str, dict[str, ComparisonResult]]] = field(default_factory=dict)
 
-    def get_pair(self, a: str, b: str) -> PairComparison | None:
-        """Get comparison for a specific pair."""
-        return self.matrix.get(a, {}).get(b)
+    def get_comparison(self, ref: str, cmp: str) -> DirectionalComparison | None:
+        """Get directional comparison (ref as ground truth)."""
+        return self.matrix.get(ref, {}).get(cmp)
 
     def to_dict(self) -> dict:
         return {
@@ -244,15 +264,15 @@ class CrossValidationMatrix:
             "paradigms": self.paradigms,
             "timestamp": self.timestamp.isoformat(),
             "matrix": {
-                pa: {pb: cmp.to_dict() for pb, cmp in pb_map.items()}
-                for pa, pb_map in self.matrix.items()
+                ref: {cmp: dc.to_dict() for cmp, dc in cmp_map.items()}
+                for ref, cmp_map in self.matrix.items()
             },
             "query_details": {
                 qid: {
-                    pa: {pb: cmp.to_dict() for pb, cmp in pb_map.items()}
-                    for pa, pb_map in pa_map.items()
+                    ref: {cmp: cr.to_dict() for cmp, cr in cmp_map.items()}
+                    for ref, cmp_map in ref_map.items()
                 }
-                for qid, pa_map in self.query_details.items()
+                for qid, ref_map in self.query_details.items()
             },
         }
 
@@ -280,16 +300,17 @@ class CrossParadigmValidator:
         self.rules = rules or EQUIVALENCE_RULES
 
     def validate_matrix(self, results: BenchmarkResults) -> CrossValidationMatrix:
-        """Validate all paradigm pairs (cross-validation matrix).
+        """Validate all paradigm pairs (asymmetric cross-validation matrix).
 
-        Compares every paradigm against every other paradigm.
-        Useful for identifying which paradigms agree with each other.
+        Compares every paradigm against every other paradigm in BOTH directions.
+        matrix[A][B] shows what B lacks when A is the reference.
+        matrix[B][A] shows what A lacks when B is the reference.
 
         Args:
             results: Complete benchmark results
 
         Returns:
-            CrossValidationMatrix with all pairwise comparisons
+            CrossValidationMatrix with directional comparisons
         """
         paradigms = list(results.results.keys())
 
@@ -307,55 +328,71 @@ class CrossParadigmValidator:
                     query_ids.update(level.queries.keys())
                     break
 
-        # Compare each pair of paradigms
-        for i, paradigm_a in enumerate(paradigms):
-            matrix.matrix[paradigm_a] = {}
-            for paradigm_b in paradigms[i + 1:]:  # Only upper triangle
-                pair = PairComparison(
-                    paradigm_a=paradigm_a,
-                    paradigm_b=paradigm_b,
+        # Get impossible queries per paradigm
+        impossible = self.rules.get("impossible_queries", {})
+        degraded_rules = self.rules.get("degraded_queries", {})
+
+        # Compare ALL pairs in BOTH directions (asymmetric matrix)
+        for ref_paradigm in paradigms:
+            matrix.matrix[ref_paradigm] = {}
+
+            for cmp_paradigm in paradigms:
+                if ref_paradigm == cmp_paradigm:
+                    continue
+
+                dc = DirectionalComparison(
+                    ref_paradigm=ref_paradigm,
+                    cmp_paradigm=cmp_paradigm,
                     total=len(query_ids),
                 )
 
                 for query_id in sorted(query_ids):
+                    # Check if query is impossible for either paradigm
+                    impossible_in_ref = query_id in impossible.get(ref_paradigm, {})
+                    impossible_in_cmp = query_id in impossible.get(cmp_paradigm, {})
+                    degraded_in_cmp = query_id in degraded_rules.get(cmp_paradigm, {})
+
+                    if impossible_in_ref:
+                        dc.impossible_in_ref += 1
+                        continue
+
+                    if impossible_in_cmp:
+                        dc.impossible_in_cmp += 1
+                        continue
+
                     # Get results for both paradigms
-                    result_a = self._get_query_result(
-                        results.results[paradigm_a], query_id
+                    result_ref = self._get_query_result(
+                        results.results[ref_paradigm], query_id
                     )
-                    result_b = self._get_query_result(
-                        results.results[paradigm_b], query_id
+                    result_cmp = self._get_query_result(
+                        results.results[cmp_paradigm], query_id
                     )
 
-                    # Compare using paradigm_a as reference
+                    # Compare using ref_paradigm as reference
                     old_ref = self.reference
-                    self.reference = paradigm_a
+                    self.reference = ref_paradigm
                     comparison = self._compare_query(
-                        query_id, result_a, result_b, paradigm_b
+                        query_id, result_ref, result_cmp, cmp_paradigm
                     )
                     self.reference = old_ref
 
                     # Store in query_details
                     if query_id not in matrix.query_details:
                         matrix.query_details[query_id] = {}
-                    if paradigm_a not in matrix.query_details[query_id]:
-                        matrix.query_details[query_id][paradigm_a] = {}
-                    matrix.query_details[query_id][paradigm_a][paradigm_b] = comparison
+                    if ref_paradigm not in matrix.query_details[query_id]:
+                        matrix.query_details[query_id][ref_paradigm] = {}
+                    matrix.query_details[query_id][ref_paradigm][cmp_paradigm] = comparison
 
-                    # Update pair counts
+                    # Update directional counts
                     if comparison.status == ValidationStatus.EQUIVALENT:
-                        pair.equivalent += 1
+                        dc.equivalent += 1
                     elif comparison.status == ValidationStatus.MISMATCH:
-                        pair.mismatch += 1
+                        dc.mismatch += 1
                     elif comparison.status == ValidationStatus.DEGRADED:
-                        pair.degraded += 1
-                    elif comparison.status == ValidationStatus.SKIP:
-                        pair.skip += 1
+                        dc.degraded += 1
+                    # SKIP is now split into impossible_in_ref/impossible_in_cmp above
 
-                matrix.matrix[paradigm_a][paradigm_b] = pair
-                # Mirror for easy lookup
-                if paradigm_b not in matrix.matrix:
-                    matrix.matrix[paradigm_b] = {}
-                matrix.matrix[paradigm_b][paradigm_a] = pair
+                matrix.matrix[ref_paradigm][cmp_paradigm] = dc
 
         return matrix
 
