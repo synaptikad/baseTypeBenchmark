@@ -6,6 +6,7 @@ Provides structured archiving of benchmark results:
 - Raw query results per paradigm/query
 - Run metadata (config, params, git hash)
 - Enables validation replay without re-executing queries
+- Efficiency analysis with business-relevant thresholds
 
 Archive structure:
     data/results/runs/{benchmark_id}/
@@ -19,6 +20,7 @@ Archive structure:
     │   │   └── ...
     │   └── ...
     ├── benchmark_summary.json  # Performance metrics
+    ├── report.md               # Human-readable report with efficiency analysis
     └── validation/
         ├── cross_matrix.json   # Cross-paradigm validation
         └── semantic_report.json
@@ -32,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 @dataclass
@@ -376,8 +380,39 @@ class ResultsArchive:
         self._current_run = None
         self._metadata = None
 
+    def _load_efficiency_thresholds(self) -> dict:
+        """Load efficiency thresholds from config file."""
+        config_path = Path(__file__).parent.parent.parent.parent.parent / "config" / "efficiency_thresholds.yaml"
+        if config_path.exists():
+            with open(config_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+        return {}
+
+    def _get_query_threshold(self, query_id: str, thresholds: dict) -> tuple[float, float, str]:
+        """Get acceptable/degraded thresholds for a query.
+
+        Returns:
+            (acceptable_ms, degraded_ms, category_name)
+        """
+        latency_thresholds = thresholds.get("latency_thresholds", {})
+        for category, config in latency_thresholds.items():
+            if isinstance(config, dict) and query_id in config.get("queries", []):
+                return (
+                    config.get("acceptable_ms", 500),
+                    config.get("degraded_ms", 2000),
+                    category,
+                )
+        # Default
+        default = thresholds.get("default", {})
+        return (default.get("acceptable_ms", 500), default.get("degraded_ms", 2000), "default")
+
     def _generate_report_md(self, run_path: Path, summary: dict) -> None:
         """Generate a factual Markdown report for the benchmark run.
+
+        Includes efficiency analysis with:
+        - Latency acceptability per use case
+        - Memory efficiency ratios
+        - Hypothesis validation conclusion
 
         Args:
             run_path: Path to run directory
@@ -388,10 +423,295 @@ class ResultsArchive:
         results = summary.get("results", {})
         ram_summary = summary.get("summary", {})
 
+        # Load efficiency thresholds
+        thresholds = self._load_efficiency_thresholds()
+
         lines = [
             f"# Benchmark Report: {metadata.benchmark_id}",
             "",
-            "## Dataset",
+            "## Executive Summary",
+            "",
+        ]
+
+        # Collect query data first for analysis
+        query_data: dict[str, dict[str, float | None]] = {}
+        memory_data: dict[str, dict[str, float | None]] = {}
+
+        for p, p_data in results.items():
+            for level in p_data.get("levels", []):
+                if level.get("status") == "success":
+                    for qid, qdata in level.get("queries", {}).items():
+                        if qid not in query_data:
+                            query_data[qid] = {}
+                            memory_data[qid] = {}
+                        if p not in query_data[qid]:
+                            query_data[qid][p] = qdata.get("p50_ms")
+                            memory_data[qid][p] = qdata.get("memory_peak_mb")
+                    break  # First successful level only
+
+        # Calculate efficiency scores
+        paradigm_scores: dict[str, dict] = {}
+        reference_paradigm = "P2"  # P2 as reference for comparison
+
+        for p in metadata.paradigms:
+            acceptable_count = 0
+            degraded_count = 0
+            unacceptable_count = 0
+            total_queries = 0
+
+            for qid, latencies in query_data.items():
+                if latencies.get(p) is not None:
+                    total_queries += 1
+                    lat = latencies[p]
+                    acceptable_ms, degraded_ms, _ = self._get_query_threshold(qid, thresholds)
+
+                    if lat <= acceptable_ms:
+                        acceptable_count += 1
+                    elif lat <= degraded_ms:
+                        degraded_count += 1
+                    else:
+                        unacceptable_count += 1
+
+            paradigm_scores[p] = {
+                "acceptable": acceptable_count,
+                "degraded": degraded_count,
+                "unacceptable": unacceptable_count,
+                "total": total_queries,
+                "acceptable_pct": (acceptable_count / total_queries * 100) if total_queries > 0 else 0,
+            }
+
+        # Executive summary with hypothesis validation
+        lines.extend([
+            "**Hypothesis**: Graph databases (M1, M2) do not provide significant advantages over ",
+            "SQL+JSONB (P2) for building management workloads, especially considering resource costs.",
+            "",
+        ])
+
+        # RAM efficiency comparison
+        ram_viable = ram_summary.get("ram_viable", {})
+        ram_baseline = ram_summary.get("ram_baseline", {})
+
+        p2_ram = ram_baseline.get("P2", 0)
+        if p2_ram > 0:
+            lines.append("### Resource Efficiency")
+            lines.append("")
+            lines.append("| Paradigm | RAM Baseline (MB) | vs P2 | RAM Viable | Verdict |")
+            lines.append("|----------|-------------------|-------|------------|---------|")
+
+            for p in metadata.paradigms:
+                baseline = ram_baseline.get(p, 0)
+                viable = ram_viable.get(p)
+                ratio = baseline / p2_ram if p2_ram > 0 else 0
+
+                if ratio <= 1.5:
+                    verdict = "Equivalent"
+                elif ratio <= 3.0:
+                    verdict = "Acceptable"
+                elif ratio <= 6.0:
+                    verdict = "Degraded"
+                else:
+                    verdict = "**Costly**"
+
+                viable_str = f"{viable} GB" if viable else "OOM"
+                lines.append(f"| {p} | {baseline:.0f} | {ratio:.1f}x | {viable_str} | {verdict} |")
+            lines.append("")
+
+        # Latency acceptability summary
+        lines.extend([
+            "### Latency Acceptability",
+            "",
+            "| Paradigm | Acceptable | Degraded | Slow | Score |",
+            "|----------|------------|----------|------|-------|",
+        ])
+
+        for p in metadata.paradigms:
+            scores = paradigm_scores.get(p, {})
+            score_pct = scores.get("acceptable_pct", 0)
+            lines.append(
+                f"| {p} | {scores.get('acceptable', 0)} | {scores.get('degraded', 0)} | "
+                f"{scores.get('unacceptable', 0)} | {score_pct:.0f}% |"
+            )
+        lines.append("")
+
+        # Critical Findings: P2 vs M1 (standalone graph, like SpinalCom architecture)
+        # M2 uses TimescaleDB so it's not a fair "in-memory graph" comparison
+        critical_threshold_ms = thresholds.get("conclusion", {}).get("critical_difference_ms", 500)
+
+        p2_wins_critical: list[tuple[str, float, float, float]] = []  # (qid, p2_ms, m1_ms, diff)
+        m1_wins_critical: list[tuple[str, float, float, float]] = []
+
+        # Get row counts to exclude queries with 0 rows (not meaningful comparisons)
+        query_row_counts: dict[str, dict[str, int]] = {}
+        for p, p_data in results.items():
+            for level in p_data.get("levels", []):
+                if level.get("status") == "success":
+                    for qid, qdata in level.get("queries", {}).items():
+                        if qid not in query_row_counts:
+                            query_row_counts[qid] = {}
+                        query_row_counts[qid][p] = qdata.get("row_count", 0)
+                    break
+
+        for qid, latencies in query_data.items():
+            p2_lat = latencies.get("P2")
+            m1_lat = latencies.get("M1")
+            if p2_lat is not None and m1_lat is not None:
+                # Skip queries where both paradigms return 0 rows (not meaningful)
+                p2_rows = query_row_counts.get(qid, {}).get("P2", 0)
+                m1_rows = query_row_counts.get(qid, {}).get("M1", 0)
+                if p2_rows == 0 and m1_rows == 0:
+                    continue
+
+                diff = m1_lat - p2_lat
+                if diff > critical_threshold_ms:
+                    p2_wins_critical.append((qid, p2_lat, m1_lat, diff))
+                elif diff < -critical_threshold_ms:
+                    m1_wins_critical.append((qid, p2_lat, m1_lat, -diff))
+
+        # Sort by difference (most significant first)
+        p2_wins_critical.sort(key=lambda x: -x[3])
+        m1_wins_critical.sort(key=lambda x: -x[3])
+
+        lines.extend([
+            "### Critical Findings: P2 vs M1 (In-Memory Graph)",
+            "",
+            "*Comparing P2 (SQL+JSONB) vs M1 (Memgraph standalone) - the 'in-memory graph kernel' architecture.*",
+            "*M2 uses TimescaleDB for timeseries, so M1 is the fair comparison for SpinalCom-style claims.*",
+            "",
+        ])
+
+        if p2_wins_critical:
+            lines.extend([
+                f"**P2 significantly faster** (>{critical_threshold_ms}ms difference):",
+                "",
+                "| Query | P2 | M1 | Difference | Ratio |",
+                "|-------|---:|---:|----------:|------:|",
+            ])
+            for qid, p2_lat, m1_lat, diff in p2_wins_critical:
+                ratio = m1_lat / p2_lat if p2_lat > 0 else float('inf')
+                lines.append(f"| {qid} | {p2_lat:.0f}ms | {m1_lat:.0f}ms | **+{diff:.0f}ms** | M1 {ratio:.0f}x slower |")
+            lines.append("")
+
+        if m1_wins_critical:
+            lines.extend([
+                f"**M1 significantly faster** (>{critical_threshold_ms}ms difference):",
+                "",
+                "| Query | P2 | M1 | Difference | Ratio |",
+                "|-------|---:|---:|----------:|------:|",
+            ])
+            for qid, p2_lat, m1_lat, diff in m1_wins_critical:
+                ratio = p2_lat / m1_lat if m1_lat > 0 else float('inf')
+                lines.append(f"| {qid} | {p2_lat:.0f}ms | {m1_lat:.0f}ms | **-{diff:.0f}ms** | P2 {ratio:.0f}x slower |")
+            lines.append("")
+
+        if not p2_wins_critical and not m1_wins_critical:
+            lines.extend([
+                f"No queries show >{critical_threshold_ms}ms difference between P2 and M1.",
+                "",
+            ])
+
+        # Conclusion
+        lines.extend([
+            "### Conclusion",
+            "",
+        ])
+
+        # Analyze results for conclusion - focus on P2 vs M1
+        p2_score = paradigm_scores.get("P2", {}).get("acceptable_pct", 0)
+        m1_score = paradigm_scores.get("M1", {}).get("acceptable_pct", 0)
+
+        m1_ram_ratio = ram_baseline.get("M1", 0) / p2_ram if p2_ram > 0 else 0
+
+        latency_equiv_pct = thresholds.get("conclusion", {}).get("latency_equivalence_pct", 20)
+        memory_sig_ratio = thresholds.get("conclusion", {}).get("memory_significant_ratio", 3.0)
+
+        # Determine conclusion based on critical findings
+        if p2_wins_critical and not m1_wins_critical:
+            latency_conclusion = f"P2 is **significantly faster** on {len(p2_wins_critical)} critical queries (timeseries/analytics). M1 shows no perceptible advantage."
+        elif m1_wins_critical and not p2_wins_critical:
+            latency_conclusion = f"M1 is **significantly faster** on {len(m1_wins_critical)} queries. Graph-native workloads benefit from in-memory."
+        elif p2_wins_critical and m1_wins_critical:
+            latency_conclusion = f"Mixed results: P2 wins on {len(p2_wins_critical)} queries, M1 wins on {len(m1_wins_critical)}."
+        else:
+            latency_conclusion = "P2 and M1 are **latency-equivalent** - no perceptible difference (all <500ms)."
+
+        if m1_ram_ratio >= 1.5:
+            memory_conclusion = f"M1 consumes **{m1_ram_ratio:.1f}x more RAM** than P2."
+        else:
+            memory_conclusion = "Memory consumption is comparable."
+
+        lines.extend([
+            f"- **Latency**: {latency_conclusion}",
+            f"- **Memory**: {memory_conclusion}",
+            "",
+        ])
+
+        # Final verdict - based on critical findings
+        has_critical_p2_advantage = len(p2_wins_critical) > 0
+        has_critical_m1_advantage = len(m1_wins_critical) > 0
+
+        if has_critical_p2_advantage and not has_critical_m1_advantage:
+            lines.extend([
+                "**Verdict**: The hypothesis is **SUPPORTED**.",
+                "",
+                "M1 (in-memory graph) provides **no perceptible latency advantage** over P2 on any query, ",
+                "while P2 is **seconds faster** on timeseries/analytics workloads. ",
+                "The 'in-memory graph kernel' architecture (SpinalCom-style) is not justified for ",
+                "smart building middleware where IoT/timeseries queries dominate.",
+                "",
+                "**Recommendation**: Use PostgreSQL+JSONB (P2) for building management systems.",
+                "",
+            ])
+        elif has_critical_m1_advantage and not has_critical_p2_advantage:
+            lines.extend([
+                "**Verdict**: The hypothesis is **REFUTED**.",
+                "",
+                "M1 shows significant latency advantages on graph-native workloads that justify ",
+                "the in-memory architecture for graph-heavy use cases.",
+                "",
+            ])
+        elif has_critical_p2_advantage and has_critical_m1_advantage:
+            lines.extend([
+                "**Verdict**: Results are **MIXED**.",
+                "",
+                "P2 excels on timeseries/analytics, M1 excels on graph-native queries. ",
+                "Architecture choice depends on workload distribution.",
+                "",
+            ])
+        else:
+            lines.extend([
+                "**Verdict**: The hypothesis is **SUPPORTED** (equivalence).",
+                "",
+                "No perceptible difference between P2 and M1 on any query. ",
+                "P2 is recommended due to lower operational complexity and better ecosystem.",
+                "",
+            ])
+
+        # Scalability reference
+        scalability = thresholds.get("scalability_reference", {})
+        if scalability:
+            lines.extend([
+                "### Scalability Reference",
+                "",
+                "| Stack | Read QPS | Write QPS | Notes |",
+                "|-------|----------|-----------|-------|",
+            ])
+            for stack, data in scalability.items():
+                if isinstance(data, dict):
+                    lines.append(
+                        f"| {stack} | {data.get('read_qps', 'N/A'):,} | "
+                        f"{data.get('write_qps', 'N/A'):,} | {data.get('description', '')[:50]}... |"
+                    )
+            lines.append("")
+            lines.append("*Source: TechEmpower benchmarks, vendor documentation*")
+            lines.append("")
+
+        # Detailed sections
+        lines.extend([
+            "---",
+            "",
+            "## Detailed Results",
+            "",
+            "### Dataset",
             "",
             f"| Property | Value |",
             f"|----------|-------|",
@@ -400,63 +720,62 @@ class ResultsArchive:
             f"| Runs/Query | {metadata.n_runs} |",
             f"| Variants | {metadata.n_variants} |",
             "",
-        ]
+        ])
 
         # RAM Footprint
         if ram_summary:
             lines.extend([
-                "## RAM Footprint (MB)",
+                "### RAM Footprint (MB)",
                 "",
                 "| Paradigm | Baseline | Viable |",
                 "|----------|----------|--------|",
             ])
             for p in metadata.paradigms:
-                baseline = ram_summary.get("ram_baseline", {}).get(p, 0)
-                viable = ram_summary.get("ram_viable", {}).get(p)
+                baseline = ram_baseline.get(p, 0)
+                viable = ram_viable.get(p)
                 viable_str = str(viable) if viable else "OOM"
                 lines.append(f"| {p} | {baseline:.0f} | {viable_str} |")
             lines.append("")
 
-        # Query Latency
+        # Query Latency with acceptability indicator
         if results:
             lines.extend([
-                "## Query Latency p50 (ms)",
+                "### Query Latency p50 (ms)",
+                "",
+                "*Legend: acceptable | degraded | slow*",
                 "",
             ])
 
             # Header
-            header = "| Query |"
-            separator = "|-------|"
+            header = "| Query | Category |"
+            separator = "|-------|----------|"
             for p in metadata.paradigms:
                 header += f" {p} |"
                 separator += "-----:|"
             lines.append(header)
             lines.append(separator)
 
-            # Collect queries and their p50 values
-            query_data: dict[str, dict[str, float | None]] = {}
-            for p, p_data in results.items():
-                for level in p_data.get("levels", []):
-                    if level.get("status") == "success":
-                        for qid, qdata in level.get("queries", {}).items():
-                            if qid not in query_data:
-                                query_data[qid] = {}
-                            if p not in query_data[qid]:
-                                query_data[qid][p] = qdata.get("p50_ms")
-                        break  # First successful level only
-
             for qid in sorted(query_data.keys()):
-                row = f"| {qid} |"
+                acceptable_ms, degraded_ms, category = self._get_query_threshold(qid, thresholds)
+                row = f"| {qid} | {category[:8]} |"
                 for p in metadata.paradigms:
                     val = query_data[qid].get(p)
-                    row += f" {val:.1f} |" if val is not None else " - |"
+                    if val is not None:
+                        if val <= acceptable_ms:
+                            row += f" {val:.1f} |"
+                        elif val <= degraded_ms:
+                            row += f" *{val:.1f}* |"
+                        else:
+                            row += f" **{val:.1f}** |"
+                    else:
+                        row += " - |"
                 lines.append(row)
             lines.append("")
 
         # Query Coverage
         if results:
             lines.extend([
-                "## Query Coverage",
+                "### Query Coverage",
                 "",
                 "| Paradigm | Answered | Impossible |",
                 "|----------|----------|------------|",
@@ -469,16 +788,19 @@ class ResultsArchive:
 
         # Environment (compact)
         lines.extend([
-            "## Environment",
+            "### Environment",
             "",
             f"| Property | Value |",
             f"|----------|-------|",
             f"| Git | {metadata.git_branch}@{metadata.git_hash} |",
             f"| Host | {metadata.hostname} |",
-            f"| Duration | {(metadata.end_time - metadata.start_time).total_seconds():.0f}s |" if metadata.end_time else "",
-            "",
         ])
+        if metadata.end_time:
+            duration = (metadata.end_time - metadata.start_time).total_seconds()
+            lines.append(f"| Duration | {duration:.0f}s |")
+        lines.append("")
 
+        # Write report
         with open(report_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 

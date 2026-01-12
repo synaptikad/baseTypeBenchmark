@@ -1,0 +1,117 @@
+# Efficiency Thresholds for Benchmark Analysis
+# BaseType Benchmark V3.1
+#
+# Defines latency acceptability thresholds per use case category.
+# These thresholds reflect real-world building management system requirements.
+
+version: "1.0"
+
+# Latency thresholds by use case category
+# Values in milliseconds (ms)
+latency_thresholds:
+
+  # Real-time monitoring: dashboard refresh, live values
+  # Users expect instant feedback
+  realtime:
+    acceptable_ms: 100
+    degraded_ms: 500
+    queries: [Q1, Q2, Q3, Q4, Q5, Q10, Q11]
+    description: "Real-time monitoring queries (dashboard, live values)"
+
+  # Analytics: reports, aggregations, statistics
+  # Users can tolerate delays for complex computations
+  analytics:
+    acceptable_ms: 1000
+    degraded_ms: 5000
+    queries: [Q6, Q7, Q8, Q9, Q12, Q13, Q31]
+    description: "Analytics queries (aggregations, statistics, reports)"
+
+  # Search/Navigation: find equipment, trace paths
+  # Interactive but not instant
+  navigation:
+    acceptable_ms: 500
+    degraded_ms: 2000
+    queries: [Q14, Q15, Q16, Q17, Q18, Q19, Q20, Q21, Q22, Q23, Q27, Q28, Q29, Q30]
+    description: "Navigation and search queries (path finding, equipment lookup)"
+
+  # Background: batch operations, materialized views
+  # Can run async, users don't wait
+  background:
+    acceptable_ms: 5000
+    degraded_ms: 30000
+    queries: [Q32, Q33, Q34]
+    description: "Background operations (batch, materialized views)"
+
+  # Write operations: inserts, updates
+  # Must be fast for IoT ingestion
+  write:
+    acceptable_ms: 50
+    degraded_ms: 200
+    queries: [QW1, QW2, QW3, QW4, QW5, QW6, QW7, QW8]
+    description: "Write operations (IoT ingestion, updates)"
+
+# Default threshold for queries not categorized
+default:
+  acceptable_ms: 500
+  degraded_ms: 2000
+
+# Resource efficiency thresholds
+resource_thresholds:
+  # Memory ratio: paradigm_memory / reference_memory
+  # Values > 1 mean paradigm uses more memory than reference
+  memory_ratio:
+    acceptable: 2.0      # Up to 2x memory is acceptable
+    degraded: 4.0        # 2-4x is degraded
+    unacceptable: 8.0    # >8x is unacceptable for production
+
+  # RAM viable: minimum RAM without OOM
+  ram_viable:
+    acceptable_gb: 8     # Works with 8GB = cloud-friendly
+    degraded_gb: 16      # Needs 16GB = dedicated server
+    unacceptable_gb: 32  # Needs 32GB = expensive infrastructure
+
+# Scalability reference (external benchmarks)
+# PostgreSQL + SQLAlchemy/Pydantic typical throughput
+scalability_reference:
+  postgresql:
+    description: "PostgreSQL with connection pooling (pgbouncer) and SQLAlchemy/Pydantic"
+    read_qps: 50000      # Queries per second (simple reads)
+    write_qps: 10000     # Inserts per second (batched)
+    source: "TechEmpower benchmarks, real-world production systems"
+    notes: |
+      - Connection pooling essential for high throughput
+      - Pydantic validation adds ~0.1ms overhead per request
+      - Async drivers (asyncpg) can improve throughput 2-3x
+      - Typical production: 10k-50k QPS per node
+
+  memgraph:
+    description: "Memgraph in-memory graph database"
+    read_qps: 100000     # Simple traversals
+    write_qps: 50000     # Edge/node inserts
+    source: "Memgraph official benchmarks"
+    notes: |
+      - In-memory = faster but RAM-constrained
+      - Cypher parsing overhead for complex queries
+      - Excellent for graph algorithms (shortestPath, etc.)
+
+# Scoring weights for final efficiency score
+scoring:
+  latency_weight: 0.4
+  memory_weight: 0.3
+  coverage_weight: 0.2
+  scalability_weight: 0.1
+
+# Conclusion thresholds
+conclusion:
+  # If paradigm A vs B latency difference is within this %, consider them equivalent
+  latency_equivalence_pct: 20
+
+  # If memory ratio exceeds this, memory advantage is "significant"
+  memory_significant_ratio: 3.0
+
+  # Minimum query coverage to be considered "production-ready"
+  min_coverage_pct: 80
+
+  # Critical latency difference (ms) - below this, differences are imperceptible to humans
+  # 500ms = half a second, noticeable delay
+  critical_difference_ms: 500

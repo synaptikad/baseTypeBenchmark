@@ -8,6 +8,26 @@ Benchmark orienté **usage middleware smart building** pour comparer 5 paradigme
 
 ---
 
+## Résultats Clés (large-6m : 60k nodes, 2M timeseries)
+
+### Verdict : Hypothèse **SUPPORTÉE**
+
+| Métrique | P2 (PostgreSQL+JSONB) | M1 (Memgraph) | Écart |
+|----------|----------------------:|---------------:|------:|
+| **RAM Baseline** | 1,566 MB | 2,739 MB | M1 **1.7x** plus |
+| **Q6** (timeseries 6 mois) | 22 ms | 2,004 ms | M1 **89x** plus lent |
+| **Q7** (variance Top-20) | 119 ms | 1,147 ms | M1 **10x** plus lent |
+| **Q20** (shortest path) | 0.8 ms | 0.5 ms | Imperceptible |
+| **Q21** (all paths SPOF) | 0.8 ms | 0.6 ms | Imperceptible |
+
+**Conclusion** : M1 (in-memory graph) ne fournit **aucun avantage perceptible** (>500ms) sur les queries graph-native, tandis que P2 est **secondes plus rapide** sur les workloads IoT/timeseries qui représentent 80% des usages middleware.
+
+L'architecture "in-memory graph kernel" (type SpinalCom) n'est pas justifiée pour les middlewares smart building.
+
+→ Voir [data/results/runs/](data/results/runs/) pour les rapports détaillés.
+
+---
+
 ## Quickstart
 
 ```bash
@@ -322,11 +342,26 @@ docker compose -f docker/docker-compose.yml logs -f memgraph
 
 ## Évolutions récentes
 
+### v3.2 (Janvier 2026)
+
+- **Analyse d'efficience critique** : Nouveau système de conclusion basé sur les écarts perceptibles
+  - Comparaison P2 vs M1 (focus sur l'architecture "in-memory graph kernel" type SpinalCom)
+  - Seuil de 500ms pour distinguer les différences perceptibles vs imperceptibles
+  - Exclusion automatique des queries avec 0 résultats (pas significatives)
+  - Verdict automatique : SUPPORTED / REFUTED / MIXED
+- **Rapport benchmark enrichi** : Section "Critical Findings" avec tableaux comparatifs
+- **Config `efficiency_thresholds.yaml`** : Paramètres de conclusion configurables
+
 ### v3.1 (Janvier 2026)
 
 - **Équilibrage benchmark** : 8 nouvelles queries (Q27-Q34) pour balance graph/SQL
   - Q27-Q30 : Graph-native (weighted paths, cycles) - avantage M1/M2
   - Q31-Q34 : SQL-native (window functions, LATERAL) - avantage P1/P2
+- **Analyse d'efficience** : Rapport automatique avec validation d'hypothèse
+  - Seuils d'acceptabilité latence par catégorie d'usage (realtime, analytics, navigation)
+  - Ratio ressources (RAM) par paradigme
+  - Conclusion automatique sur l'hypothèse "M1/M2 vs P2"
+  - Référence scalabilité PostgreSQL (~50k QPS)
 - **Enrichissement dataset** : Nouveaux types d'entités et relations
   - Node types : Technician, WorkOrder, Alarm, Schedule, Lease, Contract, Zone
   - Equipment types : 35 types (Lighting, FireSafety, Parking, HVAC, Electrical, BMS)

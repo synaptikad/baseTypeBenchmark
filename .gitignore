@@ -18,9 +18,10 @@ volumes/
 # Generated data
 data/
 out/
-results/
+/results/
 !bench/results/
 !bench/results/.gitkeep
+!docs/results/
 
 # Logs and outputs
 *.log
