@@ -727,7 +727,8 @@ class PostgresLoader(BaseLoader):
                             building_id VARCHAR(64) REFERENCES {self.struct_schema}.buildings(id),
                             space_type VARCHAR(64),
                             area_m2 FLOAT,
-                            capacity INTEGER
+                            capacity INTEGER,
+                            is_exit BOOLEAN DEFAULT false
                         );
 
                         -- Equipment
@@ -738,7 +739,8 @@ class PostgresLoader(BaseLoader):
                             domain VARCHAR(32) NOT NULL,
                             building_id VARCHAR(64) REFERENCES {self.struct_schema}.buildings(id),
                             floor_id VARCHAR(64) REFERENCES {self.struct_schema}.floors(id),
-                            space_id VARCHAR(64) REFERENCES {self.struct_schema}.spaces(id)
+                            space_id VARCHAR(64) REFERENCES {self.struct_schema}.spaces(id),
+                            critical BOOLEAN DEFAULT false
                         );
 
                         -- Points
@@ -790,8 +792,30 @@ class PostgresLoader(BaseLoader):
                         CREATE INDEX IF NOT EXISTS idx_edges_rel_type ON {self.struct_schema}.edges(rel_type);
                         CREATE INDEX IF NOT EXISTS idx_edges_source_rel ON {self.struct_schema}.edges(source_id, rel_type);
                         CREATE INDEX IF NOT EXISTS idx_edges_target_rel ON {self.struct_schema}.edges(target_id, rel_type);
+
                         """
                         cur.execute(schema_sql)
+
+                        # Migration: add columns if tables already exist without them
+                        # Check and add is_exit to spaces
+                        cur.execute(f"""
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_schema = '{self.struct_schema}'
+                            AND table_name = 'spaces' AND column_name = 'is_exit'
+                        """)
+                        if not cur.fetchone():
+                            print(f"  📦 Migrating schema: adding is_exit to {self.struct_schema}.spaces")
+                            cur.execute(f"ALTER TABLE {self.struct_schema}.spaces ADD COLUMN is_exit BOOLEAN DEFAULT false;")
+
+                        # Check and add critical to equipment
+                        cur.execute(f"""
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_schema = '{self.struct_schema}'
+                            AND table_name = 'equipment' AND column_name = 'critical'
+                        """)
+                        if not cur.fetchone():
+                            print(f"  📦 Migrating schema: adding critical to {self.struct_schema}.equipment")
+                            cur.execute(f"ALTER TABLE {self.struct_schema}.equipment ADD COLUMN critical BOOLEAN DEFAULT false;")
 
                     else:  # P2
                         # P2: JSONB-enriched tables
