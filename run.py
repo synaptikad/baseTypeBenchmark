@@ -506,6 +506,10 @@ def run_benchmark_wizard(datasets: list[Path]):
     else:
         console.print(f"\n[green]Workload complete![/green]")
 
+    # Stop containers that were started for this benchmark
+    services_to_stop = get_required_services(paradigm_list)
+    stop_containers(list(services_to_stop))
+
     wait()
 
 
@@ -1035,6 +1039,22 @@ def get_container_status() -> dict[str, dict]:
     return containers
 
 
+def get_required_services(paradigms: list[str]) -> set[str]:
+    """Get the set of required container services for given paradigms."""
+    paradigm_to_services = {
+        "P1": ["timescale"],
+        "P2": ["timescale"],
+        "M1": ["memgraph"],
+        "M2": ["memgraph", "timescale"],  # Hybrid: graph + timeseries
+        "O2": ["oxigraph", "timescale"],  # Hybrid: RDF + timeseries
+    }
+    required = set()
+    for p in paradigms:
+        if p in paradigm_to_services:
+            required.update(paradigm_to_services[p])
+    return required
+
+
 def ensure_containers_running(paradigms: list[str]) -> bool:
     """Ensure required containers are running for the selected paradigms.
 
@@ -1042,20 +1062,8 @@ def ensure_containers_running(paradigms: list[str]) -> bool:
     """
     compose_file = PROJECT_DIR / "docker" / "docker-compose.yml"
 
-    # Map paradigms to required services
-    paradigm_to_service = {
-        "P1": "timescale",
-        "P2": "timescale",
-        "M1": "memgraph",
-        "M2": "memgraph",
-        "O2": "oxigraph",
-    }
-
     # Get required services
-    required_services = set()
-    for p in paradigms:
-        if p in paradigm_to_service:
-            required_services.add(paradigm_to_service[p])
+    required_services = get_required_services(paradigms)
 
     if not required_services:
         return True
@@ -1131,6 +1139,23 @@ def ensure_containers_running(paradigms: list[str]) -> bool:
 
     console.print("[red]Timeout waiting for containers to be healthy[/red]")
     return False
+
+
+def stop_containers(services: list[str]) -> None:
+    """Stop specified containers after benchmark completes."""
+    if not services:
+        return
+
+    compose_file = PROJECT_DIR / "docker" / "docker-compose.yml"
+    console.print(f"\n[dim]Stopping containers: {', '.join(services)}[/dim]")
+
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "stop"] + list(services),
+            capture_output=True, text=True, timeout=30
+        )
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not stop containers: {e}[/yellow]")
 
 
 def get_volume_info() -> dict[str, str]:
