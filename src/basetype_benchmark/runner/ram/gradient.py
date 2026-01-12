@@ -384,6 +384,10 @@ class RAMGradientExecutor:
         if not self.isolation.is_paradigm_running(self.paradigm):
             self.isolation.start_paradigm(self.paradigm)
 
+        # Initialize param sampler early (needed by _measure_baseline)
+        if not hasattr(self, "_sampled_params"):
+            self._init_param_sampler()
+
         # Measure baseline (run query without RAM limit, after resetting load peak)
         result.baseline_peak_mb = self._measure_baseline(queries)
 
