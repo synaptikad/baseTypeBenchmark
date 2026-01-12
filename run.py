@@ -43,8 +43,10 @@ DURATIONS = ["2d", "1w", "1m", "6m", "1y"]
 PARADIGMS = ["P1", "P2", "M1", "M2", "O2"]
 SCENARIOS_DIR = CONFIG_DIR / "scenarios"
 
-# All 23 query IDs for reference
-ALL_QUERIES = [f"Q{i}" for i in range(1, 24)]
+# All query IDs for reference
+ALL_READ_QUERIES = [f"Q{i}" for i in range(1, 35)]   # Q1-Q34
+ALL_WRITE_QUERIES = [f"QW{i}" for i in range(1, 9)]  # QW1-QW8
+ALL_QUERIES = ALL_READ_QUERIES + ALL_WRITE_QUERIES   # 42 total
 
 
 def run_cmd(cmd: list[str]) -> int:
@@ -343,15 +345,36 @@ def run_benchmark_wizard(datasets: list[Path]):
     if paradigms.upper() == "ALL":
         paradigms = "P1,P2,M1,M2,O2"
 
-    # 5. Select RAM
+    # 5. Select queries
+    console.print("\n[bold]5. Queries[/bold]")
+    console.print("  [cyan]1[/cyan]. ALL          [dim]Q1-Q34 + QW1-QW8 (42 queries)[/dim]")
+    console.print("  [cyan]2[/cyan]. Read only    [dim]Q1-Q34 (34 queries)[/dim]")
+    console.print("  [cyan]3[/cyan]. Write only   [dim]QW1-QW8 (8 queries)[/dim]")
+    console.print("  [cyan]4[/cyan]. Core         [dim]Q1-Q23 (original 23 queries)[/dim]")
+    console.print("  [cyan]5[/cyan]. Custom       [dim]Specify query IDs[/dim]")
+    console.print()
+    query_choice = Prompt.ask("Select", choices=["1", "2", "3", "4", "5"], default="1")
+
+    queries_arg = None  # None = all (default)
+    if query_choice == "2":
+        queries_arg = ",".join(ALL_READ_QUERIES)
+    elif query_choice == "3":
+        queries_arg = ",".join(ALL_WRITE_QUERIES)
+    elif query_choice == "4":
+        queries_arg = ",".join([f"Q{i}" for i in range(1, 24)])
+    elif query_choice == "5":
+        console.print("[dim]Enter comma-separated query IDs (e.g., Q1,Q2,Q7,QW1)[/dim]")
+        queries_arg = Prompt.ask("Queries")
+
+    # 6. Select RAM
     if bench_mode == "1":
         # Single RAM
-        console.print("\n[bold]5. RAM (GB)[/bold]")
+        console.print("\n[bold]6. RAM (GB)[/bold]")
         console.print(f"[dim]Available: {', '.join(str(l) for l in RAM_LEVELS)}[/dim]")
         ram = Prompt.ask("Select", default="64")
     else:
         # Gradient
-        console.print("\n[bold]5. RAM Range[/bold]")
+        console.print("\n[bold]6. RAM Range[/bold]")
         console.print(f"[dim]Available: {', '.join(str(l) for l in RAM_LEVELS)} GB[/dim]")
         ram_max = Prompt.ask("Max RAM (GB)", default="128")
         ram_min = Prompt.ask("Min RAM (GB)", default="0.5")
@@ -365,10 +388,10 @@ def run_benchmark_wizard(datasets: list[Path]):
         except ValueError:
             ram = "0.5,1,2,4,8,16,32,64"
 
-    # 6. For Scenario type, select workload
+    # 7. For Scenario type, select workload
     workload_name = None
     if bench_type == "2":
-        console.print("\n[bold]6. Workload[/bold]")
+        console.print("\n[bold]7. Workload[/bold]")
         workloads = [
             ("dashboard_refresh", "Dashboard Refresh", "Read-heavy"),
             ("iot_ingestion", "IoT Ingestion", "Write-heavy"),
@@ -387,6 +410,7 @@ def run_benchmark_wizard(datasets: list[Path]):
             workload_name = "bos_twin"
 
     # Summary
+    queries_display = "ALL (42)" if not queries_arg else f"{len(queries_arg.split(','))} queries"
     console.print()
     console.print(Panel.fit(
         f"[bold]Configuration[/bold]\n\n"
@@ -395,6 +419,7 @@ def run_benchmark_wizard(datasets: list[Path]):
         + (f" ({workload_name})" if workload_name else "") + "\n"
         f"Mode:      {'Single RAM' if bench_mode == '1' else 'Gradient'}\n"
         f"Paradigms: {paradigms}\n"
+        f"Queries:   {queries_display}\n"
         f"RAM:       {ram} GB",
         border_style="blue"
     ))
@@ -419,9 +444,13 @@ def run_benchmark_wizard(datasets: list[Path]):
             # Archive raw results for validation replay
             ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-            btb("benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
+            # Build command
+            cmd_args = ["benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
                 "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup",
-                "--archive", str(ARCHIVE_DIR))
+                "--archive", str(ARCHIVE_DIR)]
+            if queries_arg:
+                cmd_args.extend(["-q", queries_arg])
+            btb(*cmd_args)
         else:
             # Scenario benchmark
             output = RESULTS_DIR / f"scenario_{workload_name}_{timestamp}.json"
@@ -942,35 +971,166 @@ def view_result(path: Path):
 # 4. SYSTEM
 # =============================================================================
 
+def get_container_status() -> dict[str, dict]:
+    """Get detailed container status for benchmark containers."""
+    containers = {}
+    compose_file = PROJECT_DIR / "docker" / "docker-compose.yml"
+
+    try:
+        # Get container list with detailed info
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "ps", "--format", "json"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            import json as json_module
+            # Parse JSON output (one JSON object per line)
+            for line in result.stdout.strip().split("\n"):
+                if line.strip():
+                    try:
+                        info = json_module.loads(line)
+                        name = info.get("Name", info.get("Service", "unknown"))
+                        containers[name] = {
+                            "status": info.get("State", info.get("Status", "unknown")),
+                            "health": info.get("Health", ""),
+                            "ports": info.get("Publishers", []),
+                        }
+                    except json_module.JSONDecodeError:
+                        pass
+    except Exception:
+        pass
+
+    # Fallback to simple ps if JSON didn't work
+    if not containers:
+        try:
+            result = subprocess.run(
+                ["docker", "compose", "-f", str(compose_file), "ps", "--format",
+                 "table {{.Name}}\t{{.State}}\t{{.Health}}"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split("\n")[1:]:  # Skip header
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        name = parts[0]
+                        status = parts[1] if len(parts) > 1 else "unknown"
+                        health = parts[2] if len(parts) > 2 else ""
+                        containers[name] = {"status": status, "health": health, "ports": []}
+        except Exception:
+            pass
+
+    return containers
+
+
+def get_volume_info() -> dict[str, str]:
+    """Get Docker volume sizes for benchmark."""
+    volumes = {}
+    try:
+        result = subprocess.run(
+            ["docker", "volume", "ls", "--format", "{{.Name}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            for vol_name in result.stdout.strip().split("\n"):
+                if "benchmark" in vol_name.lower() or "basetype" in vol_name.lower():
+                    # Get volume size
+                    inspect = subprocess.run(
+                        ["docker", "system", "df", "-v", "--format", "{{.Name}}\t{{.Size}}"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    volumes[vol_name] = "?"
+    except Exception:
+        pass
+    return volumes
+
+
 def menu_system():
     while True:
-        header("System")
+        header("System / Containers")
 
-        # Quick status
+        # Docker daemon check
         docker_ok = subprocess.run(["docker", "info"], capture_output=True).returncode == 0
-        console.print(f"Docker: {'[green]OK[/green]' if docker_ok else '[red]DOWN[/red]'}")
 
+        if not docker_ok:
+            console.print("[red]⚠ Docker daemon not running![/red]")
+            console.print()
+            console.print("[cyan]b[/cyan]. Back")
+            console.print()
+            if Prompt.ask("", default="b") == "b":
+                return
+            continue
+
+        # Get container status
+        containers = get_container_status()
+
+        # Display container status table
+        console.print("[bold]Container Status:[/bold]")
+        if containers:
+            table = Table(show_header=True, header_style="bold", box=None)
+            table.add_column("Container", style="cyan")
+            table.add_column("Status")
+            table.add_column("Health")
+            table.add_column("Schema")
+
+            for name, info in sorted(containers.items()):
+                status = info.get("status", "unknown")
+                health = info.get("health", "")
+
+                # Status color
+                if status in ("running", "Up"):
+                    status_str = f"[green]● {status}[/green]"
+                elif status in ("exited", "Exit"):
+                    status_str = f"[red]○ {status}[/red]"
+                else:
+                    status_str = f"[yellow]? {status}[/yellow]"
+
+                # Health color
+                if health == "healthy":
+                    health_str = "[green]healthy[/green]"
+                elif health == "unhealthy":
+                    health_str = "[red]unhealthy[/red]"
+                elif health:
+                    health_str = f"[yellow]{health}[/yellow]"
+                else:
+                    health_str = "[dim]-[/dim]"
+
+                # Schema info (for timescale)
+                schema_str = "[dim]-[/dim]"
+                if "timescale" in name.lower() and status in ("running", "Up"):
+                    schema_str = "[green]p1,p2,ts[/green]"
+
+                table.add_row(name, status_str, health_str, schema_str)
+
+            console.print(table)
+        else:
+            console.print("  [dim]No containers running[/dim]")
+
+        # RAM info
+        console.print()
         try:
             with open("/proc/meminfo") as f:
                 for line in f:
                     if line.startswith("MemAvailable:"):
                         mem_gb = int(line.split()[1]) / 1024 / 1024
-                        console.print(f"RAM free: {mem_gb:.0f} GB")
+                        console.print(f"[bold]RAM available:[/bold] {mem_gb:.0f} GB")
         except:
             pass
 
         console.print()
-        console.print("[cyan]1[/cyan]. Docker status")
-        console.print("[cyan]2[/cyan]. Start containers")
-        console.print("[cyan]3[/cyan]. Stop containers")
-        console.print("[cyan]4[/cyan]. Container logs")
+        console.print("[bold]Actions:[/bold]")
+        console.print("[cyan]1[/cyan]. Start containers      [dim]docker compose up -d[/dim]")
+        console.print("[cyan]2[/cyan]. Stop containers       [dim]docker compose down[/dim]")
+        console.print("[cyan]3[/cyan]. Restart containers    [dim]down + up[/dim]")
+        console.print("[cyan]4[/cyan]. [yellow]Reset volumes[/yellow]        [dim]down -v (deletes data!)[/dim]")
         console.print()
+        console.print("[cyan]l[/cyan]. Container logs")
+        console.print("[cyan]s[/cyan]. Schema status         [dim]Check DB schemas[/dim]")
         console.print("[cyan]i[/cyan]. Full system info")
         console.print()
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
-        choice = Prompt.ask("", choices=["1", "2", "3", "4", "i", "b"], default="1", show_choices=False)
+        choice = Prompt.ask("", choices=["1", "2", "3", "4", "l", "s", "i", "b"], default="1", show_choices=False)
 
         if choice == "b":
             return
@@ -978,17 +1138,126 @@ def menu_system():
         compose = ["docker", "compose", "-f", str(PROJECT_DIR / "docker" / "docker-compose.yml")]
 
         if choice == "1":
-            run_cmd(compose + ["ps"])
-        elif choice == "2":
+            console.print("\n[cyan]Starting containers...[/cyan]")
             run_cmd(compose + ["up", "-d"])
-        elif choice == "3":
+        elif choice == "2":
+            console.print("\n[cyan]Stopping containers...[/cyan]")
             run_cmd(compose + ["down"])
+        elif choice == "3":
+            console.print("\n[cyan]Restarting containers...[/cyan]")
+            run_cmd(compose + ["down"])
+            run_cmd(compose + ["up", "-d"])
         elif choice == "4":
-            run_cmd(compose + ["logs", "--tail=30"])
+            console.print()
+            console.print("[bold red]⚠ WARNING: This will delete all container data![/bold red]")
+            console.print("[yellow]This includes:[/yellow]")
+            console.print("  - PostgreSQL/TimescaleDB data")
+            console.print("  - Memgraph data")
+            console.print("  - All loaded datasets")
+            console.print()
+            if Confirm.ask("[red]Are you sure you want to reset volumes?[/red]", default=False):
+                console.print("\n[cyan]Removing containers and volumes...[/cyan]")
+                run_cmd(compose + ["down", "-v"])
+                console.print("[green]Volumes reset. Schema will be recreated on next benchmark.[/green]")
+            else:
+                console.print("[dim]Cancelled.[/dim]")
+        elif choice == "l":
+            service = Prompt.ask("Service [dim](timescale/memgraph/oxigraph/all)[/dim]", default="all")
+            if service == "all":
+                run_cmd(compose + ["logs", "--tail=50"])
+            else:
+                run_cmd(compose + ["logs", "--tail=50", service])
+        elif choice == "s":
+            check_schema_status()
         elif choice == "i":
             show_system_info()
 
         wait()
+
+
+def check_schema_status():
+    """Check database schema status."""
+    header("Schema Status")
+
+    console.print("[bold]Checking PostgreSQL schemas...[/bold]")
+    console.print()
+
+    try:
+        import psycopg
+
+        # Try to connect
+        dsn = "postgresql://postgres:postgres@localhost:5432/benchmark"
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                # List schemas
+                cur.execute("""
+                    SELECT schema_name FROM information_schema.schemata
+                    WHERE schema_name IN ('p1', 'p2', 'ts', 'public')
+                    ORDER BY schema_name
+                """)
+                schemas = [row[0] for row in cur.fetchall()]
+
+                console.print(f"[green]✓ Connected to PostgreSQL[/green]")
+                console.print(f"  Schemas: {', '.join(schemas) if schemas else '[dim]none[/dim]'}")
+                console.print()
+
+                # Check P1 tables and columns
+                if 'p1' in schemas:
+                    console.print("[bold]P1 Schema:[/bold]")
+                    cur.execute("""
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'p1' ORDER BY table_name
+                    """)
+                    tables = [row[0] for row in cur.fetchall()]
+                    console.print(f"  Tables: {', '.join(tables[:8])}{'...' if len(tables) > 8 else ''}")
+
+                    # Check for new columns
+                    cur.execute("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_schema = 'p1' AND table_name = 'spaces' AND column_name = 'is_exit'
+                    """)
+                    has_is_exit = cur.fetchone() is not None
+
+                    cur.execute("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_schema = 'p1' AND table_name = 'equipment' AND column_name = 'critical'
+                    """)
+                    has_critical = cur.fetchone() is not None
+
+                    console.print(f"  spaces.is_exit: {'[green]✓[/green]' if has_is_exit else '[red]✗ missing[/red]'}")
+                    console.print(f"  equipment.critical: {'[green]✓[/green]' if has_critical else '[red]✗ missing[/red]'}")
+
+                    if not has_is_exit or not has_critical:
+                        console.print()
+                        console.print("[yellow]⚠ Schema needs migration. Options:[/yellow]")
+                        console.print("  1. Run benchmark (auto-migrates)")
+                        console.print("  2. Reset volumes (System > Reset volumes)")
+                    console.print()
+
+                # Check P2 tables
+                if 'p2' in schemas:
+                    console.print("[bold]P2 Schema:[/bold]")
+                    cur.execute("""
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'p2' ORDER BY table_name
+                    """)
+                    tables = [row[0] for row in cur.fetchall()]
+                    console.print(f"  Tables: {', '.join(tables)}")
+                    console.print()
+
+                # Check timeseries
+                if 'ts' in schemas:
+                    console.print("[bold]TS Schema (TimescaleDB):[/bold]")
+                    cur.execute("SELECT COUNT(*) FROM ts.timeseries")
+                    ts_count = cur.fetchone()[0]
+                    console.print(f"  Timeseries rows: {ts_count:,}")
+                    console.print()
+
+    except ImportError:
+        console.print("[yellow]psycopg not installed. Run: pip install psycopg[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Cannot connect to PostgreSQL: {e}[/red]")
+        console.print("[dim]Is TimescaleDB container running?[/dim]")
 
 
 def show_system_info():
