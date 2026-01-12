@@ -1,0 +1,191 @@
+# Write Payloads Dataset - Benchmark BaseType V3
+# Données à écrire via QW, validées ensuite par Q
+#
+# Structure:
+#   - Chaque payload correspond à une opération QW
+#   - Chaque payload a une query de validation associée
+#   - Les expected_results permettent de valider le READ après WRITE
+
+version: "1.0"
+description: "Dataset de payloads pour tester les écritures JSONB"
+
+# =============================================================================
+# QW4: Maintenance Event Append
+# =============================================================================
+qw4_payloads:
+  - id: "maint_001"
+    equipment_id: "eq_ahu_6"
+    event:
+      date: "2024-06-15"
+      type: "preventive"
+      technician: "Tech_A"
+      parts_replaced: ["filter", "belt"]
+      cost_eur: 450.00
+      duration_hours: 2.5
+      next_scheduled: "2024-12-15"
+    validation:
+      query: "Q_MAINT_HISTORY"
+      expected:
+        event_count_gte: 1
+        last_event_date: "2024-06-15"
+        last_technician: "Tech_A"
+
+  - id: "maint_002"
+    equipment_id: "eq_ahu_6"
+    event:
+      date: "2024-07-20"
+      type: "corrective"
+      technician: "Tech_B"
+      parts_replaced: ["motor_bearing"]
+      cost_eur: 1200.00
+      duration_hours: 4.0
+      issue_description: "Unusual vibration detected"
+    validation:
+      query: "Q_MAINT_HISTORY"
+      expected:
+        event_count_gte: 2
+        last_event_date: "2024-07-20"
+
+# =============================================================================
+# QW5: Calibration Update
+# =============================================================================
+qw5_payloads:
+  - id: "calib_001"
+    point_id: "point_eq_ahu_6_supply_temp"
+    calibration_date: "2024-06-01"
+    next_date: "2025-06-01"
+    technician: "Calibration_Co"
+    validation:
+      query: "Q_CALIBRATION_STATUS"
+      expected:
+        last_date: "2024-06-01"
+        next_date: "2025-06-01"
+        is_overdue: false
+
+  - id: "calib_002"
+    point_id: "point_eq_tempsensor_1_temperature"
+    calibration_date: "2023-01-15"
+    next_date: "2024-01-15"  # Intentionally overdue
+    technician: "Internal_Tech"
+    validation:
+      query: "Q_CALIBRATION_STATUS"
+      expected:
+        is_overdue: true
+        days_overdue_gte: 150
+
+# =============================================================================
+# QW6: Metadata Merge (Firmware Update Campaign)
+# =============================================================================
+qw6_payloads:
+  - id: "firmware_001"
+    equipment_id: "eq_ahu_7"
+    metadata_patch:
+      firmware_version: "3.2.1"
+      firmware_update_date: "2024-06-20"
+      firmware_update_by: "OTA_System"
+      firmware_previous: "3.1.0"
+    validation:
+      query: "Q_FIRMWARE_STATUS"
+      expected:
+        current_version: "3.2.1"
+        has_update_history: true
+
+  - id: "firmware_002"
+    equipment_id: "eq_vav_15"
+    metadata_patch:
+      firmware_version: "2.0.5"
+      maintenance_priority: "high"
+      notes: "Upgraded due to security patch"
+    validation:
+      query: "Q_FIRMWARE_STATUS"
+      expected:
+        current_version: "2.0.5"
+        priority: "high"
+
+# =============================================================================
+# QW7: Add Capability
+# =============================================================================
+qw7_payloads:
+  - id: "cap_001"
+    equipment_id: "eq_ahu_6"
+    new_capability: "demand_control_ventilation"
+    validation:
+      query: "Q_CAPABILITIES"
+      expected:
+        has_capability: "demand_control_ventilation"
+        total_capabilities_gte: 3
+
+  - id: "cap_002"
+    equipment_id: "eq_fcu_11"
+    new_capability: "smart_thermostat_integration"
+    validation:
+      query: "Q_CAPABILITIES"
+      expected:
+        has_capability: "smart_thermostat_integration"
+
+  # Test idempotence: re-add existing capability
+  - id: "cap_003"
+    equipment_id: "eq_ahu_7"
+    new_capability: "humidity_control"  # Already exists
+    validation:
+      query: "Q_CAPABILITIES"
+      expected:
+        capability_count_unchanged: true
+        no_duplicates: true
+
+# =============================================================================
+# QW8: Remove Deprecated Field
+# =============================================================================
+qw8_payloads:
+  - id: "cleanup_001"
+    node_id: "eq_ahu_6"
+    key_to_remove: "legacy_protocol_id"
+    validation:
+      query: "Q_METADATA_STRUCTURE"
+      expected:
+        key_absent: "legacy_protocol_id"
+        other_keys_preserved: true
+
+# =============================================================================
+# COMBINED SCENARIO: Full Equipment Lifecycle
+# =============================================================================
+lifecycle_scenario:
+  description: "Simule le cycle de vie complet d'un équipement"
+  target_equipment: "eq_vav_27"
+  steps:
+    - step: 1
+      qw: "QW7"
+      payload:
+        new_capability: "occupancy_based_control"
+
+    - step: 2
+      qw: "QW6"
+      payload:
+        metadata_patch:
+          commissioning_date: "2024-06-01"
+          commissioning_by: "Installer_Corp"
+          warranty_extended: true
+
+    - step: 3
+      qw: "QW4"
+      payload:
+        event:
+          date: "2024-06-15"
+          type: "commissioning_verification"
+          technician: "QA_Team"
+          result: "passed"
+
+    - step: 4
+      qw: "QW5"
+      payload:
+        calibration_date: "2024-06-15"
+        next_date: "2025-06-15"
+        technician: "Calibration_Specialist"
+
+  final_validation:
+    query: "Q19"  # Digital Twin - should show ALL accumulated data
+    expected:
+      has_capabilities: ["occupancy_based_control"]
+      has_commissioning_date: true
+      has_maintenance_history: true
+      has_calibration_data: true

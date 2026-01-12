@@ -39,6 +39,8 @@ class SampledParams:
     hvac_target_space_id: Optional[str] = None      # Q20
     critical_equipment_id: Optional[str] = None     # Q21
     building_with_offices_id: Optional[str] = None  # Q13
+    transformer_id: Optional[str] = None            # Q29
+    domain: str = "HVAC"                            # Q26, Q32
 
     # Dates (from dataset or defaults)
     date_start: str = "2024-01-15T00:00:00Z"
@@ -385,8 +387,69 @@ def get_params_for_query(query_id: str, sampled: SampledParams) -> Dict[str, Any
         },
         "Q22": {"EQUIPMENT_ID": sampled.equipment_id},
         "Q23": {
-            "SPACE_ID": sampled.space_id,
+            "EQUIPMENT_ID": sampled.equipment_id,
             "MAX_HOPS": sampled.max_hops,
+        },
+        # Q24-Q26: JSONB validation queries
+        "Q24": {"EQUIPMENT_ID": sampled.equipment_id},
+        "Q25": {"EQUIPMENT_ID": sampled.equipment_id},
+        "Q26": {"DOMAIN": sampled.domain},
+        # Q27-Q30: Graph-native extended
+        "Q27": {"SPACE_ID": sampled.space_id},
+        "Q28": {"METER_ID": sampled.meter_id},
+        "Q29": {"TRANSFORMER_ID": sampled.transformer_id or sampled.meter_id},
+        "Q30": {},  # No parameters
+        # Q31-Q34: SQL-native
+        "Q31": {
+            "BUILDING_ID": sampled.building_id,
+            "DATE_START": sampled.date_start,
+            "DATE_END": sampled.date_end,
+        },
+        "Q32": {"DOMAIN": sampled.domain},
+        "Q33": {"BUILDING_ID": sampled.building_id},
+        "Q34": {
+            "BUILDING_ID": sampled.building_id,
+            "DATE_START": sampled.date_start,
+            "DATE_END": sampled.date_end,
+        },
+        # QW1-QW3: Write workloads (basic params, payloads from write_payloads.yaml)
+        "QW1": {
+            "POINT_IDS": [sampled.point_id] if sampled.point_id else [],
+            "TIMESTAMPS": [sampled.date_start],
+            "VALUES": [21.5],
+        },
+        "QW2": {
+            "NODE_ID": sampled.equipment_id,
+            "TAG_KEY": "calibration_status",
+            "TAG_VALUE": "verified",
+        },
+        "QW3": {
+            "SOURCE_ID": sampled.meter_id,
+            "TARGET_ID": sampled.equipment_id,
+            "REL_TYPE": "FEEDS",
+        },
+        # QW4-QW8: JSONB write workloads
+        "QW4": {
+            "EQUIPMENT_ID": sampled.equipment_id,
+            "EVENT": {"date": sampled.reference_date, "type": "preventive", "technician": "Tech_A"},
+        },
+        "QW5": {
+            "POINT_ID": sampled.point_id,
+            "CALIBRATION_DATE": sampled.reference_date,
+            "NEXT_DATE": "2025-06-01",
+            "TECHNICIAN": "Calibration_Co",
+        },
+        "QW6": {
+            "EQUIPMENT_ID": sampled.equipment_id,
+            "METADATA_PATCH": {"firmware_version": "3.2.1", "last_update": sampled.reference_date},
+        },
+        "QW7": {
+            "EQUIPMENT_ID": sampled.equipment_id,
+            "NEW_CAPABILITY": "demand_control_ventilation",
+        },
+        "QW8": {
+            "NODE_ID": sampled.equipment_id,
+            "KEY_TO_REMOVE": "legacy_protocol_id",
         },
     }
 

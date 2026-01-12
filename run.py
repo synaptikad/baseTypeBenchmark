@@ -1224,10 +1224,17 @@ def check_schema_status():
                     """)
                     has_critical = cur.fetchone() is not None
 
+                    cur.execute("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_schema = 'p1' AND table_name = 'edges' AND column_name = 'distance'
+                    """)
+                    has_distance = cur.fetchone() is not None
+
                     console.print(f"  spaces.is_exit: {'[green]✓[/green]' if has_is_exit else '[red]✗ missing[/red]'}")
                     console.print(f"  equipment.critical: {'[green]✓[/green]' if has_critical else '[red]✗ missing[/red]'}")
+                    console.print(f"  edges.distance: {'[green]✓[/green]' if has_distance else '[red]✗ missing[/red]'}")
 
-                    if not has_is_exit or not has_critical:
+                    if not has_is_exit or not has_critical or not has_distance:
                         console.print()
                         console.print("[yellow]⚠ Schema needs migration. Options:[/yellow]")
                         console.print("  1. Run benchmark (auto-migrates)")

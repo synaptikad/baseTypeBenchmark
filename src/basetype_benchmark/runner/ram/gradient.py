@@ -1038,6 +1038,9 @@ class RAMGradientExecutor:
             hvac_target_space_id=file_params.get("hvac_target_space_id"),
             critical_equipment_id=file_params.get("critical_equipment_id"),
             building_with_offices_id=file_params.get("building_with_offices_id"),
+            # New fields for Q26/Q29/Q32
+            transformer_id=file_params.get("transformer_id"),
+            domain=file_params.get("domain", "HVAC"),
         )
 
     def _get_variant_params(self, query_id: str, variant_id: int) -> dict[str, Any]:

@@ -100,14 +100,16 @@ class P1Extractor(BaseExtractor):
         """Extrait les relations vers edges.csv"""
         rows = []
         for edge in self.dataset.edges:
-            rows.append({
+            row = {
                 "source_id": edge.source_id,
                 "target_id": edge.target_id,
-                "rel_type": edge.rel_type
-            })
+                "rel_type": edge.rel_type,
+                "distance": edge.properties.get("distance") if edge.properties else None
+            }
+            rows.append(row)
 
         filepath = self.output_dir / "edges.csv"
-        write_csv(filepath, rows, ["source_id", "target_id", "rel_type"])
+        write_csv(filepath, rows, ["source_id", "target_id", "rel_type", "distance"])
         print(f"  Created {filepath} ({len(rows)} rows)")
         return [filepath]
 
@@ -150,7 +152,7 @@ class P1Extractor(BaseExtractor):
 
         # Edges
         commands.append(
-            f"\\COPY edges(source_id, target_id, rel_type) FROM '{self.output_dir / 'edges.csv'}' WITH (FORMAT csv, HEADER true);"
+            f"\\COPY edges(source_id, target_id, rel_type, distance) FROM '{self.output_dir / 'edges.csv'}' WITH (FORMAT csv, HEADER true);"
         )
 
         # Timeseries
@@ -259,7 +261,8 @@ CREATE TABLE IF NOT EXISTS edges (
     id SERIAL PRIMARY KEY,
     source_id VARCHAR(64) NOT NULL,
     target_id VARCHAR(64) NOT NULL,
-    rel_type VARCHAR(32) NOT NULL
+    rel_type VARCHAR(32) NOT NULL,
+    distance FLOAT
 );
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);

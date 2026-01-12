@@ -613,8 +613,11 @@ class BenchmarkOrchestrator:
 
     def _get_all_queries(self) -> list[str]:
         """Get all available query IDs."""
-        # Default: Q1-Q23
-        return [f"Q{i}" for i in range(1, 24)]
+        # Q1-Q34: read queries
+        # QW1-QW8: write queries
+        read_queries = [f"Q{i}" for i in range(1, 35)]
+        write_queries = [f"QW{i}" for i in range(1, 9)]
+        return read_queries + write_queries
 
     def _print_summary(self, results: BenchmarkResults) -> None:
         """Print benchmark summary."""

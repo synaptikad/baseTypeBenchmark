@@ -780,12 +780,13 @@ class PostgresLoader(BaseLoader):
                             provider VARCHAR(255)
                         );
 
-                        -- Edges (NO properties column for P1)
+                        -- Edges (distance for Q27 weighted path)
                         CREATE TABLE IF NOT EXISTS {self.struct_schema}.edges (
                             id SERIAL PRIMARY KEY,
                             source_id VARCHAR(64) NOT NULL,
                             target_id VARCHAR(64) NOT NULL,
-                            rel_type VARCHAR(32) NOT NULL
+                            rel_type VARCHAR(32) NOT NULL,
+                            distance FLOAT
                         );
                         CREATE INDEX IF NOT EXISTS idx_edges_source ON {self.struct_schema}.edges(source_id);
                         CREATE INDEX IF NOT EXISTS idx_edges_target ON {self.struct_schema}.edges(target_id);
@@ -816,6 +817,16 @@ class PostgresLoader(BaseLoader):
                         if not cur.fetchone():
                             print(f"  📦 Migrating schema: adding critical to {self.struct_schema}.equipment")
                             cur.execute(f"ALTER TABLE {self.struct_schema}.equipment ADD COLUMN critical BOOLEAN DEFAULT false;")
+
+                        # Check and add distance to edges
+                        cur.execute(f"""
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_schema = '{self.struct_schema}'
+                            AND table_name = 'edges' AND column_name = 'distance'
+                        """)
+                        if not cur.fetchone():
+                            print(f"  📦 Migrating schema: adding distance to {self.struct_schema}.edges")
+                            cur.execute(f"ALTER TABLE {self.struct_schema}.edges ADD COLUMN distance FLOAT;")
 
                     else:  # P2
                         # P2: JSONB-enriched tables

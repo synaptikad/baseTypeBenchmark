@@ -16,12 +16,17 @@ node_modules/
 volumes/
 
 # Generated data
-data/
+data/generated/
+data/exports/
 out/
 /results/
 !bench/results/
 !bench/results/.gitkeep
 !docs/results/
+!data/results/
+
+# Raw benchmark data (large files, can be regenerated)
+data/results/runs/*/raw_results/
 
 # Logs and outputs
 *.log

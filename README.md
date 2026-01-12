@@ -384,4 +384,4 @@ docker compose -f docker/docker-compose.yml logs -f memgraph
 
 - [queries/catalog.yaml](queries/catalog.yaml) - Définition des 42 queries
 - [config/validation_rules.yaml](config/validation_rules.yaml) - Règles DEGRADED/IMPOSSIBLE
-- [docs/SPEC_WORKLOAD_SCENARIOS.md](docs/SPEC_WORKLOAD_SCENARIOS.md) - Spec load testing
+- [config/efficiency_thresholds.yaml](config/efficiency_thresholds.yaml) - Seuils d'efficience et conclusion

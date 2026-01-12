@@ -1,0 +1,62 @@
+{
+  "benchmark_id": "2026-01-12_104851",
+  "start_time": "2026-01-12T10:48:51.225401",
+  "end_time": null,
+  "config": {
+    "paradigms": [
+      "P1",
+      "P2",
+      "M1",
+      "M2",
+      "O2"
+    ],
+    "queries": [
+      "Q1",
+      "Q2",
+      "Q3",
+      "Q4",
+      "Q5",
+      "Q6",
+      "Q7",
+      "Q8",
+      "Q9",
+      "Q10",
+      "Q11",
+      "Q12",
+      "Q13",
+      "Q14",
+      "Q15",
+      "Q16",
+      "Q17",
+      "Q18",
+      "Q19",
+      "Q20",
+      "Q21",
+      "Q22",
+      "Q23"
+    ],
+    "data_profile": "large-6m",
+    "ram_levels_mb": [
+      8192,
+      12288,
+      16384,
+      24576,
+      32768,
+      49152,
+      65536,
+      98304,
+      131072
+    ],
+    "n_warmup": 0,
+    "n_runs": 5,
+    "n_variants": 3,
+    "timeout_seconds": 300.0
+  },
+  "environment": {
+    "git_hash": "f311372",
+    "git_branch": "v3",
+    "git_dirty": true,
+    "hostname": "b3-128-sbg5"
+  },
+  "query_parameters": {}
+}
