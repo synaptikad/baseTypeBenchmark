@@ -596,8 +596,10 @@ class RAMGradientExecutor:
                 params = self._get_variant_params(query_id, variant_id)
 
                 # Convert params to ordered tuple for P1/P2 (SQL positional binding)
-                # Skip for write_workload which uses named placeholders %(name)s
-                if self.paradigm in ("P1", "P2") and query_def.category != QueryCategory.WRITE_WORKLOAD:
+                # Skip for write_workload and jsonb_validation which use named placeholders %(name)s
+                if self.paradigm in ("P1", "P2") and query_def.category not in (
+                    QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_VALIDATION
+                ):
                     from ..core.query_utils import get_ordered_params
                     params = get_ordered_params(params, query_def.parameter_order)
 
@@ -819,8 +821,8 @@ class RAMGradientExecutor:
             ext_map = {"P1": "sql", "P2": "sql", "M1": "cypher"}
             ext = ext_map[self.paradigm]
 
-            # Check for write_workload category - look in write/ subdirectory
-            if category == QueryCategory.WRITE_WORKLOAD:
+            # Check for write categories - look in write/ subdirectory
+            if category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE):
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "write",
                     query_id,
@@ -844,11 +846,10 @@ class RAMGradientExecutor:
         elif self.paradigm in ("M2", "O2"):
             ext = "cypher" if self.paradigm == "M2" else "sparql"
 
-            if category in ("graph_only", "graph_native", "jsonb_specific"):
-                # Q1-Q5, Q10-Q11: graph_only
-                # Q20-Q23: graph_native
-                # Q14-Q19: jsonb_specific (O2 has SPARQL implementations)
-                # All load from graph/ subdirectory
+            if category in (QueryCategory.GRAPH_ONLY, QueryCategory.GRAPH_NATIVE,
+                           QueryCategory.JSONB_SPECIFIC, QueryCategory.JSONB_VALIDATION,
+                           QueryCategory.SQL_NATIVE):
+                # Graph-based queries load from graph/ subdirectory
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "graph",
                     query_id,
@@ -862,7 +863,7 @@ class RAMGradientExecutor:
                 cleaned = strip_query_comments(text, ext)
                 return {"query": cleaned}
 
-            elif category == "timeseries_pure":
+            elif category == QueryCategory.TIMESERIES_PURE:
                 # Q6: Load from ts/ subdirectory (SQL)
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "ts",
@@ -881,7 +882,7 @@ class RAMGradientExecutor:
                 cleaned = strip_query_comments(text, "sql")
                 return {"query": cleaned}
 
-            elif category == "hybrid":
+            elif category == QueryCategory.HYBRID:
                 # Q7-Q9, Q12-Q13: Load BOTH graph and ts files
                 graph_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "graph",
@@ -910,7 +911,7 @@ class RAMGradientExecutor:
                     "ts_query": strip_query_comments(ts_text, "sql"),
                 }
 
-            elif category == QueryCategory.WRITE_WORKLOAD:
+            elif category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE):
                 # Write workloads: look in write/ subdirectory
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "write",
@@ -1041,6 +1042,8 @@ class RAMGradientExecutor:
             # New fields for Q26/Q29/Q32
             transformer_id=file_params.get("transformer_id"),
             domain=file_params.get("domain", "HVAC"),
+            # Q27 evacuation path
+            evacuation_space_id=file_params.get("evacuation_space_id"),
         )
 
     def _get_variant_params(self, query_id: str, variant_id: int) -> dict[str, Any]:
