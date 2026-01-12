@@ -341,8 +341,11 @@ class WorkloadExecutor:
             params["batch_size"] = batch_size
 
         # Convert to tuple for SQL positional binding (P1/P2)
+        # Skip for write_workload, jsonb_write, and jsonb_validation which use named placeholders %(name)s
         query_def = self._catalog.get_query(query_id)
-        if self.paradigm in ("P1", "P2") and query_def.category != QueryCategory.WRITE_WORKLOAD:
+        if self.paradigm in ("P1", "P2") and query_def.category not in (
+            QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE, QueryCategory.JSONB_VALIDATION
+        ):
             from ..core.query_utils import get_ordered_params
             return get_ordered_params(params, query_def.parameter_order)
 

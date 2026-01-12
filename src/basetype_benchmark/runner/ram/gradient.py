@@ -596,9 +596,9 @@ class RAMGradientExecutor:
                 params = self._get_variant_params(query_id, variant_id)
 
                 # Convert params to ordered tuple for P1/P2 (SQL positional binding)
-                # Skip for write_workload and jsonb_validation which use named placeholders %(name)s
+                # Skip for write_workload, jsonb_write, and jsonb_validation which use named placeholders %(name)s
                 if self.paradigm in ("P1", "P2") and query_def.category not in (
-                    QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_VALIDATION
+                    QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE, QueryCategory.JSONB_VALIDATION
                 ):
                     from ..core.query_utils import get_ordered_params
                     params = get_ordered_params(params, query_def.parameter_order)
