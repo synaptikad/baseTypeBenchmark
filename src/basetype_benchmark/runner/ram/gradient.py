@@ -370,6 +370,13 @@ class RAMGradientExecutor:
         Returns:
             GradientResult with all levels
         """
+        # Early warning if data_path not set
+        if not self._data_path:
+            logger.warning(
+                "run_gradient called without data_path set. "
+                "Call set_data_path() before run_gradient() for proper parameter loading."
+            )
+
         levels_mb = levels_mb or self.DEFAULT_LEVELS_MB
         result = GradientResult(paradigm=self.paradigm)
 
@@ -974,10 +981,11 @@ class RAMGradientExecutor:
         # No sampled params available - return empty dict
         # Parameters MUST come from the dataset (queries_params.yaml or expected_answers)
         # The caller should ensure _sampled_params is initialized from the dataset
-        import logging
-        logger = logging.getLogger(__name__)
+        has_sampled = hasattr(self, "_sampled_params")
+        sampled_value = self._sampled_params if has_sampled else "unset"
         logger.warning(
             f"No sampled parameters for {query_id}. "
+            f"data_path={self._data_path}, _sampled_params={sampled_value}. "
             "Ensure dataset is loaded with queries_params.yaml."
         )
         return {}
