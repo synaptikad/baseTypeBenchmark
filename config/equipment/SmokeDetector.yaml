@@ -1,0 +1,20 @@
+# SmokeDetector - Smoke Detector
+# 2 points
+
+equipment:
+  code: SD
+  domain: FireSafety
+  haystack: smokeDetector
+  brick: Smoke_Detector
+  protocols: [bacnet]
+
+points:
+  - id: alarm_status
+    type: etat
+    values: [normal, alarm, fault]
+
+  - id: smoke_level
+    type: mesure
+    freq: event
+    unit: "%"
+    quantity: concentration

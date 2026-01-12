@@ -2,7 +2,7 @@
 
 Specifications EXACTES basees sur les fichiers YAML sources:
 - queries/catalog.yaml (categories, paradigm_status)
-- queries/golden_answers.yaml (parametres)
+- data/generated/{profile}/queries_params.yaml (parametres)
 - src/basetype_benchmark/schema/data_model.yaml (types)
 """
 from __future__ import annotations

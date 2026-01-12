@@ -2,7 +2,7 @@
 Dynamic Parameter Sampler - Benchmark BaseType V3
 
 Extrait des IDs et valeurs valides depuis le dataset chargé
-pour remplacer les paramètres hardcodés de golden_answers.yaml.
+pour générer dynamiquement les paramètres de requêtes.
 """
 
 from typing import Any, Dict, List, Optional

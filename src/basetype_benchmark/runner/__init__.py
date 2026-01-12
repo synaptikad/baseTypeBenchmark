@@ -30,7 +30,6 @@ from .core import (
     ExecutionStatus,
     get_catalog,
     get_query,
-    get_query_parameters,
 )
 from .cli import app as cli_app
 
@@ -55,7 +54,6 @@ __all__ = [
     "ExecutionStatus",
     "get_catalog",
     "get_query",
-    "get_query_parameters",
     # CLI
     "cli_app",
 ]

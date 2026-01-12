@@ -23,7 +23,10 @@ categories:
     queries: [Q14, Q15, Q16, Q17, Q18, Q19]
   graph_native:
     description: "Algorithmes graphe natifs (M1/M2=NATIVE)"
-    queries: [Q10, Q11, Q20, Q21, Q22, Q23]
+    queries: [Q10, Q11, Q20, Q21, Q22, Q23, Q27, Q28, Q29, Q30]
+  sql_native:
+    description: "Fonctionnalités SQL avancées (P1/P2=NATIVE)"
+    queries: [Q31, Q32, Q33, Q34]
   write_workload:
     description: "Workloads d'écriture (ingestion, mutation)"
     queries: [QW1, QW2, QW3]
@@ -928,21 +931,21 @@ queries:
       O2: {status: NATIVE, note: "Double pattern SPARQL"}
 
   Q23:
-    name: "Adjacency Propagation"
+    name: "Failure Impact Analysis"
     category: graph_native
     intention: |
-      Depuis un espace source (ex: incendie), trouver tous les espaces
-      adjacents et équipements impactés en N hops.
-    use_case: "Simulation évacuation, propagation alarme incendie, analyse zone d'influence"
+      Si cet équipement tombe en panne, quels espaces/équipements sont
+      impactés dans un rayon de N hops? Analyse de propagation de défaillance.
+    use_case: "Analyse d'impact de panne, planification maintenance, résilience infrastructure"
     parameters:
-      - name: SPACE_ID
+      - name: EQUIPMENT_ID
         type: string
-        description: "ID espace source"
+        description: "ID équipement source de la panne"
         format:
           sql: "$1"
-          cypher: "$space_id"
-          sparql: "?spaceId"
-        example: "space_lobby_1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "eq_mainmeter_1"
       - name: MAX_HOPS
         type: integer
         description: "Nombre maximum de hops"
@@ -952,7 +955,7 @@ queries:
           sparql: "?maxHops"
         example: 3
         default: 3
-    relations: [ADJACENT_TO, CONTAINS, MONITORS, SERVES]
+    relations: [FEEDS, SERVES, POWERS]
     max_depth: "$MAX_HOPS"
     result_schema:
       columns:
@@ -967,7 +970,7 @@ queries:
       P2: {status: NATIVE, note: "CTE récursif avec depth <= N fonctionnel"}
       M1: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
       M2: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL path enumeration causes combinatorial explosion (5322 rows vs 30)"}
+      O2: {status: DEGRADED, note: "Property path avec limite fixe à 3 hops"}
 
   # -------------------------------------------------------------------------
   # WRITE WORKLOADS (QW1-QW3)
@@ -1387,6 +1390,278 @@ queries:
       M1: {status: DEGRADED, note: "MAGE pour manipulation listes"}
       M2: {status: DEGRADED, note: "MAGE pour manipulation listes"}
       O2: {status: DEGRADED, note: "Agrégation SPARQL limitée"}
+
+  # -------------------------------------------------------------------------
+  # GRAPH-NATIVE EXTENDED (Q27-Q30) - Équilibre benchmark
+  # -------------------------------------------------------------------------
+
+  Q27:
+    name: "Evacuation Path"
+    category: graph_native
+    intention: |
+      Trouver le chemin d'évacuation le plus court depuis un espace vers
+      une sortie de secours, en tenant compte des distances.
+    use_case: "Plan d'évacuation, sécurité incendie, accessibilité"
+    parameters:
+      - name: SPACE_ID
+        type: string
+        description: "ID de l'espace de départ"
+        format:
+          sql: "$1"
+          cypher: "$space_id"
+          sparql: "?spaceId"
+        example: "space_office_301"
+    relations: [EMERGENCY_EXIT, ACCESSIBLE_FROM]
+    result_schema:
+      columns:
+        - {name: path_index, type: integer, description: "Position dans le chemin"}
+        - {name: node_id, type: string, description: "ID nœud"}
+        - {name: node_name, type: string, description: "Nom nœud"}
+        - {name: total_distance, type: float, description: "Distance cumulée en mètres"}
+      order_by: [path_index]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "CTE récursif avec accumulation poids, non optimal"}
+      P2: {status: DEGRADED, note: "CTE récursif avec accumulation poids, non optimal"}
+      M1: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
+      M2: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de shortestPath pondéré"}
+
+  Q28:
+    name: "Tenant Impact Chain"
+    category: graph_native
+    intention: |
+      Si un sous-compteur est coupé, identifier tous les locataires impactés
+      via la chaîne: SubMeter → Equipment → Space → Tenant.
+    use_case: "Impact coupure électrique sur locataires, facturation, SLA"
+    parameters:
+      - name: METER_ID
+        type: string
+        description: "ID du sous-compteur"
+        format:
+          sql: "$1"
+          cypher: "$meter_id"
+          sparql: "?meterId"
+        example: "eq_submeter_floor2"
+    relations: [FEEDS, SERVES, OCCUPIES]
+    result_schema:
+      columns:
+        - {name: tenant_id, type: string, description: "ID locataire impacté"}
+        - {name: tenant_name, type: string, description: "Nom locataire"}
+        - {name: affected_spaces, type: integer, description: "Nombre d'espaces affectés"}
+        - {name: affected_equipment, type: integer, description: "Nombre d'équipements affectés"}
+      order_by: [affected_equipment DESC, tenant_id]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "5 JOINs avec DISTINCT, verbose mais fonctionnel"}
+      P2: {status: DEGRADED, note: "5 JOINs avec DISTINCT, verbose mais fonctionnel"}
+      M1: {status: NATIVE, note: "Traversée chaîne 5-hop naturelle en Cypher"}
+      M2: {status: NATIVE, note: "Traversée chaîne 5-hop naturelle en Cypher"}
+      O2: {status: DEGRADED, note: "Property path multi-prédicats complexe"}
+
+  Q29:
+    name: "All Power Paths"
+    category: graph_native
+    intention: |
+      Énumérer tous les chemins électriques entre un transformateur et les
+      équipements critiques. Utilisé pour analyse de redondance.
+    use_case: "Audit résilience électrique, planification maintenance"
+    parameters:
+      - name: TRANSFORMER_ID
+        type: string
+        description: "ID du transformateur source"
+        format:
+          sql: "$1"
+          cypher: "$transformer_id"
+          sparql: "?transformerId"
+        example: "eq_transformer_main"
+    relations: [FEEDS]
+    filters:
+      - property: critical
+        value: true
+    max_depth: 10
+    result_schema:
+      columns:
+        - {name: path_id, type: integer, description: "ID du chemin"}
+        - {name: path_nodes, type: array, description: "Liste des nœuds du chemin"}
+        - {name: path_length, type: integer, description: "Longueur du chemin"}
+        - {name: target_equipment, type: string, description: "Équipement critique cible"}
+      order_by: [path_length, path_id]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "CTE avec ARRAY accumulation, risque mémoire"}
+      P2: {status: DEGRADED, note: "CTE avec ARRAY accumulation, risque mémoire"}
+      M1: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
+      M2: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
+      O2: {status: IMPOSSIBLE, note: "Énumération exhaustive non supportée"}
+
+  Q30:
+    name: "Cycle Detection"
+    category: graph_native
+    intention: |
+      Détecter les cycles dans les relations FEEDS (erreur de configuration).
+      Un cycle électrique est une anomalie à corriger.
+    use_case: "Validation données, détection erreurs import, audit qualité"
+    parameters: []
+    relations: [FEEDS]
+    result_schema:
+      columns:
+        - {name: node_id, type: string, description: "ID nœud impliqué dans un cycle"}
+        - {name: node_type, type: string, description: "Type d'équipement"}
+        - {name: node_name, type: string, description: "Nom équipement"}
+        - {name: cycle_length, type: integer, description: "Longueur du cycle détecté"}
+      order_by: [cycle_length, node_id]
+    paradigm_status:
+      P1: {status: DEGRADED, note: "CTE avec détection revisite via ARRAY, O(n²)"}
+      P2: {status: DEGRADED, note: "CTE avec détection revisite via ARRAY, O(n²)"}
+      M1: {status: NATIVE, note: "Pattern (n)-[:FEEDS*2..10]->(n) optimisé"}
+      M2: {status: NATIVE, note: "Pattern (n)-[:FEEDS*2..10]->(n) optimisé"}
+      O2: {status: DEGRADED, note: "Property path cyclique possible mais lent"}
+
+  # -------------------------------------------------------------------------
+  # SQL-NATIVE (Q31-Q34) - Avantage SQL
+  # -------------------------------------------------------------------------
+
+  Q31:
+    name: "Rolling Aggregation"
+    category: sql_native
+    intention: |
+      Calculer des agrégations glissantes (rolling average, percentiles)
+      sur les timeseries d'un bâtiment.
+    use_case: "Analyse tendances, lissage données, reporting avancé"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID du bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+          sparql: "?buildingId"
+        example: "building_hq_1"
+      - name: DATE_START
+        type: timestamp
+        format:
+          sql: "$2"
+          cypher: "$date_start"
+        example: "2024-01-01T00:00:00Z"
+      - name: DATE_END
+        type: timestamp
+        format:
+          sql: "$3"
+          cypher: "$date_end"
+        example: "2024-01-31T23:59:59Z"
+    result_schema:
+      columns:
+        - {name: point_id, type: string, description: "ID point"}
+        - {name: time_bucket, type: timestamp, description: "Bucket temporel"}
+        - {name: rolling_avg, type: float, description: "Moyenne glissante 6h"}
+        - {name: p95, type: float, description: "95e percentile"}
+        - {name: stddev, type: float, description: "Écart-type"}
+      order_by: [point_id, time_bucket]
+    paradigm_status:
+      P1: {status: NATIVE, note: "Window functions PostgreSQL optimisées"}
+      P2: {status: NATIVE, note: "Window functions PostgreSQL optimisées"}
+      M1: {status: DEGRADED, note: "Pas de window functions, UNWIND + collect"}
+      M2: {status: NATIVE, note: "Via TimescaleDB"}
+      O2: {status: DEGRADED, note: "SPARQL n'a pas de window functions"}
+
+  Q32:
+    name: "JSON Schema Validation"
+    category: sql_native
+    intention: |
+      Valider la structure JSONB des équipements HVAC: vérifier présence
+      des champs protocol, metadata, et leur type.
+    use_case: "Audit qualité données, validation import, conformité schéma"
+    parameters:
+      - name: DOMAIN
+        type: string
+        description: "Domaine d'équipements à valider"
+        format:
+          sql: "$1"
+          cypher: "$domain"
+        example: "HVAC"
+    jsonb_operations: [jsonb_typeof, key_exists, containment]
+    result_schema:
+      columns:
+        - {name: equipment_id, type: string, description: "ID équipement"}
+        - {name: name, type: string, description: "Nom équipement"}
+        - {name: schema_status, type: string, description: "valid/invalid"}
+        - {name: missing_fields, type: array, description: "Champs manquants"}
+      order_by: [schema_status, equipment_id]
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB"}
+      P2: {status: NATIVE, note: "Opérateurs JSONB: ?, @>, jsonb_typeof"}
+      M1: {status: DEGRADED, note: "Pas d'opérateurs JSON natifs en Cypher"}
+      M2: {status: DEGRADED, note: "Pas d'opérateurs JSON natifs en Cypher"}
+      O2: {status: IMPOSSIBLE, note: "RDF n'a pas de validation schéma inline"}
+
+  Q33:
+    name: "Latest Value per Space"
+    category: sql_native
+    intention: |
+      Pour chaque espace d'un bâtiment, récupérer la dernière valeur de
+      chaque point de mesure via LATERAL JOIN efficace.
+    use_case: "Dashboard temps réel, vue synthétique, API live"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID du bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+        example: "building_hq_1"
+    result_schema:
+      columns:
+        - {name: space_id, type: string, description: "ID espace"}
+        - {name: space_name, type: string, description: "Nom espace"}
+        - {name: point_id, type: string, description: "ID point"}
+        - {name: quantity, type: string, description: "Grandeur mesurée"}
+        - {name: last_value, type: float, description: "Dernière valeur"}
+        - {name: last_time, type: timestamp, description: "Timestamp dernière mesure"}
+      order_by: [space_id, point_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "LATERAL JOIN optimisé"}
+      P2: {status: NATIVE, note: "LATERAL JOIN optimisé"}
+      M1: {status: IMPOSSIBLE, note: "Cypher n'a pas de LATERAL, pas de TS"}
+      M2: {status: DEGRADED, note: "Orchestration Cypher → SQL requise"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de subquery corrélée efficace"}
+
+  Q34:
+    name: "Materialized Energy Summary"
+    category: sql_native
+    intention: |
+      Lire depuis une vue matérialisée pré-calculée les agrégats énergie
+      par jour et par bâtiment. Test de pattern cache/refresh.
+    use_case: "Dashboard direction, reporting, performance requêtes fréquentes"
+    parameters:
+      - name: BUILDING_ID
+        type: string
+        description: "ID du bâtiment"
+        format:
+          sql: "$1"
+          cypher: "$building_id"
+        example: "building_hq_1"
+      - name: DATE_START
+        type: date
+        format:
+          sql: "$2"
+        example: "2024-01-01"
+      - name: DATE_END
+        type: date
+        format:
+          sql: "$3"
+        example: "2024-01-31"
+    result_schema:
+      columns:
+        - {name: building_id, type: string, description: "ID bâtiment"}
+        - {name: day, type: date, description: "Jour"}
+        - {name: total_energy_kwh, type: float, description: "Énergie totale kWh"}
+        - {name: peak_power_kw, type: float, description: "Pic de puissance kW"}
+        - {name: meter_count, type: integer, description: "Nombre de compteurs"}
+      order_by: [day]
+    paradigm_status:
+      P1: {status: NATIVE, note: "Vues matérialisées PostgreSQL"}
+      P2: {status: NATIVE, note: "Vues matérialisées PostgreSQL"}
+      M1: {status: IMPOSSIBLE, note: "Memgraph n'a pas de vues matérialisées"}
+      M2: {status: DEGRADED, note: "Via TimescaleDB continuous aggregates"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de vues matérialisées"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

@@ -299,6 +299,8 @@ class CapabilitiesGenerator:
         'FCU': ['heating', 'cooling', 'fan_coil'],
         'Chiller': ['cooling', 'free_cooling', 'ice_storage'],
         'Boiler': ['heating', 'condensing', 'modulating'],
+        'CRAC': ['cooling', 'humidity_control', 'precision_cooling', 'hot_aisle_containment'],
+        'CoolingTower': ['heat_rejection', 'free_cooling', 'variable_speed_fans'],
         'UPS': ['battery_backup', 'surge_protection', 'power_conditioning'],
         'NetworkSwitch': ['poe', 'layer3', 'managed', 'stacking'],
         'IPCamera': ['ptz', 'night_vision', 'motion_detection', 'audio'],
@@ -311,6 +313,8 @@ class CapabilitiesGenerator:
         'FCU': 'brick:Fan_Coil_Unit',
         'Chiller': 'brick:Chiller',
         'Boiler': 'brick:Boiler',
+        'CRAC': 'brick:Computer_Room_Air_Conditioning',
+        'CoolingTower': 'brick:Cooling_Tower',
         'MainMeter': 'brick:Electrical_Meter',
         'SubMeter': 'brick:Electrical_Sub_Meter',
         'TemperatureSensor': 'brick:Temperature_Sensor',
@@ -323,6 +327,8 @@ class CapabilitiesGenerator:
         'FCU': 'haystack:fcu',
         'Chiller': 'haystack:chiller',
         'Boiler': 'haystack:boiler',
+        'CRAC': 'haystack:crac',
+        'CoolingTower': 'haystack:coolingTower',
         'MainMeter': 'haystack:elec-meter',
         'SubMeter': 'haystack:sub-meter',
     }
@@ -522,6 +528,11 @@ class DatasetGenerator:
         self._points_by_equipment: Dict[str, List[str]] = {}
         self._meters: List[str] = []
         self._submeters: List[str] = []
+        self._dali_gateways: Dict[str, str] = {}  # floor_id -> dali_gateway_id
+        self._technicians: List[str] = []
+        self._fire_panels: Dict[str, str] = {}  # building_id -> fire_panel_id
+        self._chillers: List[str] = []  # Chiller equipment per building
+        self._boilers: List[str] = []  # Boiler equipment per building
 
     def generate(self) -> 'DatasetGenerator':
         """Génère le dataset complet"""
@@ -536,16 +547,22 @@ class DatasetGenerator:
         # 3. Tenants
         self._generate_tenants()
 
+        # 3b. Schedules and Leases
+        self._generate_schedules_and_leases()
+
         # 4. Zones
         self._generate_zones()
 
         # 5. Relations additionnelles
         self._generate_additional_relations()
 
-        # 6. Orphelin (pour Q5)
+        # 6. Maintenance entities (Technicians, WorkOrders, Alarms)
+        self._generate_maintenance_entities()
+
+        # 7. Orphelin (pour Q5)
         self._generate_orphan()
 
-        # 7. Timeseries
+        # 8. Timeseries
         self._generate_timeseries()
 
         print(f"Generated: {len(self.nodes)} nodes, {len(self.edges)} edges, {len(self.timeseries)} timeseries points")
@@ -584,6 +601,8 @@ class DatasetGenerator:
 
             # Floors
             floor_counter = 0
+            basement_counter = 0
+            above_ground_counter = -1  # Will be 0 for ground floor
             for floor_config in self.profile.floors:
                 floor_type = floor_config['type']
                 floor_count = floor_config['count']
@@ -594,7 +613,13 @@ class DatasetGenerator:
                     self._floors[building_id].append(floor_id)
                     self._spaces[floor_id] = []
 
-                    level_index = floor_counter - 1 if floor_type != 'basement' else -(floor_counter)
+                    # Correct level_index: basement = -1, -2, ...; ground = 0; standard = 1, 2, ...
+                    if floor_type == 'basement':
+                        basement_counter += 1
+                        level_index = -basement_counter
+                    else:
+                        above_ground_counter += 1
+                        level_index = above_ground_counter
 
                     self.nodes.append(Node(
                         id=floor_id,
@@ -618,6 +643,9 @@ class DatasetGenerator:
                             self._spaces[floor_id].append(space_id)
                             self._equipment_by_space[space_id] = []
 
+                            # Q27: is_exit for emergency exit spaces (stairwell, lobby, corridor on ground floor)
+                            is_exit_space = space_type in ['stairwell', 'lobby', 'corridor'] and level_index == 0
+
                             self.nodes.append(Node(
                                 id=space_id,
                                 type="Space",
@@ -626,8 +654,10 @@ class DatasetGenerator:
                                     'floor_id': floor_id,
                                     'building_id': building_id,
                                     'space_type': space_type,
+                                    'level_index': level_index,
                                     'area_m2': self.rng.uniform(15, 100),
-                                    'capacity': self.rng.randint(2, 20)
+                                    'capacity': self.rng.randint(2, 20),
+                                    'is_exit': is_exit_space
                                 }
                             ))
                             self.edges.append(Edge(floor_id, space_id, "CONTAINS"))
@@ -636,20 +666,94 @@ class DatasetGenerator:
             for floor_id in self._floors[building_id]:
                 spaces = self._spaces[floor_id]
                 for i in range(len(spaces) - 1):
-                    self.edges.append(Edge(spaces[i], spaces[i + 1], "ADJACENT_TO"))
-                    self.edges.append(Edge(spaces[i + 1], spaces[i], "ADJACENT_TO"))
+                    # Q27: distance property for weighted shortest path
+                    distance = self.rng.uniform(5.0, 25.0)  # meters
+                    self.edges.append(Edge(spaces[i], spaces[i + 1], "ADJACENT_TO", {'distance': distance}))
+                    self.edges.append(Edge(spaces[i + 1], spaces[i], "ADJACENT_TO", {'distance': distance}))
+
+                # Q27: EMERGENCY_EXIT edges from all spaces to exit spaces on same floor
+                exit_spaces = [s for s in spaces if self._get_node(s).properties.get('is_exit', False)]
+                non_exit_spaces = [s for s in spaces if not self._get_node(s).properties.get('is_exit', False)]
+                for exit_space in exit_spaces:
+                    for space in non_exit_spaces:
+                        # Distance proportional to position difference (simplified)
+                        dist = self.rng.uniform(10.0, 50.0)
+                        self.edges.append(Edge(space, exit_space, "EMERGENCY_EXIT", {'distance': dist}))
 
     def _generate_equipment_and_points(self):
         """Génère les équipements et leurs points selon les configs"""
 
         for building_id in self._buildings:
+            # Collect all technical spaces for this building (for meter placement)
+            all_technical_elec_spaces = []
+            all_technical_hvac_spaces = []
+            for floor_id in self._floors[building_id]:
+                for space_id in self._spaces[floor_id]:
+                    space_node = self._get_node(space_id)
+                    space_type = space_node.properties.get('space_type', '')
+                    if 'technical_elec' in space_type:
+                        all_technical_elec_spaces.append(space_id)
+                    elif 'technical_hvac' in space_type:
+                        all_technical_hvac_spaces.append(space_id)
+
+            # Determine technical space for meters (prefer electrical, fallback to hvac)
+            meter_technical_spaces = all_technical_elec_spaces if all_technical_elec_spaces else all_technical_hvac_spaces
+
+            # Fire Alarm Panel - one per building in first technical_elec space
+            if all_technical_elec_spaces:
+                tech_space = all_technical_elec_spaces[0]
+                # Get floor_id from the space
+                space_node = self._get_node(tech_space)
+                floor_id = space_node.properties.get('floor_id') if space_node else None
+                fire_panel = self._create_equipment('FireAlarmPanel', building_id, floor_id, tech_space)
+                self.edges.append(Edge(fire_panel, tech_space, "LOCATED_IN"))
+                self.edges.append(Edge(fire_panel, building_id, "SERVES"))
+                self._fire_panels[building_id] = fire_panel
+
+            # 0a. Transformer_HT_BT - One per building (before MainMeter)
+            # Located in technical_elec space, feeds main meter
+            transformer_id = None
+            if all_technical_elec_spaces:
+                tech_space = all_technical_elec_spaces[0]
+                space_node = self._get_node(tech_space)
+                floor_id = space_node.properties.get('floor_id') if space_node else None
+                transformer_id = self._create_equipment('Transformer_HT_BT', building_id, floor_id, tech_space)
+                self.edges.append(Edge(transformer_id, tech_space, "LOCATED_IN"))
+
+            # 0b. Generator - One per building (backup power)
+            # Located in technical_elec or basement, backs up main meter
+            generator_id = None
+            generator_space = None
+            if all_technical_elec_spaces:
+                generator_space = all_technical_elec_spaces[0]
+            # Could also use basement if available - for now use technical_elec
+            if generator_space:
+                space_node = self._get_node(generator_space)
+                floor_id = space_node.properties.get('floor_id') if space_node else None
+                generator_id = self._create_equipment('Generator', building_id, floor_id, generator_space)
+                self.edges.append(Edge(generator_id, generator_space, "LOCATED_IN"))
+
             # 1. Compteur principal
             main_meter_id = self._create_equipment(
                 'MainMeter', building_id, None, None, is_meter=True
             )
             self._meters.append(main_meter_id)
 
+            # MainMeter edges: LOCATED_IN technical space, SERVES building
+            if meter_technical_spaces:
+                self.edges.append(Edge(main_meter_id, meter_technical_spaces[0], "LOCATED_IN"))
+            self.edges.append(Edge(main_meter_id, building_id, "SERVES"))
+
+            # Connect Transformer to MainMeter (Transformer FEEDS MainMeter)
+            if transformer_id:
+                self.edges.append(Edge(transformer_id, main_meter_id, "FEEDS"))
+
+            # Connect Generator as backup to MainMeter (Generator BACKS_UP MainMeter)
+            if generator_id:
+                self.edges.append(Edge(generator_id, main_meter_id, "BACKS_UP"))
+
             # 2. Sous-compteurs
+            floors_list = list(self._floors[building_id])
             for i in range(self.profile.meters.get('electrical', {}).get('per_building', 3)):
                 submeter_id = self._create_equipment(
                     'SubMeter', building_id, None, None, is_meter=True
@@ -657,21 +761,119 @@ class DatasetGenerator:
                 self._submeters.append(submeter_id)
                 self.edges.append(Edge(main_meter_id, submeter_id, "FEEDS"))
 
+                # SubMeter edges: LOCATED_IN technical space, SERVES floor or building
+                if meter_technical_spaces:
+                    # Distribute submeters across available technical spaces
+                    tech_space = meter_technical_spaces[i % len(meter_technical_spaces)]
+                    self.edges.append(Edge(submeter_id, tech_space, "LOCATED_IN"))
+
+                # SubMeter SERVES a floor (if available) or the building
+                if floors_list:
+                    served_floor = floors_list[i % len(floors_list)]
+                    self.edges.append(Edge(submeter_id, served_floor, "SERVES"))
+                else:
+                    self.edges.append(Edge(submeter_id, building_id, "SERVES"))
+
             # 3. Équipements HVAC principaux
             ahu_ids = []
             for floor_id in self._floors[building_id]:
                 # AHU par étage (si technical_hvac)
                 spaces_on_floor = self._spaces[floor_id]
-                technical_spaces = [s for s in spaces_on_floor
-                                   if 'technical' in self._get_node(s).properties.get('space_type', '')]
+                technical_hvac_spaces = [s for s in spaces_on_floor
+                                         if 'technical_hvac' in self._get_node(s).properties.get('space_type', '')]
 
-                if technical_spaces:
-                    ahu_id = self._create_equipment('AHU', building_id, floor_id, technical_spaces[0])
+                for tech_space in technical_hvac_spaces:
+                    ahu_id = self._create_equipment('AHU', building_id, floor_id, tech_space)
                     ahu_ids.append(ahu_id)
+                    # AHU localisé dans le local technique
+                    self.edges.append(Edge(ahu_id, tech_space, "LOCATED_IN"))
                     # AHU alimenté par sous-compteur
                     if self._submeters:
                         self.edges.append(Edge(self.rng.choice(self._submeters), ahu_id, "FEEDS"))
                     self.edges.append(Edge(ahu_id, building_id, "SERVES"))
+
+                    # Capteur température dans le local technique (pour Q4)
+                    temp_sensor = self._create_equipment('TemperatureSensor', building_id, floor_id, tech_space)
+                    self.edges.append(Edge(temp_sensor, tech_space, "LOCATED_IN"))
+                    self.edges.append(Edge(temp_sensor, tech_space, "MONITORS"))
+
+                # Équipements électriques dans technical_elec (TGBT, etc.)
+                technical_elec_spaces = [s for s in spaces_on_floor
+                                         if 'technical_elec' in self._get_node(s).properties.get('space_type', '')]
+                for elec_space in technical_elec_spaces:
+                    # Capteur température pour surveillance TGBT
+                    temp_sensor = self._create_equipment('TemperatureSensor', building_id, floor_id, elec_space)
+                    self.edges.append(Edge(temp_sensor, elec_space, "LOCATED_IN"))
+                    self.edges.append(Edge(temp_sensor, elec_space, "MONITORS"))
+
+            # ===== CENTRAL HVAC EQUIPMENT (Chiller, Boiler, CoolingTower) =====
+            # Find basement and rooftop floors for placement
+            basement_floor = None
+            rooftop_floor = None
+            basement_tech_space = None
+            rooftop_tech_space = None
+
+            for floor_id in self._floors[building_id]:
+                floor_node = self._get_node(floor_id)
+                if floor_node:
+                    floor_type = floor_node.properties.get('floor_type', '')
+                    level_index = floor_node.properties.get('level_index', 0)
+
+                    # Find technical spaces on this floor
+                    spaces_on_floor = self._spaces.get(floor_id, [])
+                    tech_spaces = [s for s in spaces_on_floor
+                                   if 'technical' in self._get_node(s).properties.get('space_type', '')]
+
+                    if floor_type == 'basement' and tech_spaces:
+                        basement_floor = floor_id
+                        basement_tech_space = tech_spaces[0]
+                    elif floor_type == 'rooftop' and tech_spaces:
+                        rooftop_floor = floor_id
+                        rooftop_tech_space = tech_spaces[0]
+                    elif level_index == max(f.properties.get('level_index', 0)
+                                            for f in [self._get_node(fid) for fid in self._floors[building_id]]
+                                            if f) and tech_spaces:
+                        # Use highest floor as rooftop if no explicit rooftop
+                        if not rooftop_floor:
+                            rooftop_floor = floor_id
+                            rooftop_tech_space = tech_spaces[0]
+
+            # Fallback: use first available technical space if basement not found
+            if not basement_tech_space and all_technical_hvac_spaces:
+                basement_tech_space = all_technical_hvac_spaces[0]
+                space_node = self._get_node(basement_tech_space)
+                basement_floor = space_node.properties.get('floor_id') if space_node else self._floors[building_id][0]
+
+            # Chiller - One per building (in basement or rooftop technical space)
+            if basement_tech_space:
+                chiller = self._create_equipment('Chiller', building_id, basement_floor, basement_tech_space)
+                self.edges.append(Edge(chiller, basement_tech_space, "LOCATED_IN"))
+                self.edges.append(Edge(chiller, building_id, "SERVES"))
+                # Chiller supplies AHUs
+                for ahu_id in ahu_ids:
+                    self.edges.append(Edge(chiller, ahu_id, "SUPPLIES"))
+                # Fed by electrical
+                if self._submeters:
+                    self.edges.append(Edge(self.rng.choice(self._submeters), chiller, "FEEDS"))
+                self._chillers.append(chiller)
+
+            # Boiler - One per building (same location as chiller)
+            if basement_tech_space:
+                boiler = self._create_equipment('Boiler', building_id, basement_floor, basement_tech_space)
+                self.edges.append(Edge(boiler, basement_tech_space, "LOCATED_IN"))
+                self.edges.append(Edge(boiler, building_id, "SERVES"))
+                # Boiler supplies AHUs
+                for ahu_id in ahu_ids:
+                    self.edges.append(Edge(boiler, ahu_id, "SUPPLIES"))
+                self._boilers.append(boiler)
+
+            # CoolingTower - One per building on rooftop
+            if rooftop_tech_space:
+                cooling_tower = self._create_equipment('CoolingTower', building_id, rooftop_floor, rooftop_tech_space)
+                self.edges.append(Edge(cooling_tower, rooftop_tech_space, "LOCATED_IN"))
+                # Cooling tower supplies chiller
+                if self._chillers:
+                    self.edges.append(Edge(cooling_tower, self._chillers[-1], "SUPPLIES"))
 
             # 4. VAV/FCU par espace (offices, meeting rooms)
             for floor_id in self._floors[building_id]:
@@ -696,31 +898,227 @@ class DatasetGenerator:
                         self.edges.append(Edge(sensor_id, space_id, "MONITORS"))
                         self.edges.append(Edge(sensor_id, space_id, "LOCATED_IN"))
 
-                    # Capteurs CO2 dans grands espaces
-                    if 'open' in space_type or 'conference' in space_type:
+                    # CO2 sensor - expanded to all offices and meeting rooms
+                    if 'office' in space_type or 'meeting' in space_type:
                         co2_id = self._create_equipment('CO2_Sensor', building_id, floor_id, space_id)
+                        self.edges.append(Edge(co2_id, space_id, "LOCATED_IN"))
                         self.edges.append(Edge(co2_id, space_id, "MONITORS"))
+
+                    # Occupancy sensor - for presence detection in occupied spaces
+                    if any(x in space_type for x in ['office', 'meeting', 'corridor', 'lobby', 'restroom']):
+                        occupancy = self._create_equipment('Occupancy_Sensor', building_id, floor_id, space_id)
+                        self.edges.append(Edge(occupancy, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(occupancy, space_id, "MONITORS"))
+
+                    # Humidity sensor - in offices and technical spaces
+                    if 'office' in space_type or 'technical' in space_type:
+                        humidity = self._create_equipment('Humidity_Sensor', building_id, floor_id, space_id)
+                        self.edges.append(Edge(humidity, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(humidity, space_id, "MONITORS"))
+
+                    # Water leak sensor - in technical spaces and restrooms
+                    if 'technical' in space_type or 'restroom' in space_type:
+                        water_leak = self._create_equipment('WaterLeakSensor', building_id, floor_id, space_id)
+                        self.edges.append(Edge(water_leak, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(water_leak, space_id, "MONITORS"))
+
+                    # Air quality sensor - in open spaces and lobbies
+                    if 'open' in space_type or 'lobby' in space_type:
+                        air_quality = self._create_equipment('AirQuality_Sensor', building_id, floor_id, space_id)
+                        self.edges.append(Edge(air_quality, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(air_quality, space_id, "MONITORS"))
 
                     # Sécurité
                     if 'lobby' in space_type or 'entry' in space_type:
                         badge_id = self._create_equipment('BadgeReader', building_id, floor_id, space_id)
+                        self.edges.append(Edge(badge_id, space_id, "LOCATED_IN"))
                         self.edges.append(Edge(badge_id, space_id, "SECURES"))
                         self.edges.append(Edge(badge_id, space_id, "GRANTS_ACCESS"))
 
                         cam_id = self._create_equipment('IPCamera', building_id, floor_id, space_id)
+                        self.edges.append(Edge(cam_id, space_id, "LOCATED_IN"))
                         self.edges.append(Edge(cam_id, space_id, "MONITORS"))
 
                     # IT dans server_room
                     if 'server' in space_type or 'technical_it' in space_type:
                         ups_id = self._create_equipment('UPS', building_id, floor_id, space_id)
+                        self.edges.append(Edge(ups_id, space_id, "LOCATED_IN"))
                         self.edges.append(Edge(main_meter_id, ups_id, "FEEDS"))
 
+                        # PDU - Power Distribution Unit, in server_room, fed by UPS
+                        pdu_id = self._create_equipment('PDU', building_id, floor_id, space_id)
+                        self.edges.append(Edge(pdu_id, space_id, "LOCATED_IN"))
+                        # UPS feeds PDU
+                        self.edges.append(Edge(ups_id, pdu_id, "FEEDS"))
+
+                        # Create servers - PDU feeds servers (instead of UPS directly)
+                        server_ids = []
                         for _ in range(self.rng.randint(2, 5)):
                             server_id = self._create_equipment('RackServer', building_id, floor_id, space_id)
-                            self.edges.append(Edge(ups_id, server_id, "FEEDS"))
+                            self.edges.append(Edge(server_id, space_id, "LOCATED_IN"))
+                            server_ids.append(server_id)
+
+                        # PDU feeds servers
+                        for server_id in server_ids:
+                            self.edges.append(Edge(pdu_id, server_id, "FEEDS"))
 
                         switch_id = self._create_equipment('NetworkSwitch', building_id, floor_id, space_id)
-                        self.edges.append(Edge(ups_id, switch_id, "FEEDS"))
+                        self.edges.append(Edge(switch_id, space_id, "LOCATED_IN"))
+                        # PDU also feeds network switch
+                        self.edges.append(Edge(pdu_id, switch_id, "FEEDS"))
+
+                        # Capteur température pour datacenter
+                        temp_sensor = self._create_equipment('TemperatureSensor', building_id, floor_id, space_id)
+                        self.edges.append(Edge(temp_sensor, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(temp_sensor, space_id, "MONITORS"))
+
+                        # CRAC - Computer Room AC in server_room or technical_it spaces
+                        crac = self._create_equipment('CRAC', building_id, floor_id, space_id)
+                        self.edges.append(Edge(crac, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(crac, space_id, "SERVES"))
+                        # CRAC supplied by chiller
+                        if self._chillers:
+                            self.edges.append(Edge(self._chillers[-1], crac, "SUPPLIES"))
+
+                    # ===== FIRE SAFETY EQUIPMENT =====
+
+                    # SmokeDetector - in every space except parking
+                    if 'parking' not in space_type:
+                        smoke_detector = self._create_equipment('SmokeDetector', building_id, floor_id, space_id)
+                        self.edges.append(Edge(smoke_detector, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(smoke_detector, space_id, "MONITORS"))
+                        # Connected to fire panel
+                        if building_id in self._fire_panels:
+                            self.edges.append(Edge(self._fire_panels[building_id], smoke_detector, "MONITORS"))
+
+                    # ManualCallPoint - in corridors and near exits
+                    if 'corridor' in space_type:
+                        mcp = self._create_equipment('ManualCallPoint', building_id, floor_id, space_id)
+                        self.edges.append(Edge(mcp, space_id, "LOCATED_IN"))
+                        # Connected to fire panel
+                        if building_id in self._fire_panels:
+                            self.edges.append(Edge(mcp, self._fire_panels[building_id], "TRIGGERS"))
+
+                    # Sprinkler - in offices, meeting rooms, storage
+                    if 'office' in space_type or 'meeting' in space_type or 'storage' in space_type:
+                        sprinkler = self._create_equipment('Sprinkler', building_id, floor_id, space_id)
+                        self.edges.append(Edge(sprinkler, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(sprinkler, space_id, "SERVES"))
+
+                    # FireExtinguisher - in corridors and technical spaces
+                    if 'corridor' in space_type or 'technical' in space_type:
+                        fire_ext = self._create_equipment('FireExtinguisher', building_id, floor_id, space_id)
+                        self.edges.append(Edge(fire_ext, space_id, "LOCATED_IN"))
+
+            # 6. Lighting equipment
+            # DALI Gateway - one per floor in a technical space
+            for floor_id in self._floors[building_id]:
+                spaces_on_floor = self._spaces[floor_id]
+                # Prefer technical_elec, fallback to technical_hvac
+                technical_spaces = [s for s in spaces_on_floor
+                                    if 'technical_elec' in self._get_node(s).properties.get('space_type', '')]
+                if not technical_spaces:
+                    technical_spaces = [s for s in spaces_on_floor
+                                        if 'technical_hvac' in self._get_node(s).properties.get('space_type', '')]
+
+                if technical_spaces:
+                    tech_space = technical_spaces[0]
+                    dali_gw = self._create_equipment('DALI_Gateway', building_id, floor_id, tech_space)
+                    self.edges.append(Edge(dali_gw, tech_space, "LOCATED_IN"))
+                    # Connect to submeter
+                    if self._submeters:
+                        self.edges.append(Edge(self.rng.choice(self._submeters), dali_gw, "FEEDS"))
+                    self._dali_gateways[floor_id] = dali_gw
+
+            # LED Drivers and Emergency Lighting per space
+            for floor_id in self._floors[building_id]:
+                dali_gw = self._dali_gateways.get(floor_id)
+
+                for space_id in self._spaces[floor_id]:
+                    space_node = self._get_node(space_id)
+                    space_type = space_node.properties.get('space_type', '')
+
+                    # LED_Driver_DALI2 - in office and meeting spaces
+                    if 'office' in space_type or 'meeting' in space_type:
+                        led_driver = self._create_equipment('LED_Driver_DALI2', building_id, floor_id, space_id)
+                        self.edges.append(Edge(led_driver, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(led_driver, space_id, "SERVES"))
+                        # Connected to DALI gateway
+                        if dali_gw:
+                            self.edges.append(Edge(dali_gw, led_driver, "CONTROLS"))
+
+                    # Emergency_Lighting - in corridors and stairwells
+                    if 'corridor' in space_type or 'stairwell' in space_type:
+                        emergency_light = self._create_equipment('Emergency_Lighting', building_id, floor_id, space_id)
+                        self.edges.append(Edge(emergency_light, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(emergency_light, space_id, "SERVES"))
+
+            # 7. Parking equipment (typically in basement)
+            # Track parking sensors per floor for controller assignment
+            parking_sensors_by_floor: Dict[str, List[str]] = {}
+            parking_spaces_per_floor: Dict[str, List[str]] = {}
+
+            # First pass: identify parking spaces per floor
+            for floor_id in self._floors[building_id]:
+                parking_spaces_per_floor[floor_id] = []
+                parking_sensors_by_floor[floor_id] = []
+                for space_id in self._spaces[floor_id]:
+                    space_node = self._get_node(space_id)
+                    space_type = space_node.properties.get('space_type', '')
+                    if 'parking' in space_type:
+                        parking_spaces_per_floor[floor_id].append(space_id)
+
+            # Second pass: create parking equipment
+            for floor_id in self._floors[building_id]:
+                parking_spaces = parking_spaces_per_floor[floor_id]
+                if not parking_spaces:
+                    continue
+
+                first_parking_space = True
+                for space_id in parking_spaces:
+                    # BarrierGate - At parking entry/exit (only at first parking space per floor)
+                    if first_parking_space:
+                        # Create 1-2 barriers per parking area
+                        num_barriers = self.rng.randint(1, 2)
+                        for _ in range(num_barriers):
+                            barrier = self._create_equipment('BarrierGate', building_id, floor_id, space_id)
+                            self.edges.append(Edge(barrier, space_id, "LOCATED_IN"))
+                            self.edges.append(Edge(barrier, space_id, "CONTROLS"))  # Controls access
+                        first_parking_space = False
+
+                    # ParkingSensorMagnetic - Multiple per parking space (2-5 sensors representing spots)
+                    num_sensors = self.rng.randint(2, 5)
+                    for _ in range(num_sensors):
+                        sensor = self._create_equipment('ParkingSensorMagnetic', building_id, floor_id, space_id)
+                        self.edges.append(Edge(sensor, space_id, "LOCATED_IN"))
+                        self.edges.append(Edge(sensor, space_id, "MONITORS"))
+                        parking_sensors_by_floor[floor_id].append(sensor)
+
+                    # EVChargerLevel2 - 1-2 per parking area (only at first space to avoid duplication)
+                    if space_id == parking_spaces[0]:
+                        num_chargers = self.rng.randint(1, 2)
+                        for _ in range(num_chargers):
+                            charger = self._create_equipment('EVChargerLevel2', building_id, floor_id, space_id)
+                            self.edges.append(Edge(charger, space_id, "LOCATED_IN"))
+                            self.edges.append(Edge(charger, space_id, "SERVES"))
+                            # Fed by electrical
+                            if self._submeters:
+                                self.edges.append(Edge(self.rng.choice(self._submeters), charger, "FEEDS"))
+
+                    # IPCamera - For parking security
+                    cam = self._create_equipment('IPCamera', building_id, floor_id, space_id)
+                    self.edges.append(Edge(cam, space_id, "LOCATED_IN"))
+                    self.edges.append(Edge(cam, space_id, "MONITORS"))
+
+                # ParkingGuidanceController - One per parking floor (after all sensors are created)
+                if parking_sensors_by_floor[floor_id]:
+                    # Place controller in first parking space
+                    controller_space = parking_spaces[0]
+                    controller = self._create_equipment('ParkingGuidanceController', building_id, floor_id, controller_space)
+                    self.edges.append(Edge(controller, controller_space, "LOCATED_IN"))
+                    # Controller monitors all sensors on this floor
+                    for sensor_id in parking_sensors_by_floor[floor_id]:
+                        self.edges.append(Edge(controller, sensor_id, "CONTROLS"))
 
     def _create_equipment(self, equipment_type: str, building_id: str,
                           floor_id: str = None, space_id: str = None,
@@ -754,6 +1152,11 @@ class DatasetGenerator:
             properties['floor_id'] = floor_id
         if space_id:
             properties['space_id'] = space_id
+
+        # Q29: critical property for essential infrastructure equipment
+        critical_types = ['Transformer_HT_BT', 'Generator', 'FireAlarmPanel', 'MainMeter', 'UPS']
+        if equipment_type in critical_types:
+            properties['critical'] = True
 
         # Génération JSONB
         protocol = self.protocol_gen.generate_for_equipment(config)
@@ -879,6 +1282,85 @@ class DatasetGenerator:
                 submeter = self.rng.choice(self._submeters)
                 self.edges.append(Edge(submeter, tenant_id, "METERS_TENANT"))
 
+    def _generate_schedules_and_leases(self):
+        """Generate Schedule and Lease nodes for buildings and tenants."""
+
+        # Track schedules by building for equipment linkage
+        schedules: Dict[str, Dict[str, str]] = {}  # building_id -> {schedule_type: schedule_id}
+
+        # 1. Schedule nodes - For building operations
+        schedule_types = ['occupancy', 'hvac', 'lighting', 'access']
+        for building_id in self._buildings:
+            schedules[building_id] = {}
+            for stype in schedule_types:
+                schedule_id = f"schedule_{building_id}_{stype}"
+                self.nodes.append(Node(
+                    id=schedule_id,
+                    type="Schedule",
+                    name=f"Schedule {stype.title()} - {building_id}",
+                    properties={
+                        'schedule_type': stype,
+                        'timezone': 'Europe/Paris',
+                        'entries': [
+                            {'day': 'weekday', 'start': '07:00', 'end': '19:00', 'mode': 'occupied'},
+                            {'day': 'weekend', 'start': '09:00', 'end': '14:00', 'mode': 'reduced'}
+                        ]
+                    }
+                ))
+                # Building follows schedule
+                self.edges.append(Edge(building_id, schedule_id, "HAS_SCHEDULE"))
+                schedules[building_id][stype] = schedule_id
+
+        # 2. Lease nodes - For tenant contracts
+        tenant_ids = [n.id for n in self.nodes if n.type == "Tenant"]
+        for tenant_id in tenant_ids:
+            tenant_node = self._get_node(tenant_id)
+            lease_id = f"lease_{tenant_id}"
+            self.nodes.append(Node(
+                id=lease_id,
+                type="Lease",
+                name=f"Bail {tenant_node.name}",
+                properties={
+                    'start_date': tenant_node.properties.get('contract_start'),
+                    'end_date': tenant_node.properties.get('contract_end'),
+                    'rent_per_m2': round(self.rng.uniform(200, 500), 2),
+                    'charges_per_m2': round(self.rng.uniform(50, 100), 2),
+                    'deposit_months': self.rng.randint(2, 6)
+                }
+            ))
+            # Tenant has lease
+            self.edges.append(Edge(tenant_id, lease_id, "HAS_LEASE"))
+
+            # Lease covers spaces (from tenant OCCUPIES edges)
+            for edge in self.edges:
+                if edge.source_id == tenant_id and edge.rel_type == "OCCUPIES":
+                    self.edges.append(Edge(lease_id, edge.target_id, "COVERS"))
+
+        # 3. Equipment follows schedules
+        # Collect HVAC and Lighting equipment by building
+        hvac_types = {'AHU', 'VAV', 'FCU', 'Chiller', 'Boiler', 'HeatPump', 'CoolingTower', 'RTU'}
+        lighting_types = {'LED_Driver_DALI2', 'DALI_Gateway', 'Emergency_Lighting'}
+
+        for node in self.nodes:
+            if node.type != "Equipment":
+                continue
+
+            eq_type = node.properties.get('equipment_type', '')
+            building_id = node.properties.get('building_id')
+
+            if not building_id or building_id not in schedules:
+                continue
+
+            # HVAC equipment follows hvac schedule
+            if eq_type in hvac_types:
+                if 'hvac' in schedules[building_id]:
+                    self.edges.append(Edge(node.id, schedules[building_id]['hvac'], "FOLLOWS"))
+
+            # Lighting follows lighting schedule
+            if eq_type in lighting_types:
+                if 'lighting' in schedules[building_id]:
+                    self.edges.append(Edge(node.id, schedules[building_id]['lighting'], "FOLLOWS"))
+
     def _generate_zones(self):
         """Génère les zones logiques"""
         zone_types = ['thermal', 'security', 'fire']
@@ -922,6 +1404,186 @@ class DatasetGenerator:
         for eq_id in [n.id for n in self.nodes
                       if n.type == 'Equipment' and n.properties.get('equipment_type') == 'AHU']:
             self.edges.append(Edge(eq_id, contract_id, "COVERED_BY"))
+
+    def _generate_maintenance_entities(self):
+        """Generate maintenance management entities: Technicians, WorkOrders, Alarms"""
+
+        # Predefined lists for random selection
+        technician_names = [
+            'John Smith', 'Maria Garcia', 'David Chen', 'Sarah Johnson', 'Michael Brown',
+            'Emily Davis', 'James Wilson', 'Anna Martinez', 'Robert Taylor', 'Lisa Anderson',
+            'William Thomas', 'Jennifer White', 'Charles Harris', 'Patricia Martin', 'Daniel Lee'
+        ]
+        companies = ['Internal', 'MaintenancePro', 'HVACService', 'ElecService']
+        specialties_pool = ['HVAC', 'Electrical', 'Security', 'IT', 'Fire', 'BMS']
+        certifications_pool = ['HVAC-R', 'Electrical License', 'Fire Safety', 'OSHA']
+        workorder_types = ['preventive', 'corrective', 'inspection']
+        workorder_statuses = ['open', 'in_progress', 'completed', 'on_hold']
+        workorder_priorities = ['low', 'medium', 'high', 'critical']
+        alarm_severities = ['info', 'warning', 'critical']
+        alarm_triggers = [
+            ('High temperature', 'temperature'),
+            ('Low pressure', 'pressure'),
+            ('Communication failure', 'comm'),
+            ('Power fluctuation', 'power'),
+            ('Sensor fault', 'sensor'),
+            ('Filter clogged', 'filter'),
+            ('Humidity out of range', 'humidity'),
+            ('CO2 level exceeded', 'co2'),
+            ('Fan failure', 'fan'),
+            ('Valve stuck', 'valve')
+        ]
+
+        technician_counter = 0
+        workorder_counter = 0
+        alarm_counter = 0
+
+        for building_id in self._buildings:
+            # Get all equipment for this building
+            building_equipment = self._equipment_by_building.get(building_id, [])
+            if not building_equipment:
+                continue
+
+            # 1. Generate Technicians (3-5 per building)
+            num_technicians = self.rng.randint(3, 5)
+            building_technicians = []
+
+            for t in range(num_technicians):
+                technician_counter += 1
+                tech_id = f"technician_{technician_counter}"
+                name = self.rng.choice(technician_names)
+
+                # Random specialties (1-3)
+                num_specialties = self.rng.randint(1, 3)
+                specialties = self.rng.sample(specialties_pool, num_specialties)
+
+                # Random certifications (0-2)
+                num_certs = self.rng.randint(0, 2)
+                certifications = self.rng.sample(certifications_pool, num_certs) if num_certs > 0 else []
+
+                self.nodes.append(Node(
+                    id=tech_id,
+                    type="Technician",
+                    name=f"Tech {name}",
+                    properties={
+                        'company': self.rng.choice(companies),
+                        'specialties': specialties,
+                        'certifications': certifications
+                    }
+                ))
+
+                building_technicians.append(tech_id)
+                self._technicians.append(tech_id)
+
+            # 2. Generate WorkOrders (10-20 per building)
+            num_workorders = self.rng.randint(10, 20)
+
+            for w in range(num_workorders):
+                workorder_counter += 1
+                wo_id = f"workorder_{workorder_counter}"
+                wo_type = self.rng.choice(workorder_types)
+                wo_status = self.rng.choice(workorder_statuses)
+                wo_priority = self.rng.choice(workorder_priorities)
+
+                # Select a random equipment for this work order
+                target_equipment_id = self.rng.choice(building_equipment)
+                target_equipment = self._get_node(target_equipment_id)
+                equipment_type = target_equipment.properties.get('equipment_type', 'Equipment') if target_equipment else 'Equipment'
+
+                # Generate dates
+                created_days_ago = self.rng.randint(1, 180)
+                created_at = self.reference_date - timedelta(days=created_days_ago)
+                due_days_after_created = self.rng.randint(1, 30)
+                due_date = created_at + timedelta(days=due_days_after_created)
+
+                # Completed date only if status is 'completed'
+                completed_at = None
+                if wo_status == 'completed':
+                    completed_days_after_created = self.rng.randint(1, due_days_after_created)
+                    completed_at = created_at + timedelta(days=completed_days_after_created)
+
+                self.nodes.append(Node(
+                    id=wo_id,
+                    type="WorkOrder",
+                    name=f"WO-{workorder_counter:04d}",
+                    properties={
+                        'title': f"{wo_type.title()} - {equipment_type}",
+                        'status': wo_status,
+                        'priority': wo_priority,
+                        'type': wo_type,
+                        'created_at': created_at.strftime('%Y-%m-%d'),
+                        'due_date': due_date.strftime('%Y-%m-%d'),
+                        'completed_at': completed_at.strftime('%Y-%m-%d') if completed_at else None
+                    }
+                ))
+
+                # WorkOrder ASSIGNED_TO Technician
+                assigned_tech = self.rng.choice(building_technicians)
+                self.edges.append(Edge(wo_id, assigned_tech, "ASSIGNED_TO"))
+
+                # WorkOrder CONCERNS Equipment
+                self.edges.append(Edge(wo_id, target_equipment_id, "CONCERNS"))
+
+            # 3. Generate Alarms (5-15 per building, mix of active and historical)
+            num_alarms = self.rng.randint(5, 15)
+
+            for a in range(num_alarms):
+                alarm_counter += 1
+                alarm_id = f"alarm_{alarm_counter}"
+                severity = self.rng.choice(alarm_severities)
+                trigger_msg, trigger_type = self.rng.choice(alarm_triggers)
+
+                # Select a random equipment that triggered the alarm
+                trigger_equipment_id = self.rng.choice(building_equipment)
+                trigger_equipment = self._get_node(trigger_equipment_id)
+                equipment_name = trigger_equipment.name if trigger_equipment else 'Unknown'
+
+                # Generate message based on trigger type
+                message = f"{trigger_msg} detected on {equipment_name}"
+
+                # Generate timestamps
+                triggered_days_ago = self.rng.randint(0, 90)
+                triggered_at = self.reference_date - timedelta(days=triggered_days_ago)
+
+                # Determine if alarm is active or resolved
+                is_active = self.rng.random() < 0.3  # 30% chance of being active
+
+                acknowledged_at = None
+                resolved_at = None
+
+                if not is_active or self.rng.random() < 0.7:  # 70% of alarms are acknowledged
+                    ack_hours_after = self.rng.randint(1, 48)
+                    acknowledged_at = triggered_at + timedelta(hours=ack_hours_after)
+
+                if not is_active:
+                    # Resolved alarms have a resolution time
+                    resolve_hours_after_ack = self.rng.randint(1, 72)
+                    if acknowledged_at:
+                        resolved_at = acknowledged_at + timedelta(hours=resolve_hours_after_ack)
+                    else:
+                        resolved_at = triggered_at + timedelta(hours=resolve_hours_after_ack)
+
+                self.nodes.append(Node(
+                    id=alarm_id,
+                    type="Alarm",
+                    name=f"ALM-{alarm_counter:04d}",
+                    properties={
+                        'severity': severity,
+                        'message': message,
+                        'triggered_at': triggered_at.strftime('%Y-%m-%d %H:%M:%S'),
+                        'acknowledged_at': acknowledged_at.strftime('%Y-%m-%d %H:%M:%S') if acknowledged_at else None,
+                        'resolved_at': resolved_at.strftime('%Y-%m-%d %H:%M:%S') if resolved_at else None,
+                        'active': is_active
+                    }
+                ))
+
+                # Alarm TRIGGERED_BY Equipment
+                self.edges.append(Edge(alarm_id, trigger_equipment_id, "TRIGGERED_BY"))
+
+                # Alarm ACKNOWLEDGED_BY Technician (if acknowledged)
+                if acknowledged_at:
+                    ack_tech = self.rng.choice(building_technicians)
+                    self.edges.append(Edge(alarm_id, ack_tech, "ACKNOWLEDGED_BY"))
 
     def _generate_orphan(self):
         """Génère un équipement orphelin (sans relations) pour Q5"""
@@ -1152,20 +1814,55 @@ class DatasetGenerator:
         if "building_id" not in params and self._buildings:
             params["building_id"] = self._buildings[0]
 
-        # 2. Floor with spaces
+        # 2. Floor with temperature sensors (for Q4)
+        # Find a floor that has equipment with temp points via LOCATED_IN
+        floor_with_temp = None
         for building_id, floors in self._floors.items():
-            if floors:
-                params["floor_id"] = floors[0]
+            for floor_id in floors:
+                spaces = self._spaces.get(floor_id, [])
+                for space_id in spaces:
+                    # Check if any equipment is LOCATED_IN this space
+                    for edge in self.edges:
+                        if edge.rel_type == "LOCATED_IN" and edge.target_id == space_id:
+                            eq_id = edge.source_id
+                            # Check if equipment has temp points
+                            for e2 in self.edges:
+                                if e2.source_id == eq_id and e2.rel_type == "HAS_POINT":
+                                    point = self._get_node(e2.target_id)
+                                    if point and "temp" in point.name.lower():
+                                        floor_with_temp = floor_id
+                                        break
+                            if floor_with_temp:
+                                break
+                    if floor_with_temp:
+                        break
+                if floor_with_temp:
+                    break
+            if floor_with_temp:
                 break
 
-        # 3. Space with equipment (via SERVES/MONITORS/LOCATED_IN)
-        serving_rels = {"SERVES", "MONITORS", "LOCATED_IN"}
-        for edge in self.edges:
-            if edge.rel_type in serving_rels:
-                target = self._get_node(edge.target_id)
-                if target and target.type == "Space":
-                    params["space_id"] = edge.target_id
+        # Fallback to first floor if no floor with temp found
+        if floor_with_temp:
+            params["floor_id"] = floor_with_temp
+        else:
+            for building_id, floors in self._floors.items():
+                if floors:
+                    params["floor_id"] = floors[0]
                     break
+
+        # 3. Space with SERVES relationship (for Q3 - equipment serving a space)
+        # Prioritize SERVES since Q3 specifically queries SERVES relationships
+        space_with_serves = None
+        space_with_any = None
+        for edge in self.edges:
+            target = self._get_node(edge.target_id)
+            if target and target.type == "Space":
+                if edge.rel_type == "SERVES":
+                    space_with_serves = edge.target_id
+                    break
+                elif space_with_any is None and edge.rel_type in {"MONITORS", "LOCATED_IN"}:
+                    space_with_any = edge.target_id
+        params["space_id"] = space_with_serves or space_with_any
 
         # 4. Equipment in FEEDS chain (prefer middle of chain)
         feeds_sources = {e.source_id for e in self.edges if e.rel_type == "FEEDS"}
@@ -1238,8 +1935,21 @@ class DatasetGenerator:
         params.setdefault("co2_factor", 0.0569)
         params.setdefault("max_hops", 3)
         params.setdefault("tag_pattern", "^brick:")
-        params.setdefault("capability", "humidity_control")
         params.setdefault("source_type", "MainMeter")
+
+        # 12b. Capability - find one that actually exists in HVAC equipment
+        hvac_types = {"AHU", "VAV", "FCU", "Chiller", "Boiler", "HeatPump", "CoolingTower"}
+        existing_capability = None
+        for node in self.nodes:
+            eq_type = node.properties.get("equipment_type", "")
+            if eq_type in hvac_types and node.capabilities:
+                # Prefer humidity_control if it exists, otherwise take any
+                if "humidity_control" in node.capabilities:
+                    existing_capability = "humidity_control"
+                    break
+                elif existing_capability is None:
+                    existing_capability = node.capabilities[0]
+        params.setdefault("capability", existing_capability or "humidity_control")
 
         # 13. Device ID from BACnet protocol
         for node in self.nodes:
@@ -1247,6 +1957,33 @@ class DatasetGenerator:
                 params["device_id"] = node.protocol["device_id"]
                 break
         params.setdefault("device_id", 1234)
+
+        # 14. Q27: Non-exit space on a floor that has exits (ground floor)
+        # Find a space that is NOT an exit but is on the same floor as exit spaces
+        non_exit_space_for_q27 = None
+        for node in self.nodes:
+            if node.type == "Space" and not node.properties.get("is_exit", False):
+                level_index = node.properties.get("level_index")
+                if level_index == 0:  # Ground floor
+                    non_exit_space_for_q27 = node.id
+                    break
+        if non_exit_space_for_q27:
+            params["evacuation_space_id"] = non_exit_space_for_q27
+
+        # 15. Q28: SubMeter ID for tenant impact chain
+        for node in self.nodes:
+            if node.type == "Equipment" and node.properties.get("equipment_type") == "SubMeter":
+                params["submeter_id"] = node.id
+                break
+
+        # 16. Q29: Transformer ID for power paths
+        for node in self.nodes:
+            if node.type == "Equipment" and node.properties.get("equipment_type") == "Transformer_HT_BT":
+                params["transformer_id"] = node.id
+                break
+
+        # 17. Q32: Domain for schema validation
+        params.setdefault("domain", "HVAC")
 
         return params
 
@@ -1323,8 +2060,55 @@ class DatasetGenerator:
         # Write queries_params.yaml
         self._write_query_params(output_dir)
 
+        # Generate expected answers for validation
+        self._write_expected_answers(output_dir)
+
         print(f"Exported to Parquet: {output_dir}")
         return output_dir
+
+    def _write_expected_answers(self, output_dir: Path):
+        """Generate and write expected answers for Q1-Q23."""
+        try:
+            from .expected_answers import ExpectedAnswerGenerator, write_expected_answers
+
+            print("Generating expected answers for validation...")
+
+            # Load parameters
+            params = self._generate_query_params()
+
+            # Generate answers
+            generator = ExpectedAnswerGenerator(
+                nodes=self.nodes,
+                edges=self.edges,
+                timeseries=self.timeseries,
+            )
+
+            answers = generator.generate_all(params)
+
+            # Validate: check for empty answers (except Q5 which may legitimately be empty)
+            # Q5 is orphan detection - may be empty in well-connected datasets
+            empty_queries = []
+            for query_id, answer in answers.items():
+                if answer.row_count == 0 and query_id not in ("Q5",):
+                    empty_queries.append(query_id)
+
+            if empty_queries:
+                print(f"WARNING: The following queries have 0 results: {empty_queries}")
+                print("  This may indicate missing data or incorrect parameters.")
+                for qid in empty_queries:
+                    print(f"    {qid}: params={answers[qid].parameters}")
+
+            # Write to disk
+            write_expected_answers(answers, output_dir)
+
+            # Summary
+            non_empty = sum(1 for a in answers.values() if a.row_count > 0)
+            print(f"Expected answers: {non_empty}/{len(answers)} queries have results")
+
+        except Exception as e:
+            print(f"Warning: Failed to generate expected answers: {e}")
+            import traceback
+            traceback.print_exc()
 
     def export_to_json(self, output_dir: Path):
         """Exporte vers JSON (fallback)"""
@@ -1365,6 +2149,9 @@ class DatasetGenerator:
 
         # Write queries_params.yaml
         self._write_query_params(output_dir)
+
+        # Generate expected answers for validation
+        self._write_expected_answers(output_dir)
 
         print(f"Exported to JSON: {output_dir}")
         return output_dir

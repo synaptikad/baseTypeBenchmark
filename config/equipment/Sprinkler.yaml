@@ -1,0 +1,20 @@
+# Sprinkler - Sprinkler System
+# 2 points
+
+equipment:
+  code: SPK
+  domain: FireSafety
+  haystack: sprinkler
+  brick: Sprinkler
+  protocols: [bacnet]
+
+points:
+  - id: flow_status
+    type: etat
+    values: [inactive, active, fault]
+
+  - id: pressure
+    type: mesure
+    freq: slow
+    unit: bar
+    quantity: pressure

@@ -8,7 +8,7 @@ SELECT
     COUNT(*) AS equipment_count
 FROM spaces s
 JOIN buildings b ON b.id = s.building_id
-LEFT JOIN edges e ON (e.target_id = s.id AND e.rel_type IN ('MONITORS', 'LOCATED_IN', 'SECURES'))
+LEFT JOIN edges e ON (e.target_id = s.id AND e.rel_type = 'LOCATED_IN')
 LEFT JOIN equipment eq ON eq.id = e.source_id
     AND eq.equipment_type IN ('BadgeReader', 'IPCamera', 'DoorContact', 'PIRDetector')
 WHERE b.id = $1

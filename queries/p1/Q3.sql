@@ -9,5 +9,5 @@ SELECT
 FROM edges ed
 JOIN equipment eq ON eq.id = ed.source_id
 WHERE ed.target_id = $1
-  AND ed.rel_type IN ('SERVES', 'LOCATED_IN', 'MONITORS', 'CONTAINS', 'SECURES', 'GRANTS_ACCESS')
+  AND ed.rel_type = 'SERVES'
 ORDER BY ed.rel_type, eq.id;

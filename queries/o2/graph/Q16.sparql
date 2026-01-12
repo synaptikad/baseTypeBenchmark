@@ -1,5 +1,6 @@
 # Q16: Semantic Tag Search
 # Status: NATIVE pour O2 (RDF est naturel pour les tags)
+# Parametre: $tag_pattern (regex, ex: '^brick:')
 PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT ?equipment_id ?name (GROUP_CONCAT(?tag; separator=",") AS ?matching_tags)
@@ -9,7 +10,7 @@ WHERE {
         btb:name ?name ;
         btb:tag ?tag .
 
-    FILTER(STRSTARTS(?tag, "brick:"))
+    FILTER(REGEX(?tag, $tag_pattern))
 }
 GROUP BY ?equipment_id ?name
 ORDER BY ?equipment_id

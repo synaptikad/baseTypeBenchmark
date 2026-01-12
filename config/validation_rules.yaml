@@ -1,0 +1,163 @@
+# Validation Rules for Cross-Paradigm Validation
+# BaseType Benchmark V3
+#
+# Defines IMPOSSIBLE and DEGRADED rules per paradigm,
+# plus numeric tolerances for approximate comparisons.
+
+version: "1.0"
+
+# Queries IMPOSSIBLE par paradigme
+# Ces queries ne peuvent pas être exécutées par le paradigme
+impossible:
+  P1:
+    Q14: "No JSONB protocol column in P1 schema"
+    Q15: "No JSONB metadata column (warranty) in P1 schema"
+    Q16: "No JSONB tags column in P1 schema"
+    Q17: "No JSONB capabilities column in P1 schema"
+    Q24: "No JSONB maintenance_history in P1 schema"
+    Q25: "No JSONB for firmware/maintenance in P1 schema"
+    Q26: "No JSONB capabilities in P1 schema"
+
+  M1:
+    Q33: "LATERAL JOIN pattern impossible in Cypher without correlated subqueries"
+    Q34: "Materialized views not supported in Memgraph"
+
+  O2:
+    Q21: "SPARQL has no allShortestPaths equivalent"
+    Q23: "Combinatorial explosion with SPARQL property paths (5322 vs 30 rows)"
+    Q27: "Weighted shortest path requires graph database features"
+    Q28: "Multi-hop variable-length traversal not efficient in SPARQL"
+    Q29: "Path enumeration impossible with SPARQL property paths"
+    Q30: "Cycle detection requires graph algorithms"
+    Q33: "LATERAL JOIN pattern not available in SPARQL"
+    Q34: "Materialized views not supported in triplestore"
+
+# Queries DEGRADED par paradigme
+# Ces queries fonctionnent mais avec des résultats partiellement différents
+degraded:
+  M1:
+    Q6: "TimeseriesChunk arrays vs TimescaleDB time_bucket - tolerance 5%"
+    Q7: "Variance approximation on TimeseriesChunk arrays"
+    Q8: "Energy sum approximation on TimeseriesChunk"
+    Q9: "Carbon calculation uses approximate energy"
+    Q12: "Multi-aggregates on TimeseriesChunk arrays"
+    Q13: "Business hours filter approximation on chunks"
+    Q19: "No live stats without TimescaleDB"
+
+  O2:
+    Q6: "SPARQL has no native time_bucket aggregation"
+    Q15: "Date arithmetic approximation (365/30 days)"
+    Q20: "Manual path enumeration (1-2 hops only)"
+
+  # SQL paradigms (P1, P2) - Graph algorithm limitations
+  # Q20 (Shortest Path) and Q21 (Electrical Paths/SPOF) are graph-native queries.
+  # SQL CTEs cannot implement these optimally - this is an expected limitation.
+  P1:
+    Q1: "CTE includes source at depth=1 - filtered by normalizer"
+    Q18: "Returns NULL for calibration columns"
+    Q19: "Digital twin without JSONB richness"
+    Q20: "SQL CTE cannot guarantee shortest path - graph-native algorithm required"
+    Q21: "SQL CTE causes combinatorial explosion for SPOF analysis - graph-native algorithm required"
+
+  P2:
+    Q20: "SQL CTE cannot guarantee shortest path - graph-native algorithm required"
+    Q21: "SQL CTE causes combinatorial explosion for SPOF analysis - graph-native algorithm required"
+    Q27: "CTE recursive avec accumulation de poids - moins optimal que shortestPath() natif"
+    Q28: "5 JOINs + DISTINCT pour traversée multi-hop - verbose mais fonctionnel"
+    Q29: "CTE avec ARRAY accumulation - risque explosion mémoire sur grands graphes"
+    Q30: "CTE récursif avec détection de revisite via ARRAY - O(n²) vs O(V+E)"
+
+  # Graph-native queries (Q27-Q30) are DEGRADED for P1 (same as P2 but without JSONB benefits)
+  P1_graph_native:
+    Q27: "CTE recursive with weight accumulation - less optimal than native shortestPath()"
+    Q28: "5 JOINs + DISTINCT for multi-hop traversal - verbose but functional"
+    Q29: "CTE with ARRAY accumulation - memory explosion risk on large graphs"
+    Q30: "Recursive CTE with revisit detection via ARRAY - O(n²) vs O(V+E)"
+
+  # SQL-native queries (Q31-Q34) degraded for M1 (no TimescaleDB, no SQL window functions)
+  M1_sql_native:
+    Q31: "No window functions in Cypher - must UNWIND + collect for rolling aggregation"
+    Q32: "No native JSON schema validation operators in Cypher"
+
+# Tolérances numériques pour comparaison
+tolerance:
+  float:
+    # Tolérance par défaut: 1%
+    default: 0.01
+
+    # Tolérances spécifiques par paradigme pour timeseries
+    M1: 0.05              # 5% pour TimeseriesChunk approximations
+    M1_timeseries: 0.05   # Alias explicite
+
+    # Tolérances spécifiques par query
+    Q6_M1: 0.05
+    Q7_M1: 0.05
+    Q8_M1: 0.05
+    Q9_M1: 0.05
+    Q12_M1: 0.05
+    Q13_M1: 0.05
+
+    # Graph-native queries (Q27-Q30) - path distances may vary slightly
+    Q27_P1: 0.10    # 10% tolerance for weighted path distance
+    Q27_P2: 0.10
+    Q29_P1: 0.05    # 5% tolerance for path enumeration
+    Q29_P2: 0.05
+
+    # SQL-native queries (Q31-Q34) - aggregation approximations
+    Q31_M1: 0.10    # Rolling aggregation without window functions
+    Q31_M2: 0.02    # M2 has TimescaleDB so closer to expected
+
+  # Tolérance de rang pour Top-N queries
+  rank:
+    Q7: 2   # ±2 positions acceptables pour variance proche
+
+# Mappings de colonnes pour normalisation
+# (également définis dans normalizer.py, dupliqués ici pour référence)
+column_mappings:
+  id: [id, node_id, "n.id", equipment_id, "eq.id", "e.id"]
+  type: [type, node_type, "n.type", equipment_type, "labels(n)[0]"]
+  name: [name, node_name, "n.name", equipment_name]
+  depth: [depth, hop_distance, distance, level, hops]
+  point_id: [point_id, "p.id", sensor_id]
+  space_id: [space_id, "s.id", room_id]
+  equipment_id: [equipment_id, "eq.id", "e.id"]
+  time_bucket: [time_bucket, hour, bucket, time]
+
+# Notes sur les différences attendues
+notes:
+  P1_Q1_source_inclusion: |
+    P1's CTE for Q1 includes the source meter at depth=1 because:
+    - Base case: SELECT ... WHERE source_id = $1 with depth=1
+    - Filter: WHERE depth > 0 (doesn't exclude depth=1)
+    The normalizer's exclude_parameter rule handles this.
+
+  M1_timeseries_approximation: |
+    M1 stores timeseries as TimeseriesChunk arrays instead of
+    individual points in TimescaleDB. This causes approximate
+    aggregations when bucket boundaries don't align with chunks.
+
+  O2_path_limitations: |
+    SPARQL property paths (*) don't support depth limiting or
+    collecting intermediate nodes like Cypher's variable-length
+    patterns. Complex path queries are either impossible or
+    require manual enumeration.
+
+  graph_native_queries_Q27_Q30: |
+    Q27-Q30 are graph-native queries designed to show where graph
+    databases (M1, M2) excel:
+    - Q27: Weighted shortest path (Dijkstra) - native shortestPath()
+    - Q28: Multi-hop tenant impact chain - variable-length patterns
+    - Q29: All power paths enumeration - allShortestPaths()
+    - Q30: Cycle detection - native graph algorithms
+    SQL (P1, P2) can implement these via recursive CTEs but with
+    worse performance and complexity.
+
+  sql_native_queries_Q31_Q34: |
+    Q31-Q34 are SQL-native queries designed to show where SQL
+    databases (P1, P2) excel:
+    - Q31: Rolling aggregation (window functions)
+    - Q32: JSON schema validation (JSONB operators)
+    - Q33: Latest value per space (LATERAL JOIN)
+    - Q34: Materialized view for energy summary
+    M1 has limited support for these (no window functions,
+    no materialized views). M2 can leverage TimescaleDB for some.

@@ -240,6 +240,7 @@ class ResultsArchive:
 
         # Create subdirectories
         (run_path / "raw_results").mkdir(exist_ok=True)
+        (run_path / "metrics").mkdir(exist_ok=True)
         (run_path / "validation").mkdir(exist_ok=True)
 
         # Collect environment info
@@ -326,6 +327,29 @@ class ResultsArchive:
 
         return archive
 
+    def save_query_metrics(
+        self,
+        query_id: str,
+        paradigm: str,
+        metrics: dict[str, Any],
+    ) -> None:
+        """Save metrics for a query to metrics/ directory.
+
+        Args:
+            query_id: Query identifier
+            paradigm: Paradigm identifier
+            metrics: Metrics dict (p50, p95, avg, etc.)
+        """
+        if not self._current_run:
+            return
+
+        metrics_dir = self._get_run_path(self._current_run) / "metrics" / paradigm
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+
+        metrics_path = metrics_dir / f"{query_id}.json"
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2, default=str)
+
     def finalize_run(self, benchmark_summary: dict | None = None) -> None:
         """Finalize the current run.
 
@@ -338,14 +362,125 @@ class ResultsArchive:
         self._metadata.end_time = datetime.now()
         self._save_metadata()
 
+        run_path = self._get_run_path(self._current_run)
+
         # Save benchmark summary if provided
         if benchmark_summary:
-            summary_path = self._get_run_path(self._current_run) / "benchmark_summary.json"
+            summary_path = run_path / "benchmark_summary.json"
             with open(summary_path, "w", encoding="utf-8") as f:
                 json.dump(benchmark_summary, f, indent=2, default=str)
 
+            # Generate Markdown report
+            self._generate_report_md(run_path, benchmark_summary)
+
         self._current_run = None
         self._metadata = None
+
+    def _generate_report_md(self, run_path: Path, summary: dict) -> None:
+        """Generate a factual Markdown report for the benchmark run.
+
+        Args:
+            run_path: Path to run directory
+            summary: Benchmark summary dict
+        """
+        report_path = run_path / "report.md"
+        metadata = self._metadata
+        results = summary.get("results", {})
+        ram_summary = summary.get("summary", {})
+
+        lines = [
+            f"# Benchmark Report: {metadata.benchmark_id}",
+            "",
+            "## Dataset",
+            "",
+            f"| Property | Value |",
+            f"|----------|-------|",
+            f"| Profile | {metadata.data_profile} |",
+            f"| Queries | {len(metadata.queries)} |",
+            f"| Runs/Query | {metadata.n_runs} |",
+            f"| Variants | {metadata.n_variants} |",
+            "",
+        ]
+
+        # RAM Footprint
+        if ram_summary:
+            lines.extend([
+                "## RAM Footprint (MB)",
+                "",
+                "| Paradigm | Baseline | Viable |",
+                "|----------|----------|--------|",
+            ])
+            for p in metadata.paradigms:
+                baseline = ram_summary.get("ram_baseline", {}).get(p, 0)
+                viable = ram_summary.get("ram_viable", {}).get(p)
+                viable_str = str(viable) if viable else "OOM"
+                lines.append(f"| {p} | {baseline:.0f} | {viable_str} |")
+            lines.append("")
+
+        # Query Latency
+        if results:
+            lines.extend([
+                "## Query Latency p50 (ms)",
+                "",
+            ])
+
+            # Header
+            header = "| Query |"
+            separator = "|-------|"
+            for p in metadata.paradigms:
+                header += f" {p} |"
+                separator += "-----:|"
+            lines.append(header)
+            lines.append(separator)
+
+            # Collect queries and their p50 values
+            query_data: dict[str, dict[str, float | None]] = {}
+            for p, p_data in results.items():
+                for level in p_data.get("levels", []):
+                    if level.get("status") == "success":
+                        for qid, qdata in level.get("queries", {}).items():
+                            if qid not in query_data:
+                                query_data[qid] = {}
+                            if p not in query_data[qid]:
+                                query_data[qid][p] = qdata.get("p50_ms")
+                        break  # First successful level only
+
+            for qid in sorted(query_data.keys()):
+                row = f"| {qid} |"
+                for p in metadata.paradigms:
+                    val = query_data[qid].get(p)
+                    row += f" {val:.1f} |" if val is not None else " - |"
+                lines.append(row)
+            lines.append("")
+
+        # Query Coverage
+        if results:
+            lines.extend([
+                "## Query Coverage",
+                "",
+                "| Paradigm | Answered | Impossible |",
+                "|----------|----------|------------|",
+            ])
+            for p in metadata.paradigms:
+                answered = sum(1 for qid in query_data if query_data[qid].get(p) is not None)
+                impossible = len(metadata.queries) - answered
+                lines.append(f"| {p} | {answered} | {impossible} |")
+            lines.append("")
+
+        # Environment (compact)
+        lines.extend([
+            "## Environment",
+            "",
+            f"| Property | Value |",
+            f"|----------|-------|",
+            f"| Git | {metadata.git_branch}@{metadata.git_hash} |",
+            f"| Host | {metadata.hostname} |",
+            f"| Duration | {(metadata.end_time - metadata.start_time).total_seconds():.0f}s |" if metadata.end_time else "",
+            "",
+        ])
+
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
     def load_run(self, benchmark_id: str) -> "ArchivedRun":
         """Load an archived run.

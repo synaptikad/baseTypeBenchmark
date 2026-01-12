@@ -1,0 +1,28 @@
+# CoolingTower - Cooling Tower
+# 3 points
+
+equipment:
+  code: CT
+  domain: HVAC
+  haystack: coolingTower
+  brick: Cooling_Tower
+  protocols: [bacnet, modbus_tcp]
+
+points:
+  - id: fan_speed
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: speed
+
+  - id: water_temp_in
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature
+
+  - id: water_temp_out
+    type: mesure
+    freq: normal
+    unit: "°C"
+    quantity: temperature

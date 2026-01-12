@@ -1,6 +1,7 @@
--- Q23: Adjacency Propagation (P2 JSONB)
+-- Q23: Failure Impact Analysis (P2 JSONB)
 -- Status: NATIVE pour P2 (CTE avec depth)
--- Parametres: $1 = SPACE_ID, $2 = MAX_HOPS
+-- Semantic: If this equipment fails, which spaces/equipment are impacted within N hops?
+-- Parametres: $1 = EQUIPMENT_ID, $2 = MAX_HOPS
 
 WITH RECURSIVE propagation AS (
     SELECT
@@ -22,7 +23,7 @@ WITH RECURSIVE propagation AS (
         e.rel_type AS via_relation
     FROM propagation p
     JOIN edges e ON (e.source_id = p.node_id OR e.target_id = p.node_id)
-        AND e.rel_type IN ('ADJACENT_TO', 'CONTAINS', 'MONITORS', 'SERVES')
+        AND e.rel_type IN ('FEEDS', 'SERVES', 'POWERS')
     JOIN nodes n ON n.id = CASE WHEN e.source_id = p.node_id THEN e.target_id ELSE e.source_id END
     WHERE p.hop_distance < $2
 )

@@ -1,0 +1,26 @@
+# FireAlarmPanel - Fire Alarm Control Panel
+# 3 points
+
+equipment:
+  code: FAP
+  domain: FireSafety
+  haystack: fireAlarmPanel
+  brick: Fire_Alarm_Control_Panel
+  protocols: [bacnet, modbus_tcp]
+
+points:
+  - id: system_status
+    type: etat
+    values: [normal, alarm, fault, silenced]
+
+  - id: zone_count
+    type: mesure
+    freq: slow
+    unit: count
+    quantity: count
+
+  - id: active_alarms
+    type: mesure
+    freq: event
+    unit: count
+    quantity: count

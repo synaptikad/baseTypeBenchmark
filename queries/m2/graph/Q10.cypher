@@ -2,7 +2,7 @@
 // Parametre: $building_id
 
 MATCH (s:Space {building_id: $building_id})
-OPTIONAL MATCH (eq:Equipment)-[:MONITORS|LOCATED_IN|SECURES]->(s)
+OPTIONAL MATCH (eq:Equipment)-[:LOCATED_IN]->(s)
 WHERE eq.equipment_type IN ['BadgeReader', 'IPCamera', 'DoorContact', 'PIRDetector']
 WITH s, eq.equipment_type AS equipment_type
 WHERE equipment_type IS NOT NULL

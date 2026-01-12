@@ -23,7 +23,6 @@ from .config import (
     DATASET_SIZE_ESTIMATES,
 )
 from .core.catalog import QueryCatalog, get_catalog
-from .core.params import get_golden_loader, get_query_parameters
 from .core.query import (
     DryRunResult,
     DryRunBatch,
@@ -84,19 +83,8 @@ def _validate_query(
         can_execute=can_execute,
         paradigm_status=status,
         query_parsed=True,  # Will be validated when we load query files
-        parameters_valid=True,
+        parameters_valid=True,  # Parameters are validated at runtime from dataset
     )
-
-    # Check parameters
-    try:
-        params = get_query_parameters(query_id)
-        required_params = query_def.get_parameter_names()
-        for param_name in required_params:
-            if params.get(param_name) is None:
-                result.warnings.append(f"Parameter '{param_name}' not in golden_answers")
-    except Exception as e:
-        result.issues.append(f"Parameter loading error: {e}")
-        result.parameters_valid = False
 
     # Add notes from paradigm status
     status_info = query_def.paradigm_status.get(engine)
@@ -1173,172 +1161,6 @@ def status() -> None:
 
 
 # =============================================================================
-# GOLDEN COMMANDS
-# =============================================================================
-
-golden_app = typer.Typer(
-    name="golden",
-    help="Golden dataset validation commands",
-)
-app.add_typer(golden_app, name="golden")
-
-
-@golden_app.command("export")
-def golden_export(
-    output: Annotated[
-        Path,
-        typer.Option("--output", "-o", help="Output directory for Parquet files")
-    ] = Path("data/generated/validation"),
-) -> None:
-    """Generate validation dataset using the generator.
-
-    Creates nodes.parquet, edges.parquet, timeseries.parquet using
-    the dataset generator with seed=42 for reproducibility.
-
-    This replaces the old manual golden dataset with a generated one.
-    """
-    import subprocess
-
-    console.print(Panel.fit(
-        "[bold blue]Generate Validation Dataset[/bold blue]",
-        border_style="blue"
-    ))
-
-    try:
-        # Use generator instead of old golden.py
-        cmd = [
-            "python", "-m", "basetype_benchmark.dataset.generator",
-            "--profile", "medium",
-            "--duration", "1m",
-            "--seed", "42",
-            "--output", str(output),
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            console.print(f"[red]Generator failed: {result.stderr}[/red]")
-            raise typer.Exit(1)
-
-        console.print(result.stdout)
-        console.print(f"\n[green]Validation dataset generated at {output}[/green]")
-
-        # Show file sizes
-        output_dir = output / "medium-1m"
-        if output_dir.exists():
-            for f in output_dir.glob("*.parquet"):
-                size_kb = f.stat().st_size / 1024
-                console.print(f"  {f.name}: {size_kb:.1f} KB")
-
-    except Exception as e:
-        console.print(f"[red]Generation failed: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@golden_app.command("validate")
-def golden_validate(
-    paradigm: Annotated[
-        Optional[str],
-        typer.Option("--paradigm", "-p", help="Paradigm to validate (P1, P2, M1, M2, O2)")
-    ] = None,
-    queries: Annotated[
-        Optional[str],
-        typer.Option("--queries", "-q", help="Comma-separated query IDs to validate")
-    ] = None,
-    verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Show detailed validation results")
-    ] = False,
-) -> None:
-    """Validate query results against golden answers.
-
-    Compares actual query execution results with expected values
-    from golden_answers.yaml to ensure reproducibility.
-    """
-    from .core.validator import GoldenValidator
-
-    console.print(Panel.fit(
-        "[bold blue]Golden Validation[/bold blue]",
-        border_style="blue"
-    ))
-
-    try:
-        validator = GoldenValidator()
-
-        # Parse queries
-        query_list = None
-        if queries:
-            query_list = [q.strip().upper() for q in queries.split(",")]
-
-        # Run validation
-        results = validator.validate_all(
-            paradigm=paradigm.upper() if paradigm else None,
-            queries=query_list,
-        )
-
-        # Display results
-        table = Table(title="Validation Results", show_header=True)
-        table.add_column("Query")
-        table.add_column("Status", justify="center")
-        table.add_column("Details" if verbose else "")
-
-        passed = 0
-        failed = 0
-
-        for qid, result in results.items():
-            if result["valid"]:
-                status = "[green]PASS[/green]"
-                passed += 1
-            else:
-                status = "[red]FAIL[/red]"
-                failed += 1
-
-            details = ""
-            if verbose and not result["valid"]:
-                details = result.get("error", "")[:50]
-
-            table.add_row(qid, status, details)
-
-        console.print(table)
-        console.print(f"\n[bold]Summary:[/bold] {passed} passed, {failed} failed")
-
-        if failed > 0:
-            raise typer.Exit(1)
-
-    except Exception as e:
-        console.print(f"[red]Validation failed: {e}[/red]")
-        raise typer.Exit(1)
-
-
-@golden_app.command("report")
-def golden_report() -> None:
-    """Show golden validation report.
-
-    Displays a summary of the golden dataset and expected answers.
-    """
-    from .core.params import get_golden_loader
-
-    console.print(Panel.fit(
-        "[bold blue]Golden Dataset Report[/bold blue]",
-        border_style="blue"
-    ))
-
-    try:
-        loader = get_golden_loader()
-
-        # Query count
-        console.print("\n[cyan]Golden Answers:[/cyan]")
-        for qid in sorted(loader.get_query_ids()):
-            answer = loader.get_answer(qid)
-            if answer:
-                row_count = answer.get("row_count", "?")
-                console.print(f"  {qid}: {row_count} rows expected")
-
-    except Exception as e:
-        console.print(f"[red]Report failed: {e}[/red]")
-        raise typer.Exit(1)
-
-
-# =============================================================================
 # GENERATE COMMAND
 # =============================================================================
 
@@ -1504,7 +1326,11 @@ def validate_cmd(
     ] = None,
     html: Annotated[
         Optional[Path],
-        typer.Option("--html", help="Output HTML report for publication")
+        typer.Option("--html", help="Output HTML report (legacy)")
+    ] = None,
+    md: Annotated[
+        Optional[Path],
+        typer.Option("--md", help="Output Markdown report (recommended)")
     ] = None,
     verbose: Annotated[
         bool,
@@ -1607,6 +1433,10 @@ def validate_cmd(
             if html:
                 _generate_matrix_html_report(matrix, html)
                 console.print(f"[green]HTML matrix report saved to {html}[/green]")
+
+            if md:
+                _generate_matrix_md_report(matrix, md)
+                console.print(f"[green]Markdown matrix report saved to {md}[/green]")
 
             # Check for mismatches (matrix is now asymmetric, count unique pairs)
             total_mismatch = sum(
@@ -1736,6 +1566,14 @@ def validate_cmd(
             console.print(f"[green]HTML report saved to {html}[/green]")
         except Exception as e:
             console.print(f"[red]Failed to generate HTML report: {e}[/red]")
+
+    # Generate Markdown report
+    if md:
+        try:
+            _generate_md_report(report, md)
+            console.print(f"[green]Markdown report saved to {md}[/green]")
+        except Exception as e:
+            console.print(f"[red]Failed to generate Markdown report: {e}[/red]")
 
     # Exit code
     if fail_on_mismatch and report.mismatch_count > 0:
@@ -2083,6 +1921,144 @@ def _generate_html_report(report, output_path: Path) -> None:
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html_content)
+
+
+def _generate_matrix_md_report(matrix, output_path: Path) -> None:
+    """Generate Markdown report for asymmetric cross-validation matrix."""
+    lines = [
+        "# Cross-Validation Matrix Report",
+        "",
+        f"**Benchmark:** {matrix.benchmark_id}",
+        f"**Paradigms:** {', '.join(matrix.paradigms)}",
+        f"**Timestamp:** {matrix.timestamp.isoformat()}",
+        "",
+        "> **How to read:** Row = Reference (ground truth), Column = Compared paradigm.",
+        "> Cell shows: `equivalent/answerable` (-lacks queries Column cannot answer)",
+        "",
+        "## Coverage Matrix (Row → Column)",
+        "",
+    ]
+
+    # Header row
+    header = "| Ref↓ Cmp→ |"
+    separator = "|-----------|"
+    for p in matrix.paradigms:
+        header += f" {p} |"
+        separator += "------|"
+    lines.append(header)
+    lines.append(separator)
+
+    # Data rows (asymmetric)
+    for ref in matrix.paradigms:
+        row = f"| **{ref}** |"
+        for cmp in matrix.paradigms:
+            if ref == cmp:
+                row += " — |"
+            else:
+                dc = matrix.matrix.get(ref, {}).get(cmp)
+                if dc:
+                    answerable = dc.total - dc.impossible_in_ref
+                    lacks = dc.impossible_in_cmp + dc.degraded
+                    lacks_str = f" -{lacks}" if lacks > 0 else ""
+                    row += f" {dc.equivalent}/{answerable}{lacks_str} |"
+                else:
+                    row += " — |"
+        lines.append(row)
+
+    lines.extend([
+        "",
+        "## Directional Statistics (Ref → Cmp)",
+        "",
+        "| Direction | Equiv | Degr | Cmp Imposs | Ref Imposs | Mismatch | Coverage |",
+        "|-----------|-------|------|------------|------------|----------|----------|",
+    ])
+
+    for ref in matrix.paradigms:
+        for cmp, dc in matrix.matrix.get(ref, {}).items():
+            rate = dc.coverage_rate
+            lines.append(
+                f"| {ref} → {cmp} | {dc.equivalent} | {dc.degraded} | "
+                f"{dc.impossible_in_cmp} | {dc.impossible_in_ref} | {dc.mismatch} | {rate:.0f}% |"
+            )
+
+    lines.extend([
+        "",
+        "---",
+        "*Generated by BaseType Benchmark V3*",
+    ])
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+def _generate_md_report(report, output_path: Path) -> None:
+    """Generate Markdown validation report."""
+    from .core.cross_validator import ValidationStatus
+
+    status_symbols = {
+        ValidationStatus.EQUIVALENT: "✓",
+        ValidationStatus.DEGRADED: "D",
+        ValidationStatus.SKIP: "–",
+        ValidationStatus.MISMATCH: "✗",
+        ValidationStatus.NO_DATA: "?",
+    }
+
+    lines = [
+        "# Cross-Paradigm Validation Report",
+        "",
+        f"**Benchmark:** {report.benchmark_id}",
+        f"**Reference Paradigm:** {report.reference_paradigm}",
+        f"**Timestamp:** {report.timestamp.isoformat()}",
+        "",
+        "## Summary",
+        "",
+        "| Metric | Count |",
+        "|--------|-------|",
+        f"| Equivalent | {report.equivalent_count} |",
+        f"| Degraded | {report.degraded_count} |",
+        f"| Skip | {report.skip_count} |",
+        f"| Mismatch | {report.mismatch_count} |",
+        "",
+        "## Query Results",
+        "",
+    ]
+
+    # Header
+    header = "| Query |"
+    separator = "|-------|"
+    for p in report.compared_paradigms:
+        header += f" {p} |"
+        separator += "------|"
+    lines.append(header)
+    lines.append(separator)
+
+    # Rows
+    for query_id in sorted(report.comparisons.keys()):
+        row = f"| {query_id} |"
+        for paradigm in report.compared_paradigms:
+            if paradigm in report.comparisons[query_id]:
+                cmp = report.comparisons[query_id][paradigm]
+                symbol = status_symbols.get(cmp.status, "?")
+                row += f" {symbol} |"
+            else:
+                row += " – |"
+        lines.append(row)
+
+    lines.extend([
+        "",
+        "## Legend",
+        "",
+        "- ✓ **Equivalent** - Results match within tolerance",
+        "- D **Degraded** - Known limitation, acceptable difference",
+        "- – **Skip** - Query impossible for this paradigm",
+        "- ✗ **Mismatch** - Unexpected difference",
+        "",
+        "---",
+        f"*Generated by BaseType Benchmark V3 | Reference: {report.reference_paradigm} | Queries: {report.total_queries}*",
+    ])
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 # =============================================================================
@@ -2518,6 +2494,290 @@ def list_scenarios_cmd() -> None:
     console.print(table)
 
     console.print("\n[dim]Use: btb-runner benchmark --scenario <name>[/dim]")
+
+
+@app.command("validate-expected")
+def validate_expected_cmd(
+    archive: Annotated[
+        Path,
+        typer.Argument(help="Path to benchmark archive directory or results.json")
+    ],
+    dataset: Annotated[
+        Optional[Path],
+        typer.Option("--dataset", "-d", help="Path to dataset dir (with expected_answers/)")
+    ] = None,
+    paradigm: Annotated[
+        Optional[str],
+        typer.Option("--paradigm", "-p", help="Specific paradigm to validate (default: all)")
+    ] = None,
+    queries: Annotated[
+        Optional[str],
+        typer.Option("--queries", "-q", help="Comma-separated query IDs to validate (default: all)")
+    ] = None,
+    output: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Output JSON report file")
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Show detailed validation info")
+    ] = False,
+    fail_on_mismatch: Annotated[
+        bool,
+        typer.Option("--fail-on-mismatch", help="Exit with code 1 if any MISMATCH found")
+    ] = False,
+) -> None:
+    """Validate benchmark results against Expected Answers.
+
+    This validates that paradigm results match the ground truth computed
+    during dataset generation (expected_answers/).
+
+    The --dataset option should point to a dataset directory containing
+    expected_answers/ (e.g., data/generated/medium-1w/).
+
+    Validation statuses:
+    - MATCH: Result matches Expected Answer exactly
+    - DEGRADED: Expected difference (documented limitation)
+    - IMPOSSIBLE: Query not supported by paradigm
+    - MISMATCH: Bug detected! Result differs from Expected
+
+    Examples:
+        btb-runner validate-expected results.json --dataset data/generated/medium-1w/
+        btb-runner validate-expected archive/ --dataset data/generated/medium-1w/
+        btb-runner validate-expected archive/ -p P1 --queries Q1,Q2,Q3 -v
+        btb-runner validate-expected archive/ --fail-on-mismatch
+    """
+    try:
+        from ..validation import ExpectedAnswerStore, AnswerValidator, ValidationStatus
+    except ImportError as e:
+        console.print(f"[red]Failed to import validation module: {e}[/red]")
+        raise typer.Exit(1)
+
+    from .benchmark.results import BenchmarkResults
+
+    # Validate paths
+    if not archive.exists():
+        console.print(f"[red]Archive not found: {archive}[/red]")
+        raise typer.Exit(1)
+
+    # Auto-detect dataset directory
+    if dataset is None:
+        # Try to find expected_answers in common locations
+        candidates = [
+            Path("data/generated"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                for subdir in candidate.iterdir():
+                    if subdir.is_dir():
+                        expected_dir = subdir / "expected_answers"
+                        if expected_dir.exists():
+                            dataset = subdir
+                            console.print(f"[dim]Auto-detected dataset: {dataset}[/dim]")
+                            break
+                if dataset:
+                    break
+
+        if dataset is None:
+            console.print("[red]Could not find expected answers. Use --dataset to specify.[/red]")
+            console.print("[yellow]Expected answers are generated with: btb-runner generate[/yellow]")
+            raise typer.Exit(1)
+
+    if not dataset.exists():
+        console.print(f"[red]Dataset not found: {dataset}[/red]")
+        console.print("[yellow]Expected answers are generated with: btb-runner generate[/yellow]")
+        raise typer.Exit(1)
+
+    # Check for expected_answers subdirectory
+    if not (dataset / "expected_answers").exists():
+        console.print(f"[red]No expected_answers/ in {dataset}[/red]")
+        console.print("[yellow]Regenerate dataset with: btb-runner generate[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(Panel.fit(
+        "[bold blue]Expected Answer Validation[/bold blue]\n\n"
+        f"Archive: {archive}\n"
+        f"Dataset: {dataset}",
+        border_style="blue"
+    ))
+
+    try:
+        # Load Expected Answers
+        store = ExpectedAnswerStore(dataset)
+        store.load()
+        console.print(f"[dim]Loaded {len(store)} Expected Answers[/dim]")
+
+        # Load results
+        if archive.is_file() and archive.suffix == ".json":
+            results = BenchmarkResults.from_json(archive)
+        else:
+            # Look for results in archive directory
+            # Try different names: benchmark_summary.json, results.json
+            results_path = None
+            for filename in ["benchmark_summary.json", "results.json"]:
+                candidate = archive / filename
+                if candidate.exists():
+                    results_path = candidate
+                    break
+
+            if results_path:
+                results = BenchmarkResults.from_json(results_path)
+            else:
+                console.print(f"[red]No results file found in {archive}[/red]")
+                console.print("[dim]Expected: benchmark_summary.json or results.json[/dim]")
+                raise typer.Exit(1)
+
+        console.print(f"[dim]Loaded benchmark: {results.benchmark_id}[/dim]")
+
+        # Setup validator
+        semantic_path = Path(__file__).parent.parent.parent.parent / "config" / "semantic_definitions.yaml"
+        rules_path = Path(__file__).parent.parent.parent.parent / "config" / "validation_rules.yaml"
+
+        if not semantic_path.exists():
+            semantic_path = Path("config/semantic_definitions.yaml")
+        if not rules_path.exists():
+            rules_path = Path("config/validation_rules.yaml")
+
+        validator = AnswerValidator(
+            expected_store=store,
+            definitions_path=semantic_path if semantic_path.exists() else None,
+            rules_path=rules_path if rules_path.exists() else None,
+        )
+
+        # Determine paradigms and queries to validate
+        paradigms_to_check = [paradigm] if paradigm else list(results.results.keys())
+        query_ids = queries.split(",") if queries else None
+
+        # Run validation
+        all_validations: dict[str, dict[str, any]] = {}
+        counters = {"MATCH": 0, "DEGRADED": 0, "IMPOSSIBLE": 0, "MISMATCH": 0}
+
+        for p in paradigms_to_check:
+            if p not in results.results:
+                console.print(f"[yellow]Paradigm {p} not in results, skipping[/yellow]")
+                continue
+
+            pr = results.results[p]
+            all_validations[p] = {}
+
+            # Get raw results from archive if available
+            raw_results_dir = archive / "raw_results" / p if archive.is_dir() else None
+
+            for level in pr.levels:
+                for qid, qr in level.queries.items():
+                    if query_ids and qid not in query_ids:
+                        continue
+
+                    # Try to load full rows from archive
+                    rows = []
+                    if raw_results_dir:
+                        raw_file = raw_results_dir / f"{qid}.json"
+                        if raw_file.exists():
+                            import json
+                            with open(raw_file) as f:
+                                data = json.load(f)
+                                rows = data.get("rows", [])
+
+                    # If no raw rows, use sample_rows from results
+                    if not rows and qr.sample_rows:
+                        rows = qr.sample_rows
+                        if verbose:
+                            console.print(f"[yellow]Using sample rows for {p}/{qid} (not full results)[/yellow]")
+
+                    # Get parameters for this specific query (from expected answer)
+                    params = store.get_query_parameters(qid)
+
+                    # Validate
+                    result = validator.validate_query(qid, p, rows, params)
+                    all_validations[p][qid] = result
+                    counters[result.status.value] += 1
+
+        # Display results table
+        table = Table(title="Validation Results", show_header=True)
+        table.add_column("Paradigm", style="cyan")
+        table.add_column("Query", style="dim")
+        table.add_column("Status")
+        table.add_column("Rows", justify="right")
+        table.add_column("Reason")
+
+        status_colors = {
+            "MATCH": "green",
+            "DEGRADED": "yellow",
+            "IMPOSSIBLE": "dim",
+            "MISMATCH": "red bold",
+        }
+
+        for p, validations in all_validations.items():
+            for qid in sorted(validations.keys(), key=lambda x: int(x[1:]) if x[1:].isdigit() else 999):
+                result = validations[qid]
+                status_style = status_colors.get(result.status.value, "white")
+
+                rows_str = ""
+                if result.expected_row_count or result.paradigm_row_count:
+                    rows_str = f"{result.paradigm_row_count}/{result.expected_row_count}"
+
+                reason = result.reason[:50] + "..." if len(result.reason) > 50 else result.reason
+
+                table.add_row(
+                    p,
+                    qid,
+                    f"[{status_style}]{result.status.value}[/{status_style}]",
+                    rows_str,
+                    reason,
+                )
+
+        console.print(table)
+
+        # Summary
+        total = sum(counters.values())
+        console.print("\n")
+        console.print(Panel.fit(
+            f"Total: {total} | "
+            f"[green]MATCH: {counters['MATCH']}[/green] | "
+            f"[yellow]DEGRADED: {counters['DEGRADED']}[/yellow] | "
+            f"[dim]IMPOSSIBLE: {counters['IMPOSSIBLE']}[/dim] | "
+            f"[red]MISMATCH: {counters['MISMATCH']}[/red]",
+            title="Summary"
+        ))
+
+        # Show MISMATCH details if any
+        if counters["MISMATCH"] > 0:
+            console.print("\n[red bold]MISMATCH Details (possible bugs):[/red bold]")
+            for p, validations in all_validations.items():
+                for qid, result in validations.items():
+                    if result.status.value == "MISMATCH":
+                        console.print(f"  • {p}/{qid}: {result.reason}")
+                        if result.missing_items:
+                            console.print(f"    Missing: {result.missing_items[:5]}")
+                        if result.extra_items:
+                            console.print(f"    Extra: {result.extra_items[:5]}")
+
+        # Save report if requested
+        if output:
+            import json
+            report = {
+                "summary": counters,
+                "validations": {
+                    p: {qid: v.to_dict() for qid, v in vals.items()}
+                    for p, vals in all_validations.items()
+                }
+            }
+            with open(output, "w") as f:
+                json.dump(report, f, indent=2)
+            console.print(f"\n[green]Report saved to {output}[/green]")
+
+        # Exit with error if mismatches and flag set
+        if fail_on_mismatch and counters["MISMATCH"] > 0:
+            raise typer.Exit(1)
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Validation failed: {e}[/red]")
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())
+        raise typer.Exit(1)
 
 
 def version_callback(value: bool) -> None:

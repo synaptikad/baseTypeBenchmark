@@ -1,0 +1,28 @@
+# AirQuality_Sensor - Air Quality Sensor
+# 3 points
+
+equipment:
+  code: AQS
+  domain: BMS
+  haystack: airQualitySensor
+  brick: Air_Quality_Sensor
+  protocols: [bacnet]
+
+points:
+  - id: pm25
+    type: mesure
+    freq: normal
+    unit: "µg/m³"
+    quantity: concentration
+
+  - id: pm10
+    type: mesure
+    freq: normal
+    unit: "µg/m³"
+    quantity: concentration
+
+  - id: voc
+    type: mesure
+    freq: normal
+    unit: ppb
+    quantity: concentration

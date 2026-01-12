@@ -521,10 +521,10 @@ def run_validation(results_path: Path, generate_reports: bool = True):
         suffix = "cross_matrix" if cross_matrix else "validation"
 
         json_report = validation_dir / f"{base_name}_{suffix}_{timestamp}.json"
-        html_report = validation_dir / f"{base_name}_{suffix}_{timestamp}.html"
+        md_report = validation_dir / f"{base_name}_{suffix}_{timestamp}.md"
 
         cmd_args.extend(["-o", str(json_report)])
-        cmd_args.extend(["--html", str(html_report)])
+        cmd_args.extend(["--md", str(md_report)])
 
     console.print()
     btb(*cmd_args)
@@ -534,7 +534,7 @@ def run_validation(results_path: Path, generate_reports: bool = True):
         console.print(Panel.fit(
             "[bold]Reports Generated:[/bold]\n\n"
             f"JSON: {json_report.name}\n"
-            f"HTML: {html_report.name}\n\n"
+            f"MD:   {md_report.name}\n\n"
             f"[dim]Location: {validation_dir}[/dim]",
             border_style="green"
         ))
@@ -571,9 +571,10 @@ def menu_results():
             console.print(f"\n[dim]{len(validation_reports)} validation reports available[/dim]")
 
         console.print()
-        console.print("[cyan]v[/cyan]. Validate a result")
+        console.print("[cyan]v[/cyan]. Validate a result       [dim]Cross-paradigm[/dim]")
+        console.print("[cyan]e[/cyan]. Validate vs Expected    [dim]Against expected answers[/dim]")
         console.print("[cyan]r[/cyan]. View validation reports")
-        console.print("[cyan]a[/cyan]. Archived runs      [dim]Replay validation[/dim]")
+        console.print("[cyan]a[/cyan]. Archived runs           [dim]Replay validation[/dim]")
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
@@ -582,6 +583,8 @@ def menu_results():
             return
         elif choice == "v":
             validate_result_menu(files)
+        elif choice == "e":
+            validate_expected_menu()
         elif choice == "r":
             view_validation_reports()
         elif choice == "a":
@@ -612,6 +615,121 @@ def validate_result_menu(files: list[Path]):
     choice = IntPrompt.ask("Select", default=1)
     if 1 <= choice <= len(files):
         run_validation(files[choice - 1])
+
+
+def validate_expected_menu():
+    """Validate archived results against expected answers."""
+    header("Validate vs Expected Answers")
+
+    # 1. Find datasets with expected_answers
+    datasets_with_expected = []
+    for ds in list_dirs(GENERATED_DIR):
+        expected_dir = ds / "expected_answers"
+        if expected_dir.exists() and list(expected_dir.glob("Q*.json")):
+            datasets_with_expected.append(ds)
+
+    if not datasets_with_expected:
+        console.print("[yellow]No datasets with expected answers found.[/yellow]")
+        console.print()
+        console.print("[dim]Generate a dataset first - expected answers are computed during generation.[/dim]")
+        wait()
+        return
+
+    # 2. Find archived runs
+    if not ARCHIVE_DIR.exists():
+        console.print("[yellow]No archived runs found.[/yellow]")
+        console.print("[dim]Run a benchmark with --archive to create archives.[/dim]")
+        wait()
+        return
+
+    runs = sorted([d for d in ARCHIVE_DIR.iterdir() if d.is_dir()], reverse=True)
+    if not runs:
+        console.print("[yellow]No archived runs found.[/yellow]")
+        wait()
+        return
+
+    # 3. Select dataset (expected answers source)
+    console.print("[bold]1. Select Dataset:[/bold]")
+    for i, ds in enumerate(datasets_with_expected, 1):
+        answer_count = len(list((ds / "expected_answers").glob("Q*.json")))
+        console.print(f"  [cyan]{i}[/cyan]. {ds.name} [dim]({answer_count} expected answers)[/dim]")
+    console.print()
+
+    ds_idx = IntPrompt.ask("Select", default=1)
+    if not (1 <= ds_idx <= len(datasets_with_expected)):
+        return
+    dataset_source = datasets_with_expected[ds_idx - 1]
+
+    # 4. Select archived run
+    console.print("\n[bold]2. Select Archived Run to validate:[/bold]")
+    for i, run in enumerate(runs[:10], 1):
+        # Read metadata for info
+        metadata_file = run / "metadata.json"
+        info = ""
+        if metadata_file.exists():
+            try:
+                with open(metadata_file) as f:
+                    metadata = json.load(f)
+                paradigms = ", ".join(metadata.get("config", {}).get("paradigms", [])[:3])
+                info = f"[dim]({paradigms})[/dim]"
+            except Exception:
+                pass
+        console.print(f"  [cyan]{i}[/cyan]. {run.name} {info}")
+    console.print()
+
+    run_idx = IntPrompt.ask("Select", default=1)
+    if not (1 <= run_idx <= len(runs)):
+        return
+    archive_run = runs[run_idx - 1]
+
+    # 5. Select paradigm (optional)
+    console.print("\n[bold]3. Paradigm filter:[/bold]")
+    console.print("  [cyan]1[/cyan]. All paradigms")
+    console.print("  [cyan]2[/cyan]. Select specific")
+    console.print()
+    paradigm_choice = Prompt.ask("Select", choices=["1", "2"], default="1")
+
+    paradigm_filter = None
+    if paradigm_choice == "2":
+        paradigm_filter = Prompt.ask("Paradigm", default="P1")
+
+    # 6. Verbose?
+    verbose = Confirm.ask("\nVerbose output?", default=False)
+
+    # 7. Run validation
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]Expected Answers Validation[/bold]\n\n"
+        f"Dataset:     {dataset_source.name}\n"
+        f"Archive run: {archive_run.name}\n"
+        f"Paradigm:    {paradigm_filter or 'ALL'}",
+        border_style="blue"
+    ))
+
+    if not Confirm.ask("\nRun validation?", default=True):
+        return
+
+    # Build command
+    cmd_args = ["validate-expected", "--archive", str(archive_run), "--dataset", str(dataset_source)]
+
+    if paradigm_filter:
+        cmd_args.extend(["--paradigm", paradigm_filter])
+
+    # Output
+    validation_dir = RESULTS_DIR / "validation"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output = validation_dir / f"expected_{archive_run.name}_{timestamp}.json"
+    cmd_args.extend(["--output", str(output)])
+
+    if verbose:
+        cmd_args.append("--verbose")
+
+    console.print()
+    btb(*cmd_args)
+
+    console.print(f"\n[green]Report saved: {output.name}[/green]")
+    wait()
 
 
 def menu_archived_runs():
@@ -719,31 +837,25 @@ def view_validation_reports():
         wait()
         return
 
-    html_reports = sorted(validation_dir.glob("*.html"), reverse=True)
+    md_reports = sorted(validation_dir.glob("*.md"), reverse=True)
     json_reports = sorted(validation_dir.glob("*.json"), reverse=True)
 
-    if not html_reports and not json_reports:
+    if not md_reports and not json_reports:
         console.print("[yellow]No validation reports yet.[/yellow]")
         wait()
         return
 
-    console.print("[bold]HTML Reports (for publication):[/bold]")
-    for i, f in enumerate(html_reports[:5], 1):
+    console.print("[bold]Markdown Reports:[/bold]")
+    for i, f in enumerate(md_reports[:5], 1):
         console.print(f"  [cyan]{i}[/cyan]. {f.name}")
 
     console.print()
-    console.print("[bold]JSON Reports (detailed data):[/bold]")
+    console.print("[bold]JSON Reports (raw data):[/bold]")
     for f in json_reports[:5]:
         console.print(f"  [dim]{f.name}[/dim]")
 
     console.print()
     console.print(f"[dim]Location: {validation_dir}[/dim]")
-    console.print()
-
-    if html_reports:
-        if Confirm.ask("Open latest HTML report in browser?", default=False):
-            import webbrowser
-            webbrowser.open(f"file://{html_reports[0].absolute()}")
 
     wait()
 

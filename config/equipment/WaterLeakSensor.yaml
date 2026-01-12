@@ -1,0 +1,18 @@
+# WaterLeakSensor - Water Leak Sensor
+# 2 points
+
+equipment:
+  code: WLS
+  domain: BMS
+  haystack: waterLeakSensor
+  brick: Water_Leak_Sensor
+  protocols: [bacnet]
+
+points:
+  - id: leak_detected
+    type: etat
+    values: [dry, wet, fault]
+
+  - id: sensor_status
+    type: etat
+    values: [ok, fault]

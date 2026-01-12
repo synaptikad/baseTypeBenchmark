@@ -58,11 +58,15 @@ class ScenarioConfig:
     n_variants: int = 3
     timeout_seconds: float = 300.0
 
-    def to_benchmark_config(self) -> BenchmarkConfig:
-        """Convert to BenchmarkConfig for results."""
+    def to_benchmark_config(self, actual_queries: list[str] | None = None) -> BenchmarkConfig:
+        """Convert to BenchmarkConfig for results.
+
+        Args:
+            actual_queries: Actual queries that were run (overrides self.queries)
+        """
         return BenchmarkConfig(
             paradigms=self.paradigms,
-            queries=self.queries or [],
+            queries=actual_queries or self.queries or [],
             data_profile=self.data_profile,
             ram_levels_mb=self.ram_levels_mb,
             n_warmup=self.n_warmup,
@@ -167,8 +171,6 @@ class BenchmarkOrchestrator:
         """
         scenario = scenario or ScenarioConfig()
         results = BenchmarkResults()
-        results.config = scenario.to_benchmark_config()
-        results.start_time = datetime.now()
 
         # Reset state for new benchmark run (Option A)
         self._timeseries_loaded = False
@@ -177,6 +179,14 @@ class BenchmarkOrchestrator:
         queries = scenario.queries
         if not queries:
             queries = self._get_all_queries()
+
+        # Extract data_profile from source_dir name (e.g., "medium-1m" → "medium-1m")
+        data_profile = source_dir.name if source_dir else scenario.data_profile
+        scenario.data_profile = data_profile
+
+        # Set config with actual queries
+        results.config = scenario.to_benchmark_config(actual_queries=queries)
+        results.start_time = datetime.now()
 
         # Start archive if enabled
         if self._archive:
@@ -348,6 +358,27 @@ class BenchmarkOrchestrator:
                                 parameters={},  # TODO: capture from gradient executor
                                 execution_time_ms=stats.avg_ms,
                                 ram_limit_mb=level.limit_mb,
+                            )
+
+                        # Save metrics separately
+                        if self._archive:
+                            self._archive.save_query_metrics(
+                                query_id=qid,
+                                paradigm=paradigm,
+                                metrics={
+                                    "query_id": qid,
+                                    "ram_limit_mb": level.limit_mb,
+                                    "p50_ms": stats.p50_ms,
+                                    "p95_ms": stats.p95_ms,
+                                    "avg_ms": stats.avg_ms,
+                                    "min_ms": stats.min_ms,
+                                    "max_ms": stats.max_ms,
+                                    "stddev_ms": stats.stddev_ms,
+                                    "success_rate": stats.success_rate,
+                                    "memory_peak_mb": stats.memory_peak_mb,
+                                    "run_count": len(stats.runs),
+                                    "row_count": stats.row_count,
+                                },
                             )
 
                     results.levels.append(level_result)

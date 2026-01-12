@@ -945,11 +945,11 @@ class RAMGradientExecutor:
 
         Strategy:
         1. Try dynamic sampling from loaded dataset (if available)
-        2. Fall back to golden_answers.yaml
+        2. Return empty dict if no sampled params (dataset must provide params)
         """
         from ..core.query_utils import normalize_param_keys
 
-        # Try dynamic parameters first (always use sampled params, never golden_answers)
+        # Use sampled parameters from dataset
         if hasattr(self, "_sampled_params") and self._sampled_params:
             from ..core.param_sampler import get_params_for_query
             params = get_params_for_query(query_id, self._sampled_params)
@@ -967,40 +967,16 @@ class RAMGradientExecutor:
                     params = normalize_param_keys(params, target_case="camel")
                 return params
 
-        # Fall back to golden_answers.yaml (only for development/validation)
-        if not hasattr(self, "_golden_answers"):
-            golden_path = Path(__file__).parents[4] / "queries" / "golden_answers.yaml"
-            if golden_path.exists():
-                import yaml
-                with open(golden_path, "r", encoding="utf-8") as f:
-                    self._golden_answers = yaml.safe_load(f)
-            else:
-                self._golden_answers = {}
-
-        # Get query-specific parameters
-        answers = self._golden_answers.get("answers", {})
-        query_data = answers.get(query_id, {})
-        params = query_data.get("parameters", {})
-
-        # Get expected parameter names from catalog
-        query_def = self._catalog.get_query(query_id)
-        expected_param_names = set(p.upper() for p in query_def.parameter_order) if query_def else set()
-
-        # Only merge default_parameters for params actually used by this query
-        defaults = self._golden_answers.get("default_parameters", {})
-        filtered_defaults = {k: v for k, v in defaults.items() if k.upper() in expected_param_names}
-        merged = {**filtered_defaults, **params}
-
-        # Normalize parameter key casing based on paradigm
-        # P1/P2: lowercase for named %(name)s placeholders
-        # M1/M2: lowercase for $name Cypher params
-        # O2: camelCase for SPARQL ?var bindings
-        if self.paradigm in ("P1", "P2", "M1", "M2"):
-            merged = normalize_param_keys(merged, target_case="lower")
-        elif self.paradigm == "O2":
-            merged = normalize_param_keys(merged, target_case="camel")
-
-        return merged
+        # No sampled params available - return empty dict
+        # Parameters MUST come from the dataset (queries_params.yaml or expected_answers)
+        # The caller should ensure _sampled_params is initialized from the dataset
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"No sampled parameters for {query_id}. "
+            "Ensure dataset is loaded with queries_params.yaml."
+        )
+        return {}
 
     def _init_param_sampler(self):
         """Initialize parameters from queries_params.yaml or dynamic sampling."""

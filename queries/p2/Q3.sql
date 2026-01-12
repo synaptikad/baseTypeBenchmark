@@ -9,5 +9,5 @@ SELECT
 FROM edges ed
 JOIN nodes n ON n.id = ed.source_id AND n.node_type = 'Equipment'
 WHERE ed.target_id = $1
-  AND ed.rel_type IN ('SERVES', 'LOCATED_IN', 'MONITORS', 'CONTAINS', 'SECURES', 'GRANTS_ACCESS')
+  AND ed.rel_type = 'SERVES'
 ORDER BY ed.rel_type, n.id;

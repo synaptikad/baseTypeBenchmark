@@ -52,18 +52,33 @@ btb-runner benchmark -s data/generated/small-2d -p P1,M1 --ram 32,16,8
 
 ---
 
-## Queries (34 total)
+## Queries (42 total)
 
-### Reads (Q1-Q26)
+### Reads (Q1-Q34)
 
-| Catégorie | Queries | Description |
-|-----------|---------|-------------|
-| **Graph-only** | Q1-Q5 | Traversées structurelles (FEEDS, SERVES, CONTAINS) |
-| **Timeseries** | Q6 | Agrégations temporelles (time_bucket) |
-| **Hybrid** | Q7-Q13 | Sélection graph + agrégation TS |
-| **JSONB** | Q14-Q19 | Requêtes metadata (P2=NATIVE) |
-| **Graph-native** | Q20-Q23 | Algorithmes graphe (shortestPath, allPaths) |
-| **Validation** | Q24-Q26 | Lectures post-écriture |
+| Catégorie | Queries | Description | Avantage |
+|-----------|---------|-------------|----------|
+| **Graph-only** | Q1-Q5 | Traversées structurelles (FEEDS, SERVES, CONTAINS) | Neutre |
+| **Timeseries** | Q6 | Agrégations temporelles (time_bucket) | SQL |
+| **Hybrid** | Q7-Q13 | Sélection graph + agrégation TS | Neutre |
+| **JSONB** | Q14-Q19 | Requêtes metadata (P2=NATIVE) | P2 |
+| **Graph-native** | Q20-Q23 | Algorithmes graphe (shortestPath, allPaths) | M1/M2 |
+| **Validation** | Q24-Q26 | Lectures post-écriture | Neutre |
+| **Graph-native+** | Q27-Q30 | Weighted paths, cycles, multi-hop | M1/M2 |
+| **SQL-native** | Q31-Q34 | Window functions, LATERAL, materialized views | P1/P2 |
+
+#### Nouvelles queries d'équilibrage (Q27-Q34)
+
+| Query | Nom | Graph Status | SQL Status |
+|-------|-----|--------------|------------|
+| **Q27** | Evacuation Path | NATIVE (Dijkstra) | DEGRADED (CTE récursif) |
+| **Q28** | Tenant Impact Chain | NATIVE (var-length) | DEGRADED (5 JOINs) |
+| **Q29** | All Power Paths | NATIVE (allPaths) | DEGRADED (ARRAY explosion) |
+| **Q30** | Cycle Detection | NATIVE (O(V+E)) | DEGRADED (O(n²)) |
+| **Q31** | Rolling Aggregation | DEGRADED (UNWIND) | NATIVE (window functions) |
+| **Q32** | JSON Schema Validation | DEGRADED | NATIVE (JSONB operators) |
+| **Q33** | Latest Value per Space | IMPOSSIBLE | NATIVE (LATERAL JOIN) |
+| **Q34** | Materialized Energy | IMPOSSIBLE | NATIVE (mat. views) |
 
 ### Writes (QW1-QW8)
 
@@ -74,7 +89,7 @@ btb-runner benchmark -s data/generated/small-2d -p P1,M1 --ram 32,16,8
 | QW3 | Relation Mutation | Ajout/suppression edges |
 | QW4-QW8 | JSONB Writes | Opérations JSONB avancées (P2) |
 
-Voir [queries/catalog.yaml](queries/catalog.yaml) pour les 34 définitions complètes.
+Voir [queries/catalog.yaml](queries/catalog.yaml) pour les 42 définitions complètes.
 
 ---
 
@@ -307,9 +322,23 @@ docker compose -f docker/docker-compose.yml logs -f memgraph
 
 ## Évolutions récentes
 
-### v3 (Janvier 2026)
+### v3.1 (Janvier 2026)
+
+- **Équilibrage benchmark** : 8 nouvelles queries (Q27-Q34) pour balance graph/SQL
+  - Q27-Q30 : Graph-native (weighted paths, cycles) - avantage M1/M2
+  - Q31-Q34 : SQL-native (window functions, LATERAL) - avantage P1/P2
+- **Enrichissement dataset** : Nouveaux types d'entités et relations
+  - Node types : Technician, WorkOrder, Alarm, Schedule, Lease, Contract, Zone
+  - Equipment types : 35 types (Lighting, FireSafety, Parking, HVAC, Electrical, BMS)
+  - Relations : 26 types incluant EMERGENCY_EXIT, TRIGGERS, FOLLOWS, ASSIGNED_TO
+- **Propriétés graph-native** : `is_exit`, `distance`, `critical` pour Q27-Q30
+- **Expected answers** : Génération automatique des réponses attendues pour validation
+- **Archivage résultats** : Replay et reproductibilité des benchmarks
+
+### v3.0 (Janvier 2026)
 
 - **Validation cross-paradigme** : Comparaison P1 vs autres avec rapport HTML
+- **Validation sémantique** : Comparaison avec expected answers générés
 - **queries_params.yaml** : Paramètres identiques garantis entre paradigmes
 - **Timeseries par fréquence** : Respect de la propriété `frequency` des points
 - **O2 (Oxigraph)** : Queries SPARQL corrigées (Q14, Q15, Q23)
@@ -318,5 +347,6 @@ docker compose -f docker/docker-compose.yml logs -f memgraph
 
 ### Documentation technique
 
-- [queries/catalog.yaml](queries/catalog.yaml) - Définition des 34 queries
+- [queries/catalog.yaml](queries/catalog.yaml) - Définition des 42 queries
+- [config/validation_rules.yaml](config/validation_rules.yaml) - Règles DEGRADED/IMPOSSIBLE
 - [docs/SPEC_WORKLOAD_SCENARIOS.md](docs/SPEC_WORKLOAD_SCENARIOS.md) - Spec load testing

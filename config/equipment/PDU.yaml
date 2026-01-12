@@ -1,0 +1,28 @@
+# PDU - Power Distribution Unit
+# 3 points
+
+equipment:
+  code: PDU
+  domain: IT
+  haystack: pdu
+  brick: Power_Distribution_Unit
+  protocols: [snmp, modbus_tcp]
+
+points:
+  - id: total_power
+    type: mesure
+    freq: normal
+    unit: kW
+    quantity: power
+
+  - id: total_current
+    type: mesure
+    freq: normal
+    unit: A
+    quantity: current
+
+  - id: outlet_count
+    type: mesure
+    freq: slow
+    unit: count
+    quantity: count

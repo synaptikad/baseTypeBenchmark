@@ -11,7 +11,7 @@ WHERE {
 
     ?eq a btb:Equipment ;
         btb:equipmentType ?equipment_type .
-    ?eq btb:monitors|btb:locatedIn|btb:secures ?space .
+    ?eq btb:locatedIn ?space .
 
     FILTER(?equipment_type IN ("BadgeReader", "IPCamera", "DoorContact", "PIRDetector"))
 }

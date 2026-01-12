@@ -1,0 +1,20 @@
+# Humidity_Sensor - Humidity Sensor
+# 2 points
+
+equipment:
+  code: HS
+  domain: BMS
+  haystack: humiditySensor
+  brick: Humidity_Sensor
+  protocols: [bacnet]
+
+points:
+  - id: humidity
+    type: mesure
+    freq: normal
+    unit: "%"
+    quantity: humidity
+
+  - id: sensor_status
+    type: etat
+    values: [ok, fault]

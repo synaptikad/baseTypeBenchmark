@@ -1,28 +1,33 @@
-# Q23: Adjacency Propagation
+# Q23: Failure Impact Analysis
 # Status: DEGRADED pour O2 (property path avec limite fixe)
-# Paramètres: spaceId, maxHops (ignoré, fixé à 3)
+# Semantic: If this equipment fails, which spaces/equipment are impacted within N hops?
+# Paramètres: equipmentId, maxHops (ignoré, fixé à 3)
 PREFIX btb: <http://basetype.benchmark/ontology#>
 
 SELECT DISTINCT ?node_id ?node_type ?node_name (MIN(?dist) AS ?hop_distance)
 WHERE {
-    ?start a btb:Space ;
-           btb:id ?spaceId .
+    ?start a btb:Equipment ;
+           btb:id ?equipmentId .
 
-    # Relations de propagation (bidirectionnelles pour ADJACENT_TO)
-    # ADJACENT_TO: symétrique (space <-> space)
-    # CONTAINS: floor -> space (on veut remonter)
-    # MONITORS/SERVES: equipment -> space (on veut l'equipment)
+    # Relations de propagation pour analyse d'impact de panne
+    # FEEDS: flux d'énergie/fluide (bidirectionnel pour impact)
+    # SERVES: dépendance de service
+    # POWERS: dépendance électrique
 
     {
         # Hop 1: voisins directs
         {
-            ?start btb:adjacentTo ?node .
+            ?start btb:feeds ?node .
         } UNION {
-            ?node btb:adjacentTo ?start .
+            ?node btb:feeds ?start .
         } UNION {
-            ?node btb:monitors|btb:serves|btb:contains ?start .
+            ?start btb:serves ?node .
         } UNION {
-            ?start btb:contains ?node .
+            ?node btb:serves ?start .
+        } UNION {
+            ?start btb:powers ?node .
+        } UNION {
+            ?node btb:powers ?start .
         }
         BIND(1 AS ?dist)
     }
@@ -30,23 +35,15 @@ WHERE {
     {
         # Hop 2
         {
-            ?start btb:adjacentTo ?mid1 .
+            ?start btb:feeds|btb:serves|btb:powers ?mid1 .
         } UNION {
-            ?mid1 btb:adjacentTo ?start .
-        } UNION {
-            ?mid1 btb:monitors|btb:serves|btb:contains ?start .
-        } UNION {
-            ?start btb:contains ?mid1 .
+            ?mid1 btb:feeds|btb:serves|btb:powers ?start .
         }
 
         {
-            ?mid1 btb:adjacentTo ?node .
+            ?mid1 btb:feeds|btb:serves|btb:powers ?node .
         } UNION {
-            ?node btb:adjacentTo ?mid1 .
-        } UNION {
-            ?node btb:monitors|btb:serves|btb:contains ?mid1 .
-        } UNION {
-            ?mid1 btb:contains ?node .
+            ?node btb:feeds|btb:serves|btb:powers ?mid1 .
         }
         FILTER(?node != ?start)
         BIND(2 AS ?dist)
@@ -55,34 +52,22 @@ WHERE {
     {
         # Hop 3
         {
-            ?start btb:adjacentTo ?mid1 .
+            ?start btb:feeds|btb:serves|btb:powers ?mid1 .
         } UNION {
-            ?mid1 btb:adjacentTo ?start .
-        } UNION {
-            ?mid1 btb:monitors|btb:serves|btb:contains ?start .
-        } UNION {
-            ?start btb:contains ?mid1 .
+            ?mid1 btb:feeds|btb:serves|btb:powers ?start .
         }
 
         {
-            ?mid1 btb:adjacentTo ?mid2 .
+            ?mid1 btb:feeds|btb:serves|btb:powers ?mid2 .
         } UNION {
-            ?mid2 btb:adjacentTo ?mid1 .
-        } UNION {
-            ?mid2 btb:monitors|btb:serves|btb:contains ?mid1 .
-        } UNION {
-            ?mid1 btb:contains ?mid2 .
+            ?mid2 btb:feeds|btb:serves|btb:powers ?mid1 .
         }
         FILTER(?mid2 != ?start)
 
         {
-            ?mid2 btb:adjacentTo ?node .
+            ?mid2 btb:feeds|btb:serves|btb:powers ?node .
         } UNION {
-            ?node btb:adjacentTo ?mid2 .
-        } UNION {
-            ?node btb:monitors|btb:serves|btb:contains ?mid2 .
-        } UNION {
-            ?mid2 btb:contains ?node .
+            ?node btb:feeds|btb:serves|btb:powers ?mid2 .
         }
         FILTER(?node != ?start && ?node != ?mid1)
         BIND(3 AS ?dist)

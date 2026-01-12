@@ -216,7 +216,7 @@ class QueryResult(BaseModel):
     # Validation
     validated: bool = False
     validation_error: Optional[str] = None
-    matches_golden: Optional[bool] = None
+    matches_expected: Optional[bool] = None
 
     # Error info
     error_message: Optional[str] = None
@@ -257,7 +257,7 @@ class QueryResult(BaseModel):
             "execution_time_ms": self.timing.avg_time_ms,
             "memory_mb": self.resources.memory_mb_max,
             "validated": self.validated,
-            "matches_golden": self.matches_golden,
+            "matches_expected": self.matches_expected,
         }
 
 

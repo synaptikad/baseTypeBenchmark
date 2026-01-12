@@ -1,0 +1,32 @@
+# Generator - Emergency Generator
+# 4 points
+
+equipment:
+  code: GEN
+  domain: Electrical
+  haystack: generator
+  brick: Emergency_Generator
+  protocols: [modbus_tcp, bacnet]
+
+points:
+  - id: running_status
+    type: etat
+    values: [stopped, running, cooldown]
+
+  - id: power_output
+    type: mesure
+    freq: normal
+    unit: kW
+    quantity: power
+
+  - id: fuel_level
+    type: mesure
+    freq: slow
+    unit: "%"
+    quantity: level
+
+  - id: runtime_hours
+    type: mesure
+    freq: slow
+    unit: h
+    quantity: time
