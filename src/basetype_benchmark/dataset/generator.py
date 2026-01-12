@@ -518,6 +518,7 @@ class DatasetGenerator:
         self.nodes: List[Node] = []
         self.edges: List[Edge] = []
         self.timeseries: List[TimeseriesPoint] = []
+        self._node_index: Dict[str, Node] = {}  # id -> Node for O(1) lookup
 
         # Index pour relations
         self._buildings: List[str] = []
@@ -568,12 +569,17 @@ class DatasetGenerator:
         print(f"Generated: {len(self.nodes)} nodes, {len(self.edges)} edges, {len(self.timeseries)} timeseries points")
         return self
 
+    def _add_node(self, node: Node) -> None:
+        """Ajoute un nœud à la liste et à l'index"""
+        self.nodes.append(node)
+        self._node_index[node.id] = node
+
     def _generate_spatial_hierarchy(self):
         """Génère Site → Buildings → Floors → Spaces"""
 
         # Site unique
         site_id = "site_1"
-        self.nodes.append(Node(
+        self._add_node(Node(
             id=site_id,
             type="Site",
             name="Campus Principal",
@@ -587,7 +593,7 @@ class DatasetGenerator:
             self._floors[building_id] = []
             self._equipment_by_building[building_id] = []
 
-            self.nodes.append(Node(
+            self._add_node(Node(
                 id=building_id,
                 type="Building",
                 name=f"Bâtiment {chr(64 + b)}",  # A, B, C...
@@ -621,7 +627,7 @@ class DatasetGenerator:
                         above_ground_counter += 1
                         level_index = above_ground_counter
 
-                    self.nodes.append(Node(
+                    self._add_node(Node(
                         id=floor_id,
                         type="Floor",
                         name=f"Étage {level_index}" if level_index >= 0 else f"Sous-sol {-level_index}",
@@ -646,7 +652,7 @@ class DatasetGenerator:
                             # Q27: is_exit for emergency exit spaces (stairwell, lobby, corridor on ground floor)
                             is_exit_space = space_type in ['stairwell', 'lobby', 'corridor'] and level_index == 0
 
-                            self.nodes.append(Node(
+                            self._add_node(Node(
                                 id=space_id,
                                 type="Space",
                                 name=f"{space_type.replace('_', ' ').title()} {space_counter}",
@@ -1165,7 +1171,7 @@ class DatasetGenerator:
         tags = self.capabilities_gen.generate_tags(equipment_type, config)
 
         # Créer le nœud
-        self.nodes.append(Node(
+        self._add_node(Node(
             id=eq_id,
             type="Equipment",
             name=f"{equipment_type} {eq_count}",
@@ -1209,8 +1215,8 @@ class DatasetGenerator:
             point_count = len(self.nodes) + 1
             point_id = f"point_{equipment_id}_{point_config.get('id', 'value')}"
 
-            # Éviter les doublons
-            if any(n.id == point_id for n in self.nodes):
+            # Éviter les doublons (O(1) via index)
+            if point_id in self._node_index:
                 point_id = f"{point_id}_{point_count}"
 
             quantity = point_config.get('quantity', 'status')
@@ -1232,7 +1238,7 @@ class DatasetGenerator:
             calibration = self.calibration_gen.generate(point_type, quantity)
             range_info = self.range_gen.generate(quantity)
 
-            self.nodes.append(Node(
+            self._add_node(Node(
                 id=point_id,
                 type="Point",
                 name=f"{point_config.get('desc', quantity)} - {equipment_id}",
@@ -1256,7 +1262,7 @@ class DatasetGenerator:
         for t in range(1, self.profile.tenants + 1):
             tenant_id = f"tenant_{t}"
 
-            self.nodes.append(Node(
+            self._add_node(Node(
                 id=tenant_id,
                 type="Tenant",
                 name=f"Locataire {t} SARL",
@@ -1294,7 +1300,7 @@ class DatasetGenerator:
             schedules[building_id] = {}
             for stype in schedule_types:
                 schedule_id = f"schedule_{building_id}_{stype}"
-                self.nodes.append(Node(
+                self._add_node(Node(
                     id=schedule_id,
                     type="Schedule",
                     name=f"Schedule {stype.title()} - {building_id}",
@@ -1316,7 +1322,7 @@ class DatasetGenerator:
         for tenant_id in tenant_ids:
             tenant_node = self._get_node(tenant_id)
             lease_id = f"lease_{tenant_id}"
-            self.nodes.append(Node(
+            self._add_node(Node(
                 id=lease_id,
                 type="Lease",
                 name=f"Bail {tenant_node.name}",
@@ -1369,7 +1375,7 @@ class DatasetGenerator:
             for zone_type in zone_types:
                 zone_id = f"zone_{building_id}_{zone_type}"
 
-                self.nodes.append(Node(
+                self._add_node(Node(
                     id=zone_id,
                     type="Zone",
                     name=f"Zone {zone_type.title()} - {building_id}",
@@ -1388,7 +1394,7 @@ class DatasetGenerator:
         """Génère des relations supplémentaires"""
         # Contrats de maintenance
         contract_id = "contract_maintenance_1"
-        self.nodes.append(Node(
+        self._add_node(Node(
             id=contract_id,
             type="Contract",
             name="Contrat Maintenance CVC",
@@ -1461,7 +1467,7 @@ class DatasetGenerator:
                 num_certs = self.rng.randint(0, 2)
                 certifications = self.rng.sample(certifications_pool, num_certs) if num_certs > 0 else []
 
-                self.nodes.append(Node(
+                self._add_node(Node(
                     id=tech_id,
                     type="Technician",
                     name=f"Tech {name}",
@@ -1502,7 +1508,7 @@ class DatasetGenerator:
                     completed_days_after_created = self.rng.randint(1, due_days_after_created)
                     completed_at = created_at + timedelta(days=completed_days_after_created)
 
-                self.nodes.append(Node(
+                self._add_node(Node(
                     id=wo_id,
                     type="WorkOrder",
                     name=f"WO-{workorder_counter:04d}",
@@ -1563,7 +1569,7 @@ class DatasetGenerator:
                     else:
                         resolved_at = triggered_at + timedelta(hours=resolve_hours_after_ack)
 
-                self.nodes.append(Node(
+                self._add_node(Node(
                     id=alarm_id,
                     type="Alarm",
                     name=f"ALM-{alarm_counter:04d}",
@@ -1589,7 +1595,7 @@ class DatasetGenerator:
         """Génère un équipement orphelin (sans relations) pour Q5"""
         orphan_id = "orphan_1"
 
-        self.nodes.append(Node(
+        self._add_node(Node(
             id=orphan_id,
             type="Equipment",
             name="Orphan Sensor",
@@ -1776,11 +1782,8 @@ class DatasetGenerator:
             return round(self.rng.uniform(0, 100), 1)
 
     def _get_node(self, node_id: str) -> Optional[Node]:
-        """Récupère un nœud par ID"""
-        for n in self.nodes:
-            if n.id == node_id:
-                return n
-        return None
+        """Récupère un nœud par ID (O(1) via index)"""
+        return self._node_index.get(node_id)
 
     # =========================================================================
     # QUERY PARAMS GENERATION

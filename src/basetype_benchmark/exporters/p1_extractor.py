@@ -52,8 +52,8 @@ class P1Extractor(BaseExtractor):
         "sites": ["id", "name", "address"],
         "buildings": ["id", "name", "site_id", "address", "gross_area_m2"],
         "floors": ["id", "name", "building_id", "floor_type", "level_index"],
-        "spaces": ["id", "name", "floor_id", "building_id", "space_type", "area_m2", "capacity"],
-        "equipment": ["id", "name", "equipment_type", "domain", "building_id", "floor_id", "space_id"],
+        "spaces": ["id", "name", "floor_id", "building_id", "space_type", "area_m2", "capacity", "is_exit"],
+        "equipment": ["id", "name", "equipment_type", "domain", "building_id", "floor_id", "space_id", "critical"],
         "points": ["id", "name", "quantity", "unit", "equipment_id", "building_id", "frequency"],
         "tenants": ["id", "name", "contract_start", "contract_end"],
         "zones": ["id", "name", "zone_type", "description"],
@@ -201,7 +201,8 @@ CREATE TABLE IF NOT EXISTS spaces (
     building_id VARCHAR(64) REFERENCES buildings(id),
     space_type VARCHAR(64),
     area_m2 FLOAT,
-    capacity INTEGER
+    capacity INTEGER,
+    is_exit BOOLEAN DEFAULT false
 );
 
 -- Equipment
@@ -212,7 +213,8 @@ CREATE TABLE IF NOT EXISTS equipment (
     domain VARCHAR(32) NOT NULL,
     building_id VARCHAR(64) REFERENCES buildings(id),
     floor_id VARCHAR(64) REFERENCES floors(id),
-    space_id VARCHAR(64) REFERENCES spaces(id)
+    space_id VARCHAR(64) REFERENCES spaces(id),
+    critical BOOLEAN DEFAULT false
 );
 
 -- Points
