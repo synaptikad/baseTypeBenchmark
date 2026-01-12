@@ -4,9 +4,10 @@ Infrastructure commune pour l'extraction vers tous les paradigmes.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Callable
 from datetime import datetime
 import csv
 import json
@@ -14,6 +15,44 @@ import sys
 
 # Dataclasses partagées pour la génération de données
 from basetype_benchmark.dataset.models import Node, Edge, TimeseriesPoint
+
+
+# =============================================================================
+# EXPORT PROGRESS TYPES
+# =============================================================================
+
+class ExportPhase(Enum):
+    """Phases d'export."""
+    LOADING = "loading"
+    NODES = "nodes"
+    EDGES = "edges"
+    TIMESERIES = "timeseries"
+
+
+@dataclass
+class ExportProgress:
+    """Progress update pour l'export."""
+    phase: ExportPhase
+    current: int
+    total: int
+    rate: float = 0.0
+    message: str = ""
+
+    @property
+    def percent(self) -> float:
+        """Pourcentage de completion."""
+        if self.total <= 0:
+            return 0.0
+        return (self.current / self.total) * 100.0
+
+    @property
+    def is_complete(self) -> bool:
+        """Vrai si la phase est terminée."""
+        return self.current >= self.total
+
+
+# Type alias pour le callback
+ExportProgressCallback = Callable[[ExportProgress], None]
 
 
 class ParquetDataset:
@@ -150,15 +189,73 @@ class BaseExtractor(ABC):
         """Retourne les commandes de création de schema"""
         pass
 
-    def export_all(self) -> ExportResult:
-        """Export complet vers le paradigme cible"""
+    def _emit_progress(
+        self,
+        callback: Optional[ExportProgressCallback],
+        phase: ExportPhase,
+        current: int,
+        total: int,
+        rate: float = 0.0,
+        message: str = "",
+    ) -> None:
+        """Émet un update de progression si callback fourni."""
+        if callback:
+            callback(ExportProgress(
+                phase=phase,
+                current=current,
+                total=total,
+                rate=rate,
+                message=message,
+            ))
+
+    def export_all(
+        self,
+        progress_callback: Optional[ExportProgressCallback] = None,
+    ) -> ExportResult:
+        """Export complet vers le paradigme cible.
+
+        Args:
+            progress_callback: Callback optionnel pour les updates de progression.
+
+        Returns:
+            ExportResult avec les statistiques d'export.
+        """
+        import time
+
+        # Phase 1: Loading Parquet
+        self._emit_progress(progress_callback, ExportPhase.LOADING, 0, 1, message="Loading Parquet...")
         if not self.dataset:
             self.load_dataset()
+        self._emit_progress(progress_callback, ExportPhase.LOADING, 1, 1, message="Parquet loaded")
 
         files = []
+
+        # Phase 2: Nodes
+        total_nodes = len(self.dataset.nodes)
+        self._emit_progress(progress_callback, ExportPhase.NODES, 0, total_nodes, message="Exporting nodes...")
+        start = time.perf_counter()
         files.extend(self.extract_nodes())
+        elapsed = time.perf_counter() - start
+        rate = total_nodes / elapsed if elapsed > 0 else 0
+        self._emit_progress(progress_callback, ExportPhase.NODES, total_nodes, total_nodes, rate=rate)
+
+        # Phase 3: Edges
+        total_edges = len(self.dataset.edges)
+        self._emit_progress(progress_callback, ExportPhase.EDGES, 0, total_edges, message="Exporting edges...")
+        start = time.perf_counter()
         files.extend(self.extract_edges())
+        elapsed = time.perf_counter() - start
+        rate = total_edges / elapsed if elapsed > 0 else 0
+        self._emit_progress(progress_callback, ExportPhase.EDGES, total_edges, total_edges, rate=rate)
+
+        # Phase 4: Timeseries
+        total_ts = len(self.dataset.timeseries)
+        self._emit_progress(progress_callback, ExportPhase.TIMESERIES, 0, total_ts, message="Exporting timeseries...")
+        start = time.perf_counter()
         files.extend(self.extract_timeseries())
+        elapsed = time.perf_counter() - start
+        rate = total_ts / elapsed if elapsed > 0 else 0
+        self._emit_progress(progress_callback, ExportPhase.TIMESERIES, total_ts, total_ts, rate=rate)
 
         # Copy queries_params.yaml if exists
         if self.input_dir:

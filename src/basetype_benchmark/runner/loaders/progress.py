@@ -32,6 +32,7 @@ from rich.text import Text
 
 if TYPE_CHECKING:
     from .base import LoadPhase, LoadProgress, LoadResult
+    from basetype_benchmark.exporters.base import ExportPhase, ExportProgress, ExportResult
 
 # Console ASCII-safe pour Windows (cp1252)
 console = Console(force_terminal=True, color_system="auto")
@@ -312,4 +313,169 @@ def verbose_callback(progress: "LoadProgress") -> None:
         f"{progress.current:,}/{progress.total:,} "
         f"({percent:.1f}%) "
         f"@ {rate_str}"
+    )
+
+
+# =============================================================================
+# EXPORT PROGRESS DISPLAY
+# =============================================================================
+
+class ExportProgressDisplay:
+    """Affichage interactif multi-phases pour l'export.
+
+    Exemple d'affichage:
+    ```
+    Benchmark Exporter v3 - P1 (PostgreSQL)
+    ========================================
+
+    [1/4] Loading     [################] 100%  Done
+    [2/4] Nodes       [##########------]  62%  45,231/72,000  12.4K/s  0:00:05
+    [3/4] Edges       [----------------]   0%  Waiting...
+    [4/4] Timeseries  [----------------]   0%  Waiting...
+    ```
+    """
+
+    PHASE_ORDER = ["loading", "nodes", "edges", "timeseries"]
+
+    def __init__(self, paradigm: str, total_phases: int = 4):
+        """Initialise le display.
+
+        Args:
+            paradigm: Nom du paradigme (P1, P2, M1, M2, O2)
+            total_phases: Nombre total de phases (default: 4)
+        """
+        self.paradigm = paradigm
+        self.total_phases = total_phases
+        self._started = False
+
+        self.progress = Progress(
+            SpinnerColumn(),
+            PhaseColumn(),
+            TextColumn("{task.description:<12}"),
+            BarColumn(bar_width=30),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            SpeedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            refresh_per_second=4,
+        )
+
+        # Map phase -> task_id
+        self.tasks: dict[str, int] = {}
+
+    def start(self) -> None:
+        """Affiche le header et demarre le progress."""
+        if self._started:
+            return
+
+        console.print()
+        console.print(
+            Panel(
+                f"[bold]Benchmark Exporter v3 - {self.paradigm}[/bold]",
+                style="magenta",
+                expand=False,
+            )
+        )
+        console.print()
+        self.progress.start()
+        self._started = True
+
+    def stop(self) -> None:
+        """Arrete le progress display."""
+        if self._started:
+            self.progress.stop()
+            self._started = False
+
+    def _get_phase_num(self, phase_key: str) -> int:
+        """Retourne le numero de phase (1-based)."""
+        try:
+            return self.PHASE_ORDER.index(phase_key) + 1
+        except ValueError:
+            return 0
+
+    def update(self, progress: "ExportProgress") -> None:
+        """Met a jour une phase depuis un ExportProgress.
+
+        Args:
+            progress: ExportProgress avec phase, current, total, rate
+        """
+        if not self._started:
+            self.start()
+
+        phase_key = progress.phase.value
+
+        # Creer la tache si elle n'existe pas
+        if phase_key not in self.tasks:
+            phase_num = self._get_phase_num(phase_key)
+            task_id = self.progress.add_task(
+                phase_key.capitalize(),
+                total=progress.total,
+                phase_num=f"[{phase_num}/{self.total_phases}]",
+                speed=0,
+            )
+            self.tasks[phase_key] = task_id
+
+        # Mettre a jour
+        self.progress.update(
+            self.tasks[phase_key],
+            completed=progress.current,
+            total=progress.total,
+            speed=progress.rate,
+        )
+
+        # Marquer comme complete si termine
+        if progress.is_complete:
+            self.progress.update(
+                self.tasks[phase_key],
+                description=f"[green]{phase_key.capitalize()}[/green]",
+            )
+
+    def print_summary(self, result: "ExportResult") -> None:
+        """Affiche le resume final.
+
+        Args:
+            result: ExportResult avec statistiques
+        """
+        self.stop()
+        console.print()
+
+        # Table de resume
+        table = Table(title="Export Summary", show_header=True, expand=False)
+        table.add_column("Metric", style="cyan", no_wrap=True)
+        table.add_column("Value", style="green", justify="right")
+
+        table.add_row("Paradigm", result.paradigm.upper())
+        table.add_row("Nodes", f"{result.total_nodes:,}")
+        table.add_row("Edges", f"{result.total_edges:,}")
+        table.add_row("Timeseries", f"{result.total_timeseries:,}")
+        table.add_row("Files Created", f"{len(result.files_created)}")
+
+        console.print(table)
+        console.print()
+
+    def __enter__(self) -> "ExportProgressDisplay":
+        """Context manager entry."""
+        self.start()
+        return self
+
+    def __exit__(self, *args) -> None:
+        """Context manager exit."""
+        self.stop()
+
+
+def export_verbose_callback(progress: "ExportProgress") -> None:
+    """Callback verbose pour logging detaille de l'export.
+
+    Args:
+        progress: ExportProgress
+    """
+    percent = progress.percent
+    rate_str = f"{progress.rate:.0f}/s" if progress.rate > 0 else "-"
+    msg = f" - {progress.message}" if progress.message else ""
+    print(
+        f"  [{progress.phase.value}] "
+        f"{progress.current:,}/{progress.total:,} "
+        f"({percent:.1f}%) "
+        f"@ {rate_str}{msg}"
     )

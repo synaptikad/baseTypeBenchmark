@@ -32,6 +32,7 @@ from ..config import (
     OxigraphConfig,
 )
 from ..loaders import get_loader
+from ..loaders.progress import LoadProgressDisplay, ExportProgressDisplay
 from ..ram import IsolationManager, RAMGradientExecutor, GradientResult
 from .results import (
     BenchmarkResults,
@@ -449,6 +450,34 @@ class BenchmarkOrchestrator:
         next_paradigm = all_paradigms[current_idx + 1]
         return next_paradigm in timescale_paradigms
 
+    def _get_extractor(self, paradigm: str, output_dir: Path, input_dir: Path):
+        """Get extractor instance for a paradigm.
+
+        Args:
+            paradigm: Paradigm ID (P1, P2, M1, M2, O2)
+            output_dir: Output directory for exported files
+            input_dir: Input directory with Parquet files
+
+        Returns:
+            Extractor instance
+        """
+        paradigm_upper = paradigm.upper()
+
+        if paradigm_upper == "P1":
+            from basetype_benchmark.exporters.p1_extractor import P1Extractor
+            return P1Extractor(output_dir=output_dir, input_dir=input_dir)
+        elif paradigm_upper == "P2":
+            from basetype_benchmark.exporters.p2_extractor import P2Extractor
+            return P2Extractor(output_dir=output_dir, input_dir=input_dir)
+        elif paradigm_upper in ("M1", "M2"):
+            from basetype_benchmark.exporters.m1m2_extractor import M1M2Extractor
+            return M1M2Extractor(output_dir=output_dir, input_dir=input_dir)
+        elif paradigm_upper == "O2":
+            from basetype_benchmark.exporters.o2_extractor import O2Extractor
+            return O2Extractor(output_dir=output_dir, input_dir=input_dir)
+        else:
+            raise ValueError(f"Unknown paradigm: {paradigm}")
+
     def _export_paradigm(
         self,
         paradigm: str,
@@ -468,19 +497,11 @@ class BenchmarkOrchestrator:
         paradigm_export_dir = export_base_dir / paradigm.lower() / source_dir.name
         paradigm_export_dir.mkdir(parents=True, exist_ok=True)
 
-        module = self.EXPORTER_MODULES.get(paradigm.upper())
-        if not module:
-            raise ValueError(f"Unknown paradigm: {paradigm}")
+        extractor = self._get_extractor(paradigm, paradigm_export_dir, source_dir)
 
-        cmd = [
-            sys.executable, "-m", module,
-            "--input", str(source_dir),
-            "--output", str(paradigm_export_dir),
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Export failed for {paradigm}: {result.stderr}")
+        with ExportProgressDisplay(paradigm) as display:
+            result = extractor.export_all(progress_callback=display.update)
+            display.print_summary(result)
 
         return paradigm_export_dir
 
@@ -502,9 +523,12 @@ class BenchmarkOrchestrator:
         # Determine if we should keep timeseries (Option A)
         keep_ts = self._should_keep_timeseries(paradigm)
 
-        # Clear and load
+        # Clear and load with progress display
         loader.clear_database(keep_timeseries=keep_ts)
-        result = loader.load_all(data_dir)
+
+        with LoadProgressDisplay(paradigm) as display:
+            result = loader.load_all(data_dir, progress_callback=display.update)
+            display.print_summary(result)
 
         if not result.success:
             raise RuntimeError(f"Data loading failed: {result.errors}")
