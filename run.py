@@ -44,22 +44,24 @@ PARADIGMS = ["P1", "P2", "M1", "M2", "O2"]
 SCENARIOS_DIR = CONFIG_DIR / "scenarios"
 
 # All query IDs for reference
-# Note: Order matters! Writes (QW) must execute before their validation queries (Q24-Q26)
-ALL_READ_QUERIES = [f"Q{i}" for i in range(1, 35)]   # Q1-Q34
+# Note: Order matters! Writes (QW) must execute before their validation queries
+ALL_READ_QUERIES = [f"Q{i}" for i in range(1, 39)]   # Q1-Q38
 ALL_WRITE_QUERIES = [f"QW{i}" for i in range(1, 9)]  # QW1-QW8
 # Correct order: independent reads, then write→validation pairs
-# Q1-Q23 (independent) + Q27-Q34 (independent) + QW1-QW3 (no validation) +
-# QW4→Q24 + QW5→Q25 + QW6 (shares Q25) + QW7→Q26 + QW8 (no validation)
+# Q1-Q23 (independent) + Q27-Q34 (independent) +
+# QW1→Q35 + QW2→Q36 + QW3→Q37 + QW4→Q24 + QW5/QW6→Q25 + QW7→Q26 + QW8→Q38
 ALL_QUERIES_UNORDERED = ALL_READ_QUERIES + ALL_WRITE_QUERIES  # For reference only
 ALL_QUERIES = (
     [f"Q{i}" for i in range(1, 24)] +   # Q1-Q23 (independent reads)
     [f"Q{i}" for i in range(27, 35)] +  # Q27-Q34 (independent reads)
-    ["QW1", "QW2", "QW3"] +              # QW1-QW3 (writes, no direct validation)
-    ["QW4", "Q24"] +                     # QW4 → Q24 (write then validate)
-    ["QW5", "QW6", "Q25"] +              # QW5, QW6 → Q25 (writes then validate)
-    ["QW7", "Q26"] +                     # QW7 → Q26 (write then validate)
-    ["QW8"]                              # QW8 (write, no direct validation)
-)  # 42 total
+    ["QW1", "Q35"] +                     # QW1 → Q35 (timeseries append then validate)
+    ["QW2", "Q36"] +                     # QW2 → Q36 (metadata tag then validate)
+    ["QW3", "Q37"] +                     # QW3 → Q37 (relation mutation then validate)
+    ["QW4", "Q24"] +                     # QW4 → Q24 (maintenance event then validate)
+    ["QW5", "QW6", "Q25"] +              # QW5, QW6 → Q25 (calibration/firmware then validate)
+    ["QW7", "Q26"] +                     # QW7 → Q26 (capability then validate)
+    ["QW8", "Q38"]                       # QW8 → Q38 (remove property then validate)
+)  # 46 total
 
 
 def run_cmd(cmd: list[str]) -> int:
@@ -360,8 +362,8 @@ def run_benchmark_wizard(datasets: list[Path]):
 
     # 5. Select queries
     console.print("\n[bold]5. Queries[/bold]")
-    console.print("  [cyan]1[/cyan]. ALL          [dim]Q1-Q34 + QW1-QW8 (42 queries)[/dim]")
-    console.print("  [cyan]2[/cyan]. Read only    [dim]Q1-Q34 (34 queries)[/dim]")
+    console.print("  [cyan]1[/cyan]. ALL          [dim]Q1-Q38 + QW1-QW8 (46 queries)[/dim]")
+    console.print("  [cyan]2[/cyan]. Read only    [dim]Q1-Q38 (38 queries)[/dim]")
     console.print("  [cyan]3[/cyan]. Write only   [dim]QW1-QW8 (8 queries)[/dim]")
     console.print("  [cyan]4[/cyan]. Core         [dim]Q1-Q23 (original 23 queries)[/dim]")
     console.print("  [cyan]5[/cyan]. Custom       [dim]Specify query IDs[/dim]")
@@ -428,7 +430,7 @@ def run_benchmark_wizard(datasets: list[Path]):
             workload_name = "bos_twin"
 
     # Summary
-    queries_display = "ALL (42)" if not queries_arg else f"{len(queries_arg.split(','))} queries"
+    queries_display = "ALL (46)" if not queries_arg else f"{len(queries_arg.split(','))} queries"
     console.print()
     console.print(Panel.fit(
         f"[bold]Configuration[/bold]\n\n"

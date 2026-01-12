@@ -36,6 +36,9 @@ categories:
   jsonb_validation:
     description: "Lectures enrichies post-écriture (P2=NATIVE)"
     queries: [Q24, Q25, Q26]
+  write_validation:
+    description: "Lectures de validation des écritures QW (post-write checks)"
+    queries: [Q35, Q36, Q37, Q38]
 
 # ===========================================================================
 # QUERIES
@@ -979,6 +982,7 @@ queries:
   QW1:
     name: "Timeseries Append"
     category: write_workload
+    validates: Q35  # Q35 reads what QW1 writes
     intention: |
       Simuler l'ingestion continue de nouvelles mesures IoT.
       Append-only sur la table timeseries (usage middleware/gateway).
@@ -1022,6 +1026,7 @@ queries:
   QW2:
     name: "Metadata Update"
     category: write_workload
+    validates: Q36  # Q36 reads what QW2 writes
     intention: |
       Mettre à jour des métadonnées/tags sur un équipement ou point.
       Représente les opérations de calibration, tagging, catégorisation.
@@ -1067,6 +1072,7 @@ queries:
   QW3:
     name: "Relation Mutation"
     category: write_workload
+    validates: Q37  # Q37 reads what QW3 writes
     intention: |
       Ajouter ou supprimer une relation entre équipements.
       Représente les reconfigurations structurelles rares.
@@ -1264,6 +1270,7 @@ queries:
   QW8:
     name: "Remove Metadata Key"
     category: jsonb_write
+    validates: Q38  # Q38 reads what QW8 writes (verifies key was removed)
     intention: |
       Supprimer une clé obsolète des metadata d'un équipement.
       Opérateur #- pour suppression par path.
@@ -1679,6 +1686,154 @@ queries:
       M1: {status: IMPOSSIBLE, note: "Memgraph n'a pas de vues matérialisées"}
       M2: {status: DEGRADED, note: "Via TimescaleDB continuous aggregates"}
       O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de vues matérialisées"}
+
+  # -------------------------------------------------------------------------
+  # WRITE VALIDATION QUERIES (Q35-Q38) - Post-Write Checks
+  # -------------------------------------------------------------------------
+
+  Q35:
+    name: "Validate Timeseries Append"
+    category: write_validation
+    validates_write: QW1  # Reads what QW1 wrote
+    intention: |
+      Valider que les données timeseries ont été correctement ajoutées par QW1.
+      Vérifie les timestamps et valeurs dans le chunk journalier.
+    use_case: "Validation ingestion IoT, audit qualité données"
+    parameters:
+      - name: POINT_ID
+        type: string
+        description: "ID du point dont on vérifie les timeseries"
+        format:
+          sql: "%(point_id)s"
+          cypher: "$point_id"
+        example: "point_temp_101"
+      - name: REFERENCE_DATE
+        type: date
+        description: "Date de référence pour filtrer le chunk"
+        format:
+          sql: "%(reference_date)s"
+          cypher: "$reference_date"
+        example: "2024-06-01"
+    result_schema:
+      columns:
+        - {name: point_id, type: string, description: "ID du point"}
+        - {name: chunk_date, type: date, description: "Date du chunk"}
+        - {name: timestamp_count, type: integer, description: "Nombre de timestamps"}
+        - {name: value_count, type: integer, description: "Nombre de valeurs"}
+        - {name: last_timestamps, type: array, description: "Derniers timestamps ajoutés"}
+        - {name: last_values, type: array, description: "Dernières valeurs ajoutées"}
+      order_by: []
+    paradigm_status:
+      P1: {status: NATIVE, note: "SELECT sur ts.timeseries avec DATE filter"}
+      P2: {status: NATIVE, note: "SELECT sur ts.timeseries avec DATE filter"}
+      M1: {status: NATIVE, note: "MATCH TimeseriesChunk avec date filter"}
+      M2: {status: NATIVE, note: "SELECT sur ts.timeseries via Timescale"}
+      O2: {status: NATIVE, note: "SELECT sur ts.timeseries via Timescale"}
+
+  Q36:
+    name: "Validate Metadata Tag Update"
+    category: write_validation
+    validates_write: QW2  # Reads what QW2 wrote
+    intention: |
+      Valider que le tag custom_tag a été correctement mis à jour par QW2.
+      Vérifie la valeur de la propriété après l'écriture.
+    use_case: "Validation tagging, audit modifications"
+    parameters:
+      - name: NODE_ID
+        type: string
+        description: "ID du nœud dont on vérifie le tag"
+        format:
+          sql: "%(node_id)s"
+          cypher: "$node_id"
+        example: "eq_mainmeter_1"
+    result_schema:
+      columns:
+        - {name: node_id, type: string, description: "ID du nœud"}
+        - {name: node_name, type: string, description: "Nom du nœud"}
+        - {name: custom_tag, type: string, description: "Valeur du tag mis à jour"}
+        - {name: node_type, type: string, description: "Type/labels du nœud"}
+      order_by: []
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "QW2 non supporté en P1 (pas de JSONB)"}
+      P2: {status: NATIVE, note: "SELECT data->>'calibration_status'"}
+      M1: {status: NATIVE, note: "MATCH + RETURN n.custom_tag"}
+      M2: {status: NATIVE, note: "MATCH + RETURN n.custom_tag"}
+      O2: {status: DEGRADED, note: "Query triple custom_tag"}
+
+  Q37:
+    name: "Validate Relation Mutation"
+    category: write_validation
+    validates_write: QW3  # Reads what QW3 wrote
+    intention: |
+      Valider que la relation FEEDS a été créée entre source et target par QW3.
+      Vérifie l'existence et le type de la relation.
+    use_case: "Validation reconfiguration, audit relations"
+    parameters:
+      - name: SOURCE_ID
+        type: string
+        description: "ID du nœud source de la relation"
+        format:
+          sql: "%(source_id)s"
+          cypher: "$source_id"
+        example: "eq_mainmeter_1"
+      - name: TARGET_ID
+        type: string
+        description: "ID du nœud cible de la relation"
+        format:
+          sql: "%(target_id)s"
+          cypher: "$target_id"
+        example: "eq_submeter_new"
+    result_schema:
+      columns:
+        - {name: source_id, type: string, description: "ID source"}
+        - {name: source_name, type: string, description: "Nom source"}
+        - {name: rel_type, type: string, description: "Type de relation"}
+        - {name: target_id, type: string, description: "ID cible"}
+        - {name: target_name, type: string, description: "Nom cible"}
+      order_by: []
+    paradigm_status:
+      P1: {status: NATIVE, note: "SELECT FROM edges avec JOIN nodes"}
+      P2: {status: NATIVE, note: "SELECT FROM edges avec JOIN nodes"}
+      M1: {status: NATIVE, note: "MATCH (a)-[r:FEEDS]->(b)"}
+      M2: {status: NATIVE, note: "MATCH (a)-[r:FEEDS]->(b)"}
+      O2: {status: NATIVE, note: "SELECT pattern SPARQL"}
+
+  Q38:
+    name: "Validate Property Removal"
+    category: write_validation
+    validates_write: QW8  # Reads what QW8 removed
+    intention: |
+      Valider que la propriété custom_tag a été supprimée par QW8.
+      Vérifie l'absence de la propriété après la suppression.
+    use_case: "Validation nettoyage, audit suppressions"
+    parameters:
+      - name: NODE_ID
+        type: string
+        description: "ID du nœud dont on vérifie la suppression"
+        format:
+          sql: "%(node_id)s"
+          cypher: "$node_id"
+        example: "eq_ahu_6"
+      - name: KEY_TO_REMOVE
+        type: string
+        description: "Clé qui devait être supprimée"
+        format:
+          sql: "%(key_to_remove)s"
+          cypher: "$key_to_remove"
+        example: "legacy_protocol_id"
+    result_schema:
+      columns:
+        - {name: node_id, type: string, description: "ID du nœud"}
+        - {name: node_name, type: string, description: "Nom du nœud"}
+        - {name: tag_removed, type: boolean, description: "True si la clé a été supprimée"}
+        - {name: remaining_keys, type: array, description: "Clés restantes dans metadata"}
+      order_by: []
+    paradigm_status:
+      P1: {status: IMPOSSIBLE, note: "QW8 non supporté en P1 (pas de JSONB)"}
+      P2: {status: NATIVE, note: "NOT (data->'metadata' ? key)"}
+      M1: {status: NATIVE, note: "n.custom_tag IS NULL"}
+      M2: {status: NATIVE, note: "n.custom_tag IS NULL"}
+      O2: {status: NATIVE, note: "NOT EXISTS triple check"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

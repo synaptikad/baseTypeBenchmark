@@ -169,6 +169,11 @@ class ExpectedAnswerGenerator:
             ("Q24", self._gen_q24),
             ("Q25", self._gen_q25),
             ("Q26", self._gen_q26),
+            # Write validation queries (Q35-Q38) - validate QW1, QW2, QW3, QW8
+            ("Q35", self._gen_q35),
+            ("Q36", self._gen_q36),
+            ("Q37", self._gen_q37),
+            ("Q38", self._gen_q38),
         ]
 
         for query_id, method in query_methods:
@@ -2072,6 +2077,153 @@ class ExpectedAnswerGenerator:
             row_count=len(results),
             content_hash=_compute_hash(semantic),
             full_rows=results,
+        )
+
+    # =========================================================================
+    # WRITE VALIDATION QUERIES (Q35-Q38) - Validate QW write operations
+    # =========================================================================
+
+    def _gen_q35(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q35: Validate Timeseries Append - validates QW1 write.
+
+        Expected result after QW1 adds timeseries data.
+        Uses qw1_* params from generator.
+        """
+        point_id = params.get("point_id")
+        reference_date = params.get("reference_date")
+
+        if not point_id:
+            return None
+
+        # Get QW1 parameters (what will be written)
+        qw1_timestamps = params.get("qw1_timestamps", [])
+        qw1_values = params.get("qw1_values", [])
+
+        if not qw1_timestamps or not qw1_values:
+            return None
+
+        # Expected result: the data that QW1 will write
+        result = {
+            "point_id": point_id,
+            "chunk_date": reference_date[:10] if isinstance(reference_date, str) else str(reference_date)[:10],
+            "timestamp_count": len(qw1_timestamps),
+            "value_count": len(qw1_values),
+            "last_timestamps": qw1_timestamps[-3:] if len(qw1_timestamps) >= 3 else qw1_timestamps,
+            "last_values": qw1_values[-3:] if len(qw1_values) >= 3 else qw1_values,
+        }
+
+        return ExpectedAnswer(
+            query_id="Q35",
+            parameters={"point_id": point_id, "reference_date": reference_date},
+            answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
+        )
+
+    def _gen_q36(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q36: Validate Metadata Tag Update - validates QW2 write.
+
+        Expected result after QW2 updates the custom_tag property.
+        Uses qw2_* params from generator.
+        """
+        node_id = params.get("qw2_node_id") or params.get("equipment_id")
+        tag_value = params.get("qw2_tag_value", "verified_2024")
+
+        if not node_id:
+            return None
+
+        node = self.nodes_by_id.get(node_id)
+        if not node:
+            return None
+
+        # Expected result: the tag value that QW2 will set
+        result = {
+            "node_id": node_id,
+            "node_name": node.name,
+            "custom_tag": tag_value,
+            "node_type": node.type,
+        }
+
+        return ExpectedAnswer(
+            query_id="Q36",
+            parameters={"node_id": node_id},
+            answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
+        )
+
+    def _gen_q37(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q37: Validate Relation Mutation - validates QW3 write.
+
+        Expected result after QW3 creates a FEEDS relation.
+        Uses qw3_* params from generator.
+        """
+        source_id = params.get("qw3_source_id") or params.get("meter_id")
+        target_id = params.get("qw3_target_id") or params.get("equipment_id")
+
+        if not source_id or not target_id:
+            return None
+
+        source_node = self.nodes_by_id.get(source_id)
+        target_node = self.nodes_by_id.get(target_id)
+
+        if not source_node or not target_node:
+            return None
+
+        # Expected result: the relation that QW3 will create
+        result = {
+            "source_id": source_id,
+            "source_name": source_node.name,
+            "rel_type": "FEEDS",
+            "target_id": target_id,
+            "target_name": target_node.name,
+        }
+
+        return ExpectedAnswer(
+            query_id="Q37",
+            parameters={"source_id": source_id, "target_id": target_id},
+            answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
+        )
+
+    def _gen_q38(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q38: Validate Property Removal - validates QW8 write.
+
+        Expected result after QW8 removes the custom_tag property.
+        Uses qw8_* params from generator.
+        """
+        node_id = params.get("qw8_node_id") or params.get("equipment_id")
+
+        if not node_id:
+            return None
+
+        node = self.nodes_by_id.get(node_id)
+        if not node:
+            return None
+
+        # Expected result: custom_tag should be removed (NULL)
+        result = {
+            "node_id": node_id,
+            "node_name": node.name,
+            "tag_removed": True,
+            "remaining_keys": [],  # Will be filled by actual query
+        }
+
+        return ExpectedAnswer(
+            query_id="Q38",
+            parameters={"node_id": node_id},
+            answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
         )
 
 

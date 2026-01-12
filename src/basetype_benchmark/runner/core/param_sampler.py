@@ -315,18 +315,31 @@ SELECT ?id WHERE {{
             return []
 
 
-def get_params_for_query(query_id: str, sampled: SampledParams) -> Dict[str, Any]:
+def get_params_for_query(
+    query_id: str,
+    sampled: SampledParams,
+    file_params: Dict[str, Any] = None,
+    paradigm: str = None
+) -> Dict[str, Any]:
     """
     Retourne les paramètres appropriés pour une query donnée.
 
     Args:
-        query_id: ID de la query (Q1, Q2, etc.)
-        sampled: Paramètres échantillonnés
+        query_id: ID de la query (Q1, Q2, QW1, etc.)
+        sampled: Paramètres échantillonnés (pour Q1-Q34)
+        file_params: Paramètres bruts du YAML (pour QW queries avec données riches)
+        paradigm: P1, P2, M1, M2, O2 (pour adaptation paradigme-spécifique)
 
     Returns:
         Dict des paramètres pour cette query
     """
-    # Mapping query -> paramètres requis
+    file_params = file_params or {}
+
+    # Pour les QW queries, utiliser directement les params riches du YAML
+    if query_id.startswith("QW") and file_params:
+        return _get_qw_params(query_id, file_params, paradigm, sampled)
+
+    # Mapping query -> paramètres requis (Q1-Q34)
     query_params = {
         "Q1": {"METER_ID": sampled.meter_id},
         "Q2": {"EQUIPMENT_ID": sampled.equipment_id},
@@ -413,45 +426,103 @@ def get_params_for_query(query_id: str, sampled: SampledParams) -> Dict[str, Any
             "DATE_START": sampled.date_start,
             "DATE_END": sampled.date_end,
         },
-        # QW1-QW3: Write workloads (basic params, payloads from write_payloads.yaml)
-        "QW1": {
-            "POINT_IDS": [sampled.point_id] if sampled.point_id else [],
-            "TIMESTAMPS": [sampled.date_start],
-            "VALUES": [21.5],
-        },
-        "QW2": {
-            "NODE_ID": sampled.equipment_id,
-            "TAG_KEY": "calibration_status",
-            "TAG_VALUE": "verified",
-        },
-        "QW3": {
-            "SOURCE_ID": sampled.meter_id,
-            "TARGET_ID": sampled.equipment_id,
-            "REL_TYPE": "FEEDS",
-        },
-        # QW4-QW8: JSONB write workloads
-        "QW4": {
-            "EQUIPMENT_ID": sampled.equipment_id,
-            "EVENT": {"date": sampled.reference_date, "type": "preventive", "technician": "Tech_A"},
-        },
-        "QW5": {
-            "POINT_ID": sampled.point_id,
-            "CALIBRATION_DATE": sampled.reference_date,
-            "NEXT_DATE": "2025-06-01",
-            "TECHNICIAN": "Calibration_Co",
-        },
-        "QW6": {
-            "EQUIPMENT_ID": sampled.equipment_id,
-            "METADATA_PATCH": {"firmware_version": "3.2.1", "last_update": sampled.reference_date},
-        },
-        "QW7": {
-            "EQUIPMENT_ID": sampled.equipment_id,
-            "NEW_CAPABILITY": "demand_control_ventilation",
-        },
-        "QW8": {
-            "NODE_ID": sampled.equipment_id,
-            "KEY_TO_REMOVE": "legacy_protocol_id",
-        },
     }
 
     return query_params.get(query_id, {})
+
+
+def _get_qw_params(
+    query_id: str,
+    file_params: Dict[str, Any],
+    paradigm: str,
+    sampled: SampledParams
+) -> Dict[str, Any]:
+    """
+    Extrait les paramètres QW depuis file_params selon le paradigme.
+
+    Le générateur produit des données riches (qw1_chunks, qw6_metadata_patch, etc.)
+    Cette fonction les extrait dans le format attendu par chaque moteur.
+    """
+    # QW1: Timeseries Append
+    if query_id == "QW1":
+        if paradigm in ("M1", "M2"):
+            # Cypher UNWIND $chunks - format SpinalCom
+            return {"CHUNKS": file_params.get("qw1_chunks", [])}
+        else:
+            # SQL UNNEST arrays séparés
+            return {
+                "POINT_IDS": file_params.get("qw1_point_ids", []),
+                "TIMESTAMPS": file_params.get("qw1_timestamps", []),
+                "VALUES": file_params.get("qw1_values", []),
+            }
+
+    # QW2: Metadata Update (tag)
+    if query_id == "QW2":
+        return {
+            "NODE_ID": file_params.get("qw2_node_id", sampled.equipment_id),
+            "TAG_KEY": file_params.get("qw2_tag_key", "calibration_status"),
+            "TAG_VALUE": file_params.get("qw2_tag_value", "verified"),
+        }
+
+    # QW3: Relation Mutation
+    if query_id == "QW3":
+        return {
+            "SOURCE_ID": file_params.get("qw3_source_id", sampled.meter_id),
+            "TARGET_ID": file_params.get("qw3_target_id", sampled.equipment_id),
+            "REL_TYPE": file_params.get("qw3_rel_type", "FEEDS"),
+        }
+
+    # QW4: Maintenance Event Append
+    if query_id == "QW4":
+        return {
+            "EQUIPMENT_ID": file_params.get("qw4_equipment_id", sampled.equipment_id),
+            "EVENT": file_params.get("qw4_event", {
+                "date": sampled.reference_date,
+                "type": "preventive",
+                "technician": "Tech_A"
+            }),
+        }
+
+    # QW5: Deep Calibration Update
+    if query_id == "QW5":
+        return {
+            "POINT_ID": file_params.get("qw5_point_id", sampled.point_id),
+            "CALIBRATION_DATE": file_params.get("qw5_calibration_date", sampled.reference_date),
+            "NEXT_DATE": file_params.get("qw5_next_date", "2025-06-01"),
+            "TECHNICIAN": file_params.get("qw5_technician", "Calibration_Co"),
+        }
+
+    # QW6: Metadata Merge
+    if query_id == "QW6":
+        if paradigm in ("M1", "M2"):
+            # Cypher SET direct - besoin equipment_id + reference_date
+            return {
+                "EQUIPMENT_ID": file_params.get("qw6_equipment_id", sampled.equipment_id),
+                "REFERENCE_DATE": file_params.get("reference_date", sampled.reference_date),
+            }
+        else:
+            # SQL jsonb_set - besoin equipment_id + metadata_patch
+            return {
+                "EQUIPMENT_ID": file_params.get("qw6_equipment_id", sampled.equipment_id),
+                "METADATA_PATCH": file_params.get("qw6_metadata_patch", {
+                    "firmware_version": "3.2.1",
+                    "last_update": sampled.reference_date
+                }),
+            }
+
+    # QW7: Add Capability
+    if query_id == "QW7":
+        return {
+            "EQUIPMENT_ID": file_params.get("qw7_equipment_id", sampled.equipment_id),
+            "NEW_CAPABILITY": file_params.get("qw7_new_capability", "demand_control_ventilation"),
+        }
+
+    # QW8: Remove Metadata Key
+    if query_id == "QW8":
+        return {
+            "NODE_ID": file_params.get("qw8_node_id", sampled.equipment_id),
+            "KEY_TO_REMOVE": file_params.get("qw8_key_to_remove", "legacy_protocol_id"),
+        }
+
+    # Fallback: pas de params
+    return {}

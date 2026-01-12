@@ -973,7 +973,9 @@ class RAMGradientExecutor:
         # Use sampled parameters from dataset
         if hasattr(self, "_sampled_params") and self._sampled_params:
             from ..core.param_sampler import get_params_for_query
-            params = get_params_for_query(query_id, self._sampled_params)
+            # Pass file_params and paradigm for QW queries that need rich params
+            file_params = getattr(self, "_file_params", {})
+            params = get_params_for_query(query_id, self._sampled_params, file_params, self.paradigm)
             # Note: params can be {} for queries without parameters - that's valid
             if params is not None:
                 # Filter out None values - queries should handle missing params gracefully
@@ -1004,6 +1006,9 @@ class RAMGradientExecutor:
         """Initialize parameters from queries_params.yaml or dynamic sampling."""
         logger.debug(f"Initializing param sampler, data_path={self._data_path}")
 
+        # Initialize file_params (raw dict for QW queries)
+        self._file_params = {}
+
         # Try to load from queries_params.yaml first
         if self._data_path:
             params_file = self._data_path / "queries_params.yaml"
@@ -1014,10 +1019,10 @@ class RAMGradientExecutor:
                     import yaml
                     with open(params_file, "r", encoding="utf-8") as f:
                         data = yaml.safe_load(f)
-                    file_params = data.get("parameters", {})
-                    logger.debug(f"Loaded {len(file_params)} parameters from YAML")
+                    self._file_params = data.get("parameters", {})
+                    logger.debug(f"Loaded {len(self._file_params)} parameters from YAML")
 
-                    self._sampled_params = self._build_sampled_params(file_params)
+                    self._sampled_params = self._build_sampled_params(self._file_params)
                     logger.info(f"Successfully loaded params from {params_file}")
                     if self.verbose:
                         self._console.print("[dim]Loaded params from queries_params.yaml[/dim]")
