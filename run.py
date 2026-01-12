@@ -44,9 +44,22 @@ PARADIGMS = ["P1", "P2", "M1", "M2", "O2"]
 SCENARIOS_DIR = CONFIG_DIR / "scenarios"
 
 # All query IDs for reference
+# Note: Order matters! Writes (QW) must execute before their validation queries (Q24-Q26)
 ALL_READ_QUERIES = [f"Q{i}" for i in range(1, 35)]   # Q1-Q34
 ALL_WRITE_QUERIES = [f"QW{i}" for i in range(1, 9)]  # QW1-QW8
-ALL_QUERIES = ALL_READ_QUERIES + ALL_WRITE_QUERIES   # 42 total
+# Correct order: independent reads, then write→validation pairs
+# Q1-Q23 (independent) + Q27-Q34 (independent) + QW1-QW3 (no validation) +
+# QW4→Q24 + QW5→Q25 + QW6 (shares Q25) + QW7→Q26 + QW8 (no validation)
+ALL_QUERIES_UNORDERED = ALL_READ_QUERIES + ALL_WRITE_QUERIES  # For reference only
+ALL_QUERIES = (
+    [f"Q{i}" for i in range(1, 24)] +   # Q1-Q23 (independent reads)
+    [f"Q{i}" for i in range(27, 35)] +  # Q27-Q34 (independent reads)
+    ["QW1", "QW2", "QW3"] +              # QW1-QW3 (writes, no direct validation)
+    ["QW4", "Q24"] +                     # QW4 → Q24 (write then validate)
+    ["QW5", "QW6", "Q25"] +              # QW5, QW6 → Q25 (writes then validate)
+    ["QW7", "Q26"] +                     # QW7 → Q26 (write then validate)
+    ["QW8"]                              # QW8 (write, no direct validation)
+)  # 42 total
 
 
 def run_cmd(cmd: list[str]) -> int:

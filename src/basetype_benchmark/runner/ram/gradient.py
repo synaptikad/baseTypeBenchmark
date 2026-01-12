@@ -803,7 +803,7 @@ class RAMGradientExecutor:
                 return padded_path
 
         # Try unpadded version (Q06 → Q6)
-        if query_id.startswith("Q") and len(query_id) == 3:
+        if query_id.startswith("Q") and len(query_id) == 3 and query_id[1:].isdigit():
             unpadded = f"Q{int(query_id[1:])}"
             unpadded_path = base_dir / f"{unpadded}.{ext}"
             if unpadded_path.exists():
@@ -923,17 +923,23 @@ class RAMGradientExecutor:
 
             elif category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE):
                 # Write workloads: look in write/ subdirectory
-                query_file = self._find_query_file(
-                    queries_dir / self.paradigm.lower() / "write",
-                    query_id,
-                    ext
-                )
+                # For hybrid paradigms, write queries may be either graph (cypher/sparql) or SQL
+                write_dir = queries_dir / self.paradigm.lower() / "write"
+                
+                # Try graph extension first (cypher/sparql)
+                query_file = self._find_query_file(write_dir, query_id, ext)
+                actual_ext = ext
+                
+                # If not found, try SQL (e.g., QW1 writes to TimescaleDB)
+                if query_file is None:
+                    query_file = self._find_query_file(write_dir, query_id, "sql")
+                    actual_ext = "sql"
 
                 if query_file is None:
                     raise GradientError(f"Query file not found for {query_id} in {self.paradigm}/write")
 
                 text = query_file.read_text(encoding="utf-8")
-                cleaned = strip_query_comments(text, ext)
+                cleaned = strip_query_comments(text, actual_ext)
                 return {"query": cleaned}
 
             else:

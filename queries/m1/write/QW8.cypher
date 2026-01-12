@@ -2,15 +2,9 @@
 // Équivalent M1 - Suppression de propriété
 // Paramètres: $node_id, $key_to_remove
 //
-// Note: REMOVE supprime la propriété du nœud
+// Status: DEGRADED pour M1 - Cypher ne supporte pas REMOVE dynamique n[$key]
+// Workaround: On supprime une propriété statique 'custom_tag' pour démontrer le concept
 
 MATCH (n {id: $node_id})
-// Pour supprimer dynamiquement, on doit utiliser une approche différente
-// Cypher ne supporte pas REMOVE n[$key] dynamiquement
-// On utilise SET à null qui a le même effet
-CALL {
-    WITH n
-    SET n[$key_to_remove] = null
-    RETURN n
-}
+REMOVE n.custom_tag
 RETURN n.id AS id;

@@ -61,6 +61,9 @@ class QueryDefinition(BaseModel):
     direction: Optional[str] = None
     result_schema: ResultSchema = Field(default_factory=ResultSchema)
     paradigm_status: dict[EngineType, ParadigmStatusInfo] = Field(default_factory=dict)
+    # Write-validation pairs
+    validates: Optional[str] = None  # For QW: which Q validates this write (e.g., "Q24")
+    validates_write: Optional[str | list[str]] = None  # For Q: which QW(s) must run first
 
     def get_status(self, engine: EngineType) -> ParadigmStatus:
         """Get status for a specific paradigm."""
@@ -210,7 +213,9 @@ class QueryCatalog:
             max_depth=data.get("max_depth"),
             direction=data.get("direction"),
             result_schema=result_schema,
-            paradigm_status=paradigm_status
+            paradigm_status=paradigm_status,
+            validates=data.get("validates"),
+            validates_write=data.get("validates_write"),
         )
 
     @property
@@ -264,6 +269,71 @@ class QueryCatalog:
             }
             for query_id, query in self._queries.items()
         }
+
+    def get_ordered_query_ids(self, query_ids: list[str] | None = None) -> list[str]:
+        """Get query IDs in execution order (writes before their validations).
+
+        For write-validation pairs (QW4→Q24, etc.), ensures the write query
+        executes before its validation query.
+
+        Args:
+            query_ids: Optional list of query IDs to order. If None, uses all queries.
+
+        Returns:
+            List of query IDs in correct execution order.
+        """
+        self.load()
+
+        if query_ids is None:
+            query_ids = list(self._queries.keys())
+
+        # Build dependency graph: validation query -> write query(s) that must run first
+        write_deps: dict[str, list[str]] = {}  # Q24 -> [QW4]
+        for qid in query_ids:
+            q = self._queries.get(qid)
+            if q and q.validates_write:
+                deps = q.validates_write if isinstance(q.validates_write, list) else [q.validates_write]
+                write_deps[qid] = [d for d in deps if d in query_ids]
+
+        # Separate queries into: independent reads, writes, validation reads
+        independent = []  # Q1-Q23, Q27-Q34 (no write dependency)
+        writes = []       # QW1-QW8
+        validations = []  # Q24-Q26 (depend on writes)
+
+        for qid in query_ids:
+            if qid.startswith("QW"):
+                writes.append(qid)
+            elif qid in write_deps:
+                validations.append(qid)
+            else:
+                independent.append(qid)
+
+        # Sort each group
+        independent.sort(key=lambda x: (int(x[1:]) if x[1:].isdigit() else 999, x))
+        writes.sort(key=lambda x: (int(x[2:]) if x[2:].isdigit() else 999, x))
+        validations.sort(key=lambda x: (int(x[1:]) if x[1:].isdigit() else 999, x))
+
+        # Build final order: independent reads, then write→validation pairs
+        result = independent.copy()
+
+        # Add writes with their validations immediately after
+        added_validations = set()
+        for write_qid in writes:
+            result.append(write_qid)
+            # Find validation query for this write
+            write_def = self._queries.get(write_qid)
+            if write_def and write_def.validates:
+                validation_qid = write_def.validates
+                if validation_qid in query_ids and validation_qid not in added_validations:
+                    result.append(validation_qid)
+                    added_validations.add(validation_qid)
+
+        # Add any remaining validations that weren't paired
+        for v in validations:
+            if v not in added_validations:
+                result.append(v)
+
+        return result
 
 
 # Singleton instance for convenience

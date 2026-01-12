@@ -1116,6 +1116,7 @@ queries:
   QW4:
     name: "Maintenance Event Append"
     category: jsonb_write
+    validates: Q24  # Q24 reads what QW4 writes
     intention: |
       Ajouter un événement de maintenance à l'historique JSONB d'un équipement.
       Crée le champ maintenance_history s'il n'existe pas.
@@ -1149,6 +1150,7 @@ queries:
   QW5:
     name: "Deep Calibration Update"
     category: jsonb_write
+    validates: Q25  # Q25 reads calibration from QW5
     intention: |
       Mettre à jour les champs de calibration imbriqués d'un point de mesure.
       Préserve les autres champs du sous-objet calibration.
@@ -1194,6 +1196,7 @@ queries:
   QW6:
     name: "Metadata Merge"
     category: jsonb_write
+    validates: Q25  # Q25 reads firmware info from QW6
     intention: |
       Fusionner un patch JSON dans les metadata existantes d'un équipement.
       Préserve les champs non mentionnés dans le patch.
@@ -1227,6 +1230,7 @@ queries:
   QW7:
     name: "Add Capability"
     category: jsonb_write
+    validates: Q26  # Q26 reads capability distribution after QW7
     intention: |
       Ajouter une capability à un équipement si elle n'existe pas déjà.
       Opération idempotente (pas de doublon).
@@ -1297,6 +1301,7 @@ queries:
   Q24:
     name: "Maintenance History"
     category: jsonb_validation
+    validates_write: QW4  # Reads what QW4 wrote
     intention: |
       Lire l'historique de maintenance complet d'un équipement avec agrégations.
       Valide les écritures QW4.
@@ -1330,6 +1335,7 @@ queries:
   Q25:
     name: "Equipment Audit Trail"
     category: jsonb_validation
+    validates_write: [QW5, QW6]  # Reads calibration from QW5, firmware from QW6
     intention: |
       Construire un rapport d'audit complet combinant maintenance, calibration,
       et firmware. Vue 360° post-écritures QW4/5/6.
@@ -1364,6 +1370,7 @@ queries:
   Q26:
     name: "Capability Evolution"
     category: jsonb_validation
+    validates_write: QW7  # Reads capability added by QW7
     intention: |
       Analyser la distribution des capabilities par type d'équipement.
       Valide les ajouts via QW7.

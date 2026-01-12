@@ -1987,6 +1987,92 @@ class DatasetGenerator:
         # 17. Q32: Domain for schema validation
         params.setdefault("domain", "HVAC")
 
+        # =====================================================================
+        # WRITE QUERY PARAMETERS (QW1-QW8)
+        # =====================================================================
+
+        # QW1: Timeseries Append - use existing point with timeseries
+        # Generate sample data for batch insert
+        if params.get("point_id") and self.timeseries:
+            sample_point = params["point_id"]
+            # Use reference_date for new timestamps
+            ref_date = self.reference_date
+            params["qw1_point_ids"] = [sample_point, sample_point, sample_point]
+            params["qw1_timestamps"] = [
+                (ref_date + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                for i in range(3)
+            ]
+            params["qw1_values"] = [21.5, 22.0, 21.8]
+            # M1 format: chunks array
+            params["qw1_chunks"] = [{
+                "point_id": sample_point,
+                "date": ref_date.strftime("%Y-%m-%d"),
+                "timestamps": params["qw1_timestamps"],
+                "values": params["qw1_values"],
+            }]
+
+        # QW2: Metadata Update - use equipment_id, add a custom tag
+        if params.get("equipment_id"):
+            params["qw2_node_id"] = params["equipment_id"]
+            params["qw2_tag_key"] = "calibration_status"
+            params["qw2_tag_value"] = "verified_2024"
+
+        # QW3: Relation Mutation - create new FEEDS relation
+        # Find two equipment that could be connected
+        if params.get("meter_id") and params.get("equipment_id"):
+            params["qw3_source_id"] = params["meter_id"]
+            params["qw3_target_id"] = params["equipment_id"]
+            params["qw3_rel_type"] = "FEEDS"
+
+        # QW4: Maintenance Event Append - add event to equipment
+        if params.get("equipment_id"):
+            params["qw4_equipment_id"] = params["equipment_id"]
+            params["qw4_event"] = {
+                "date": self.reference_date.strftime("%Y-%m-%d"),
+                "type": "preventive",
+                "technician": "Tech_Benchmark",
+                "description": "Benchmark test maintenance event",
+                "cost": 150.0,
+                "parts_replaced": ["filter", "belt"],
+            }
+
+        # QW5: Deep Calibration Update - update point calibration
+        if params.get("point_id"):
+            params["qw5_point_id"] = params["point_id"]
+            params["qw5_calibration_date"] = self.reference_date.strftime("%Y-%m-%d")
+            params["qw5_next_date"] = (self.reference_date + timedelta(days=365)).strftime("%Y-%m-%d")
+            params["qw5_technician"] = "Calibration_Corp"
+
+        # QW6: Metadata Merge - merge firmware info into equipment
+        if params.get("equipment_id"):
+            params["qw6_equipment_id"] = params["equipment_id"]
+            params["qw6_metadata_patch"] = {
+                "firmware_version": "3.2.1",
+                "last_update": self.reference_date.strftime("%Y-%m-%d"),
+            }
+
+        # QW7: Add Capability - add new capability to HVAC equipment
+        # Find an HVAC equipment that doesn't have 'demand_control_ventilation'
+        hvac_for_qw7 = None
+        for node in self.nodes:
+            eq_type = node.properties.get("equipment_type", "")
+            if eq_type in {"AHU", "VAV", "FCU"} and node.capabilities:
+                if "demand_control_ventilation" not in node.capabilities:
+                    hvac_for_qw7 = node.id
+                    break
+        if hvac_for_qw7:
+            params["qw7_equipment_id"] = hvac_for_qw7
+            params["qw7_new_capability"] = "demand_control_ventilation"
+        elif params.get("equipment_id"):
+            # Fallback to any equipment
+            params["qw7_equipment_id"] = params["equipment_id"]
+            params["qw7_new_capability"] = "benchmark_capability"
+
+        # QW8: Remove Metadata Key - remove a custom key
+        if params.get("equipment_id"):
+            params["qw8_node_id"] = params["equipment_id"]
+            params["qw8_key_to_remove"] = "legacy_protocol_id"
+
         return params
 
     def _write_query_params(self, output_dir: Path):

@@ -165,6 +165,10 @@ class ExpectedAnswerGenerator:
             ("Q32", self._gen_q32),
             ("Q33", self._gen_q33),
             ("Q34", self._gen_q34),
+            # JSONB validation queries (Q24-Q26) - validate QW writes
+            ("Q24", self._gen_q24),
+            ("Q25", self._gen_q25),
+            ("Q26", self._gen_q26),
         ]
 
         for query_id, method in query_methods:
@@ -1898,6 +1902,171 @@ class ExpectedAnswerGenerator:
         return ExpectedAnswer(
             query_id="Q34",
             parameters={"building_id": building_id},
+            answer_type="aggregate",
+            semantic_content=semantic,
+            row_count=len(results),
+            content_hash=_compute_hash(semantic),
+            full_rows=results,
+        )
+
+    # =========================================================================
+    # JSONB VALIDATION QUERIES (Q24-Q26) - Expected results after QW writes
+    # =========================================================================
+
+    def _gen_q24(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q24: Maintenance History - validates QW4 write.
+
+        Expected result after QW4 adds a maintenance event.
+        Uses qw4_equipment_id and qw4_event from params.
+        """
+        equipment_id = params.get("qw4_equipment_id") or params.get("equipment_id")
+        event = params.get("qw4_event")
+
+        if not equipment_id:
+            return None
+
+        equipment = self.nodes_by_id.get(equipment_id)
+        if not equipment:
+            return None
+
+        # Expected result: the event that QW4 will write
+        expected_event = event or {
+            "date": params.get("reference_date", "2024-06-01"),
+            "type": "preventive",
+            "technician": "Tech_Benchmark",
+            "description": "Benchmark test maintenance event",
+            "cost": 150.0,
+            "parts_replaced": ["filter", "belt"],
+        }
+
+        result = {
+            "equipment_id": equipment_id,
+            "name": equipment.name,
+            "event_count": 1,
+            "last_event": expected_event,
+            "last_event_date": expected_event.get("date"),
+            "last_technician": expected_event.get("technician"),
+            "total_maintenance_cost": expected_event.get("cost", 0),
+            "all_parts_replaced": expected_event.get("parts_replaced", []),
+        }
+
+        return ExpectedAnswer(
+            query_id="Q24",
+            parameters={"equipment_id": equipment_id},
+            answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
+        )
+
+    def _gen_q25(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q25: Equipment Audit Trail - validates QW5 and QW6 writes.
+
+        Expected result after QW5 updates calibration and QW6 merges firmware.
+        """
+        equipment_id = params.get("qw6_equipment_id") or params.get("equipment_id")
+        point_id = params.get("qw5_point_id") or params.get("point_id")
+
+        if not equipment_id:
+            return None
+
+        equipment = self.nodes_by_id.get(equipment_id)
+        if not equipment:
+            return None
+
+        # Expected firmware from QW6
+        firmware_version = "3.2.1"
+        last_firmware_update = params.get("reference_date", "2024-06-01")
+
+        # Expected calibration from QW5
+        calibration_date = params.get("qw5_calibration_date", params.get("reference_date", "2024-06-01"))
+        next_calibration = params.get("qw5_next_date", "2025-06-01")
+        technician = params.get("qw5_technician", "Calibration_Corp")
+
+        result = {
+            "equipment_id": equipment_id,
+            "name": equipment.name,
+            "equipment_type": equipment.properties.get("equipment_type", "Equipment"),
+            "current_firmware": firmware_version,
+            "last_firmware_update": last_firmware_update,
+            "maintenance_events": 0,  # No maintenance yet in Q25 scope
+            "last_maintenance_date": None,
+            "points_calibration_status": {
+                "point_id": point_id,
+                "calibration_date": calibration_date,
+                "next_calibration": next_calibration,
+                "technician": technician,
+            } if point_id else None,
+            "health_status": "good",
+        }
+
+        return ExpectedAnswer(
+            query_id="Q25",
+            parameters={"equipment_id": equipment_id},
+            answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
+        )
+
+    def _gen_q26(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q26: Capability Evolution - validates QW7 write.
+
+        Expected result: distribution of capabilities including the one added by QW7.
+        """
+        domain = params.get("domain", "HVAC")
+        new_capability = params.get("qw7_new_capability", "demand_control_ventilation")
+        target_equipment_id = params.get("qw7_equipment_id")
+
+        # Count equipment by type and capabilities
+        type_stats: dict[str, dict] = defaultdict(lambda: {
+            "count": 0,
+            "capabilities": defaultdict(int),
+        })
+
+        hvac_types = {"AHU", "VAV", "FCU", "Chiller", "Boiler", "HeatPump", "CoolingTower", "RTU"}
+
+        for node in self.nodes:
+            if node.type == "Equipment":
+                eq_type = node.properties.get("equipment_type", "Unknown")
+
+                # Filter by domain (HVAC = hvac_types)
+                if domain == "HVAC" and eq_type not in hvac_types:
+                    continue
+
+                type_stats[eq_type]["count"] += 1
+
+                # Count capabilities
+                capabilities = node.capabilities or []
+
+                # If this is the target equipment for QW7, add the new capability
+                if node.id == target_equipment_id and new_capability not in capabilities:
+                    capabilities = capabilities + [new_capability]
+
+                for cap in capabilities:
+                    type_stats[eq_type]["capabilities"][cap] += 1
+
+        results = []
+        for eq_type, stats in sorted(type_stats.items(), key=lambda x: -x[1]["count"]):
+            cap_dist = dict(stats["capabilities"])
+            most_common = max(cap_dist, key=cap_dist.get) if cap_dist else None
+            avg_caps = sum(cap_dist.values()) / stats["count"] if stats["count"] > 0 else 0
+
+            results.append({
+                "equipment_type": eq_type,
+                "equipment_count": stats["count"],
+                "capabilities_distribution": cap_dist,
+                "most_common_capability": most_common,
+                "avg_capabilities": round(avg_caps, 2),
+            })
+
+        semantic = {r["equipment_type"]: r["equipment_count"] for r in results}
+
+        return ExpectedAnswer(
+            query_id="Q26",
+            parameters={"domain": domain},
             answer_type="aggregate",
             semantic_content=semantic,
             row_count=len(results),
