@@ -456,17 +456,8 @@ class DatasetGenerator:
         'normal': 300,   # 5 minutes
         'slow': 900,     # 15 minutes
         'energy': 900,   # 15 minutes (cumulative)
+        'daily': 86400,  # 1 jour (métriques journalières)
         'event': 0,      # événements discrets, traitement spécial
-    }
-
-    # Budget rows par défaut selon durée (heures)
-    # Dimensionné pour distribution: 20 energy + 30 slow + 50 normal + 10 fast
-    DEFAULT_TARGET_ROWS = {
-        48: 100000,      # 2 jours
-        168: 300000,     # 1 semaine
-        720: 1000000,    # 1 mois
-        4320: 2000000,   # 6 mois
-        8760: 3000000,   # 1 an
     }
 
     # Profils d'événements par quantity (events/jour)
@@ -1608,29 +1599,49 @@ class DatasetGenerator:
         # PAS d'edges pour cet équipement
 
     def _generate_timeseries(self):
-        """Génère les données timeseries selon frequency et budget rows"""
-        # Grouper les points mesurables par frequency
-        measurable_quantities = ['temperature', 'humidity', 'co2', 'power', 'energy', 'flow', 'pressure']
-        points_by_freq = {'energy': [], 'slow': [], 'normal': [], 'fast': [], 'event': []}
+        """Génère les données timeseries pour TOUS les points mesurables.
+
+        Chaque point avec une quantity mesurable reçoit des timeseries selon
+        sa fréquence définie. Cela garantit un dataset cohérent où toutes les
+        queries timeseries (Q6-Q13, Q31) fonctionnent correctement.
+
+        La taille du dataset est contrôlée par:
+        - La durée (2d, 1w, 1m, 6m, 1y)
+        - Le profil (small, medium, large) qui détermine le nombre de points
+        """
+        # Quantities qui génèrent des timeseries continues
+        measurable_quantities = [
+            'temperature', 'humidity', 'co2', 'power', 'energy',
+            'flow', 'pressure', 'concentration', 'position',
+            'speed', 'level', 'current', 'voltage', 'power_factor',
+            'active_power', 'reactive_power', 'setpoint', 'count'
+        ]
+
+        # Frequencies supportées (event = discret)
+        valid_frequencies = {'energy', 'slow', 'normal', 'fast', 'event', 'daily'}
+
+        # Collecter TOUS les points mesurables
+        points_by_freq = {f: [] for f in valid_frequencies}
 
         for n in self.nodes:
             if n.type == 'Point':
                 quantity = n.properties.get('quantity', '')
                 freq = n.properties.get('frequency', 'normal')
-                if quantity in measurable_quantities and freq in points_by_freq:
-                    points_by_freq[freq].append(n)
-                elif freq == 'event' and freq in points_by_freq:
-                    points_by_freq['event'].append(n)
 
-        # Budget target (CLI override ou défaut)
-        target_rows = self.target_rows or self._get_default_target_rows()
+                # Points avec quantity mesurable → timeseries régulières
+                if quantity in measurable_quantities:
+                    target_freq = freq if freq in valid_frequencies else 'normal'
+                    points_by_freq[target_freq].append(n)
+                # Points event (status, alarm, fault) → timeseries discrètes
+                elif freq == 'event':
+                    points_by_freq['event'].append(n)
 
         # Calculer rows par point selon frequency
         duration_sec = self.duration_hours * 3600
         days = self.duration_hours / 24
 
         def rows_for_freq(freq, quantity=''):
-            step = self.FREQUENCY_STEP_SECONDS[freq]
+            step = self.FREQUENCY_STEP_SECONDS.get(freq, 300)
             if step == 0:  # event - selon profil
                 if 'status' in quantity:
                     rate = self.EVENT_PROFILES['status']
@@ -1643,48 +1654,27 @@ class DatasetGenerator:
                 return max(1, int(rate * days))
             return duration_sec // step
 
-        # Limites de points par fréquence pour distribution équilibrée
-        max_points_per_freq = {
-            'energy': 20,   # tous les compteurs
-            'slow': 30,     # échantillon
-            'normal': 50,   # échantillon
-            'fast': 10,     # petit échantillon (coûteux en rows)
-        }
-
-        # Sélectionner points par priorité jusqu'au budget
+        # Sélectionner TOUS les points (pas de limite)
         selected = []
-        rows_used = 0
+        rows_estimate = 0
 
-        for freq in ['energy', 'slow', 'normal', 'fast']:
-            rows_per_point = rows_for_freq(freq)
-            max_points = max_points_per_freq[freq]
-            count = 0
+        for freq in valid_frequencies:
             for point in points_by_freq[freq]:
-                if count >= max_points:
-                    break
-                if rows_used + rows_per_point <= target_rows:
-                    selected.append((point, freq, rows_per_point))
-                    rows_used += rows_per_point
-                    count += 1
-
-        # Ajouter events (budget séparé, toujours inclus, max 10 points)
-        event_points = points_by_freq['event'][:10]
-        for point in event_points:
-            quantity = point.properties.get('quantity', '')
-            rows = rows_for_freq('event', quantity)
-            selected.append((point, 'event', rows))
-            rows_used += rows
-
-        # Sanity check
-        if rows_used > target_rows * 1.1:  # 10% marge pour events
-            print(f"WARNING: Budget dépassé: {rows_used} > {target_rows}")
+                quantity = point.properties.get('quantity', '')
+                rows = rows_for_freq(freq, quantity)
+                selected.append((point, freq, rows))
+                rows_estimate += rows
 
         # Log breakdown
         breakdown = {}
+        points_breakdown = {}
         for _, freq, rows in selected:
             breakdown[freq] = breakdown.get(freq, 0) + rows
-        print(f"Timeseries: {len(selected)} points, {rows_used} rows")
-        print(f"  Breakdown: {breakdown}")
+            points_breakdown[freq] = points_breakdown.get(freq, 0) + 1
+
+        print(f"Timeseries: {len(selected)} points, {rows_estimate:,} rows estimated")
+        print(f"  Points by freq: {points_breakdown}")
+        print(f"  Rows by freq: {breakdown}")
 
         # Générer les données
         base_time = self.reference_date
@@ -1692,7 +1682,7 @@ class DatasetGenerator:
 
         for point, freq, _ in selected:
             quantity = point.properties.get('quantity', 'status')
-            step_sec = self.FREQUENCY_STEP_SECONDS[freq]
+            step_sec = self.FREQUENCY_STEP_SECONDS.get(freq, 300)
 
             if step_sec == 0:  # event: timestamps aléatoires
                 self._generate_event_timeseries(point, base_time, end_time)
@@ -1738,13 +1728,6 @@ class DatasetGenerator:
                 timestamp=ts,
                 value=float(self.rng.randint(0, 1))
             ))
-
-    def _get_default_target_rows(self) -> int:
-        """Budget rows par défaut selon durée"""
-        for threshold, budget in sorted(self.DEFAULT_TARGET_ROWS.items()):
-            if self.duration_hours <= threshold:
-                return budget
-        return self.DEFAULT_TARGET_ROWS[8760]
 
     def _generate_value(self, quantity: str, hour: int) -> float:
         """Génère une valeur réaliste selon la quantity et l'heure"""
@@ -1868,11 +1851,27 @@ class DatasetGenerator:
         params["space_id"] = space_with_serves or space_with_any
 
         # 4. Equipment in FEEDS chain (prefer middle of chain)
+        # Q22 (Equipment Siblings) needs equipment that has a FEEDS parent
         feeds_sources = {e.source_id for e in self.edges if e.rel_type == "FEEDS"}
         feeds_targets = {e.target_id for e in self.edges if e.rel_type == "FEEDS"}
         middle = feeds_sources & feeds_targets
-        if middle:
-            params["equipment_id"] = list(middle)[0]
+        # Filter to only Equipment nodes (not spaces)
+        middle_equipment = set()
+        for nid in middle:
+            node = self._get_node(nid)
+            if node and node.type == "Equipment":
+                middle_equipment.add(nid)
+        # Filter targets to Equipment only
+        target_equipment = set()
+        for nid in feeds_targets:
+            node = self._get_node(nid)
+            if node and node.type == "Equipment":
+                target_equipment.add(nid)
+        # Prefer equipment in middle of chain, then any target (has parent)
+        if middle_equipment:
+            params["equipment_id"] = list(middle_equipment)[0]
+        elif target_equipment:
+            params["equipment_id"] = list(target_equipment)[0]
         elif feeds_sources:
             params["equipment_id"] = list(feeds_sources)[0]
 
