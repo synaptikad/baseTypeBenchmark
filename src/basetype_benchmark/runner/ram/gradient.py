@@ -12,10 +12,13 @@ This is a key methodological contribution: RAM as independent variable.
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
+
+logger = logging.getLogger(__name__)
 
 from rich.console import Console
 
@@ -981,32 +984,49 @@ class RAMGradientExecutor:
 
     def _init_param_sampler(self):
         """Initialize parameters from queries_params.yaml or dynamic sampling."""
+        logger.debug(f"Initializing param sampler, data_path={self._data_path}")
+
         # Try to load from queries_params.yaml first
         if self._data_path:
             params_file = self._data_path / "queries_params.yaml"
+            logger.debug(f"Looking for params file: {params_file}, exists={params_file.exists()}")
+
             if params_file.exists():
                 try:
                     import yaml
                     with open(params_file, "r", encoding="utf-8") as f:
                         data = yaml.safe_load(f)
                     file_params = data.get("parameters", {})
+                    logger.debug(f"Loaded {len(file_params)} parameters from YAML")
+
                     self._sampled_params = self._build_sampled_params(file_params)
+                    logger.info(f"Successfully loaded params from {params_file}")
                     if self.verbose:
                         self._console.print("[dim]Loaded params from queries_params.yaml[/dim]")
                     return
                 except Exception as e:
+                    # Always log errors, not just in verbose mode
+                    logger.error(f"Failed to load queries_params.yaml: {e}", exc_info=True)
                     if self.verbose:
                         self._console.print(f"[yellow]Warning: Failed to load queries_params.yaml: {e}[/yellow]")
+            else:
+                logger.warning(f"queries_params.yaml not found at {params_file}")
+        else:
+            logger.warning("No data_path set, cannot load queries_params.yaml")
 
         # Fallback to dynamic sampling
+        logger.debug("Falling back to dynamic sampling")
         try:
             from ..core.param_sampler import ParamSampler
             runner = self._get_runner()
             sampler = ParamSampler(self.paradigm, runner, seed=42)
             self._sampled_params = sampler.sample()
+            logger.info("Dynamic params sampled successfully")
             if self.verbose:
                 self._console.print("[dim]Dynamic params sampled from dataset[/dim]")
         except Exception as e:
+            # Always log errors
+            logger.error(f"Param sampling failed: {e}", exc_info=True)
             self._sampled_params = None
             if self.verbose:
                 self._console.print(f"[dim]Param sampling failed: {e}[/dim]")
@@ -1014,6 +1034,12 @@ class RAMGradientExecutor:
     def _build_sampled_params(self, file_params: dict):
         """Build SampledParams from queries_params.yaml content."""
         from ..core.param_sampler import SampledParams
+
+        # Validate critical fields
+        critical_fields = ["meter_id", "equipment_id", "space_id", "floor_id", "building_id"]
+        missing = [f for f in critical_fields if not file_params.get(f)]
+        if missing:
+            logger.warning(f"Missing critical fields in queries_params.yaml: {missing}")
 
         return SampledParams(
             building_id=file_params.get("building_id"),
