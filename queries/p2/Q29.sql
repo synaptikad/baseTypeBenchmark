@@ -11,7 +11,7 @@ WITH RECURSIVE all_paths AS (
     FROM nodes n
     WHERE n.id = $1
       AND n.node_type = 'Equipment'
-      AND n.data->>'equipment_type' = 'Transformer'
+      AND n.data->>'equipment_type' = 'Transformer_HT_BT'
 
     UNION ALL
 

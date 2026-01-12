@@ -388,6 +388,11 @@ def run_benchmark_wizard(datasets: list[Path]):
         except ValueError:
             ram = "0.5,1,2,4,8,16,32,64"
 
+    # 6b. Number of runs
+    console.print("\n[bold]6b. Number of runs per query[/bold]")
+    console.print("[dim]More runs = more stable median, but slower[/dim]")
+    n_runs = IntPrompt.ask("Runs", default=5)
+
     # 7. For Scenario type, select workload
     workload_name = None
     if bench_type == "2":
@@ -420,11 +425,19 @@ def run_benchmark_wizard(datasets: list[Path]):
         f"Mode:      {'Single RAM' if bench_mode == '1' else 'Gradient'}\n"
         f"Paradigms: {paradigms}\n"
         f"Queries:   {queries_display}\n"
-        f"RAM:       {ram} GB",
+        f"RAM:       {ram} GB\n"
+        f"Runs:      {n_runs}",
         border_style="blue"
     ))
 
     if not Confirm.ask("\nStart?", default=True):
+        return
+
+    # Ensure containers are running before starting benchmark
+    paradigm_list = [p.strip() for p in paradigms.split(",")]
+    if not ensure_containers_running(paradigm_list):
+        console.print("[red]Cannot start benchmark: containers not ready[/red]")
+        wait()
         return
 
     # Execute
@@ -446,7 +459,7 @@ def run_benchmark_wizard(datasets: list[Path]):
 
             # Build command
             cmd_args = ["benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
-                "-p", paradigms, "--ram", ram, "--runs", "5", "--cleanup",
+                "-p", paradigms, "--ram", ram, "--runs", str(n_runs), "--variants", "1", "--cleanup",
                 "--archive", str(ARCHIVE_DIR)]
             if queries_arg:
                 cmd_args.extend(["-q", queries_arg])
@@ -1020,6 +1033,104 @@ def get_container_status() -> dict[str, dict]:
             pass
 
     return containers
+
+
+def ensure_containers_running(paradigms: list[str]) -> bool:
+    """Ensure required containers are running for the selected paradigms.
+
+    Auto-starts containers if needed. Returns True if all containers are ready.
+    """
+    compose_file = PROJECT_DIR / "docker" / "docker-compose.yml"
+
+    # Map paradigms to required services
+    paradigm_to_service = {
+        "P1": "timescale",
+        "P2": "timescale",
+        "M1": "memgraph",
+        "M2": "memgraph",
+        "O2": "oxigraph",
+    }
+
+    # Get required services
+    required_services = set()
+    for p in paradigms:
+        if p in paradigm_to_service:
+            required_services.add(paradigm_to_service[p])
+
+    if not required_services:
+        return True
+
+    # Check current status
+    containers = get_container_status()
+
+    # Find services that need starting
+    services_to_start = []
+    for service in required_services:
+        container_name = f"benchmark-{service}"
+        status = containers.get(container_name, {})
+        state = status.get("status", "").lower()
+        health = status.get("health", "").lower()
+
+        # Check if running and healthy
+        if "running" not in state or ("unhealthy" in health):
+            services_to_start.append(service)
+
+    if not services_to_start:
+        return True
+
+    # Auto-start required services
+    console.print(f"\n[yellow]Starting required containers: {', '.join(services_to_start)}[/yellow]")
+
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "up", "-d"] + services_to_start,
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            console.print(f"[red]Failed to start containers: {result.stderr}[/red]")
+            return False
+    except subprocess.TimeoutExpired:
+        console.print("[red]Timeout starting containers[/red]")
+        return False
+    except Exception as e:
+        console.print(f"[red]Error starting containers: {e}[/red]")
+        return False
+
+    # Wait for containers to be healthy
+    console.print("[dim]Waiting for containers to be healthy...[/dim]")
+    import time
+    max_wait = 60  # seconds
+    start_time = time.time()
+
+    while time.time() - start_time < max_wait:
+        containers = get_container_status()
+        all_healthy = True
+
+        for service in required_services:
+            container_name = f"benchmark-{service}"
+            status = containers.get(container_name, {})
+            state = status.get("status", "").lower()
+            health = status.get("health", "").lower()
+
+            if "running" not in state:
+                all_healthy = False
+                break
+            # Some containers might not have health checks
+            if health and "healthy" not in health and "starting" not in health:
+                all_healthy = False
+                break
+            if "starting" in health:
+                all_healthy = False
+                break
+
+        if all_healthy:
+            console.print("[green]All containers ready![/green]")
+            return True
+
+        time.sleep(2)
+
+    console.print("[red]Timeout waiting for containers to be healthy[/red]")
+    return False
 
 
 def get_volume_info() -> dict[str, str]:

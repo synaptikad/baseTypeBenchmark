@@ -813,12 +813,14 @@ class ExpectedAnswerGenerator:
                                         if not point:
                                             continue
 
-                                        # Filter business hours (8-18)
+                                        # Filter business hours (8-18) and weekdays (Mon-Fri)
+                                        quantity = (point.properties or {}).get("quantity", "")
                                         for ts in self.ts_by_point.get(point_id, []):
-                                            if 8 <= ts.timestamp.hour <= 18:
-                                                if "temp" in point.name.lower():
+                                            # Business hours: 8-18, weekdays: 0=Mon to 4=Fri
+                                            if 8 <= ts.timestamp.hour <= 18 and ts.timestamp.weekday() < 5:
+                                                if quantity == "temperature":
                                                     space_data[space_id]["temp"].append(ts.value)
-                                                elif "co2" in point.name.lower():
+                                                elif quantity == "co2":
                                                     space_data[space_id]["co2"].append(ts.value)
 
         semantic = {}
@@ -1249,55 +1251,43 @@ class ExpectedAnswerGenerator:
         )
 
     def _gen_q22(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q22: Equipment siblings (share same parent)."""
+        """Q22: Equipment siblings (share same FEEDS parent).
+
+        Per catalog: Find equipment fed by the same parent via FEEDS relationship.
+        Pattern: (parent)-[:FEEDS]->(equipment) and (parent)-[:FEEDS]->(sibling)
+        """
         equipment_id = params.get("equipment_id")
         if not equipment_id:
             return None
 
-        # Find parent nodes - check BOTH directions
-        # Outgoing edges: equipment -> parent (e.g., LOCATED_IN, SERVES)
+        # Find parent equipment that FEEDS this equipment
+        # Only consider FEEDS relationship as per catalog intention
         parents = set()
-        for edge in self.edges_by_source.get(equipment_id, []):
-            if edge.rel_type not in ("HAS_POINT",):  # Exclude point relationships
-                parents.add((edge.target_id, edge.rel_type, "outgoing"))
-
-        # Incoming edges: parent -> equipment (e.g., FEEDS, CONTAINS)
         for edge in self.edges_by_target.get(equipment_id, []):
-            if edge.rel_type in ("FEEDS", "CONTAINS"):  # These define parent-child
-                parents.add((edge.source_id, edge.rel_type, "incoming"))
+            if edge.rel_type == "FEEDS":
+                parent_node = self.nodes_by_id.get(edge.source_id)
+                # Only consider Equipment as parents (not spaces/buildings)
+                if parent_node and parent_node.type == "Equipment":
+                    parents.add(edge.source_id)
 
-        # Find siblings (other equipment with same parent via same rel_type)
+        # Find siblings (other equipment fed by same parent via FEEDS)
         siblings = set()
         full_rows = []
 
-        for parent_id, rel_type, direction in parents:
-            if direction == "outgoing":
-                # Parent found via outgoing edge, siblings also have outgoing edges to parent
-                for edge in self.edges_by_target.get(parent_id, []):
-                    if edge.rel_type == rel_type and edge.source_id != equipment_id:
-                        sibling_id = edge.source_id
+        for parent_id in parents:
+            # Find all equipment fed by this parent
+            for edge in self.edges_by_source.get(parent_id, []):
+                if edge.rel_type == "FEEDS" and edge.target_id != equipment_id:
+                    sibling_id = edge.target_id
+                    sibling = self.nodes_by_id.get(sibling_id)
+                    # Only include Equipment siblings
+                    if sibling and sibling.type == "Equipment":
                         siblings.add(sibling_id)
-                        sibling = self.nodes_by_id.get(sibling_id)
                         parent = self.nodes_by_id.get(parent_id)
                         full_rows.append({
                             "sibling_id": sibling_id,
                             "sibling_name": sibling.name if sibling else "",
-                            "sibling_type": sibling.type if sibling else "",
-                            "parent_id": parent_id,
-                            "parent_name": parent.name if parent else "",
-                        })
-            else:
-                # Parent found via incoming edge, siblings also have incoming edges from parent
-                for edge in self.edges_by_source.get(parent_id, []):
-                    if edge.rel_type == rel_type and edge.target_id != equipment_id:
-                        sibling_id = edge.target_id
-                        siblings.add(sibling_id)
-                        sibling = self.nodes_by_id.get(sibling_id)
-                        parent = self.nodes_by_id.get(parent_id)
-                        full_rows.append({
-                            "sibling_id": sibling_id,
-                            "sibling_name": sibling.name if sibling else "",
-                            "sibling_type": sibling.type if sibling else "",
+                            "sibling_type": sibling.properties.get("equipment_type", "Equipment") if sibling else "",
                             "parent_id": parent_id,
                             "parent_name": parent.name if parent else "",
                         })
@@ -1614,59 +1604,76 @@ class ExpectedAnswerGenerator:
         )
 
     def _gen_q30(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q30: Cycle Detection - Find cycles in FEEDS network.
+        """Q30: Failure Impact Analysis - If equipment fails, what is impacted?
 
-        Detect nodes that are part of cycles via FEEDS relationship.
+        Propagate via FEEDS to find all downstream equipment and spaces.
         """
-        # Find all nodes involved in cycles via FEEDS
-        cycles = []
+        equipment_id = params.get("equipment_id") or params.get("meter_id")
+        if not equipment_id:
+            return None
 
-        # Use DFS-based cycle detection
-        visited = set()
-        rec_stack = set()
-        cycle_nodes = set()
+        # BFS to find all impacted equipment via FEEDS
+        impacted_equipment = []  # (id, name, type, hop_distance)
+        impacted_spaces = []     # (space_id, space_name, equipment_id, equipment_name, hop_distance)
+        visited = {equipment_id}
+        queue = [(equipment_id, 0)]  # (node_id, distance)
 
-        def dfs_cycle(node_id: str, path: list[str]):
-            visited.add(node_id)
-            rec_stack.add(node_id)
-            path = path + [node_id]
+        while queue:
+            current_id, distance = queue.pop(0)
+            current_node = self.nodes_by_id.get(current_id)
 
-            for edge in self.edges_by_source.get(node_id, []):
-                if edge.rel_type == "FEEDS":
-                    neighbor = edge.target_id
-                    if neighbor not in visited:
-                        dfs_cycle(neighbor, path)
-                    elif neighbor in rec_stack:
-                        # Found cycle
-                        cycle_start = path.index(neighbor) if neighbor in path else -1
-                        if cycle_start >= 0:
-                            cycle = path[cycle_start:]
-                            cycles.append(cycle)
-                            cycle_nodes.update(cycle)
+            # Record impacted equipment (except source at distance 0)
+            if distance > 0 and current_node and current_node.type == "Equipment":
+                impacted_equipment.append({
+                    "impact_type": "equipment",
+                    "impacted_id": current_id,
+                    "impacted_name": current_node.name,
+                    "impacted_subtype": current_node.properties.get("equipment_type", "Equipment"),
+                    "hop_distance": distance,
+                    "served_by_equipment": None,
+                })
 
-            rec_stack.remove(node_id)
+            # Find spaces served by this equipment
+            for edge in self.edges_by_source.get(current_id, []):
+                if edge.rel_type in ("SERVES", "MONITORS", "LOCATED_IN"):
+                    space = self.nodes_by_id.get(edge.target_id)
+                    if space and space.type == "Space":
+                        eq_node = self.nodes_by_id.get(current_id)
+                        impacted_spaces.append({
+                            "impact_type": "space",
+                            "impacted_id": edge.target_id,
+                            "impacted_name": space.name,
+                            "impacted_subtype": "Space",
+                            "hop_distance": distance,
+                            "served_by_equipment": eq_node.name if eq_node else None,
+                        })
 
-        # Start DFS from each equipment node
-        for node in self.nodes:
-            if node.type == "Equipment" and node.id not in visited:
-                dfs_cycle(node.id, [])
+            # Propagate via FEEDS (only if distance < 10)
+            if distance < 10:
+                for edge in self.edges_by_source.get(current_id, []):
+                    if edge.rel_type == "FEEDS" and edge.target_id not in visited:
+                        visited.add(edge.target_id)
+                        queue.append((edge.target_id, distance + 1))
 
-        full_rows = []
-        for node_id in cycle_nodes:
-            node = self.nodes_by_id.get(node_id)
-            full_rows.append({
-                "equipment_id": node_id,
-                "equipment_type": node.properties.get("equipment_type", "") if node else "",
-                "equipment_name": node.name if node else "",
-            })
+        # Combine and sort results
+        full_rows = impacted_equipment + impacted_spaces
+        full_rows.sort(key=lambda x: (x["hop_distance"], x["impact_type"], x["impacted_id"]))
+
+        # Semantic content: summary of impact
+        semantic = {
+            "source_equipment": equipment_id,
+            "impacted_equipment_count": len(impacted_equipment),
+            "impacted_spaces_count": len(impacted_spaces),
+            "max_hop_distance": max((r["hop_distance"] for r in full_rows), default=0),
+        }
 
         return ExpectedAnswer(
             query_id="Q30",
-            parameters={},
-            answer_type="set",
-            semantic_content=cycle_nodes,
-            row_count=len(cycle_nodes),
-            content_hash=_compute_hash(cycle_nodes),
+            parameters={"equipment_id": equipment_id},
+            answer_type="impact_analysis",
+            semantic_content=semantic,
+            row_count=len(full_rows),
+            content_hash=_compute_hash(semantic),
             full_rows=full_rows,
         )
 

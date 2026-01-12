@@ -4,7 +4,7 @@
 // Parametres: $transformer_id
 
 MATCH (source:Equipment {id: $transformer_id})
-WHERE source.equipment_type = 'Transformer'
+WHERE source.equipment_type = 'Transformer_HT_BT'
 MATCH path = (source)-[:FEEDS*1..10]->(target:Equipment)
 WHERE COALESCE(target.critical, false) = true
 WITH path,

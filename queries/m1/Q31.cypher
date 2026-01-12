@@ -5,7 +5,7 @@
 // Note: M1 n'a pas TimescaleDB, approximation via TimeseriesChunk
 
 MATCH (b:Building {id: $building_id})-[:CONTAINS*1..3]->(s:Space)<-[:SERVES]-(eq:Equipment)-[:HAS_POINT]->(p:Point)
-MATCH (p)-[:HAS_DATA]->(chunk:TimeseriesChunk)
+MATCH (p)-[:HAS_CHUNK]->(chunk:TimeseriesChunk)
 WHERE chunk.date >= date($date_start) AND chunk.date <= date($date_end)
 UNWIND chunk.values AS val
 WITH p.id AS point_id, chunk.date AS time_bucket, val

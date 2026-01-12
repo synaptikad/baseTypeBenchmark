@@ -1,39 +1,65 @@
--- Q30: Cycle Detection (P2 JSONB)
--- Status: DEGRADED pour P2 (CTE avec detection revisite via ARRAY, O(n^2))
--- Semantic: Detect cycles in FEEDS relationships
--- Parametres: none
+-- Q30: Failure Impact Analysis (P2 JSONB)
+-- Status: DEGRADED pour P2 (CTE récursif, natif pour graphes)
+-- Semantic: Si cet équipement tombe en panne, quels espaces/équipements sont impactés?
+-- Parametres: $1 = EQUIPMENT_ID
 
-WITH RECURSIVE cycle_search AS (
+WITH RECURSIVE impact_propagation AS (
+    -- Point de départ: l'équipement en panne
     SELECT
-        n.id AS start_id,
-        n.id AS current_id,
-        ARRAY[n.id]::text[] AS path,
-        1 AS depth,
-        false AS found_cycle
+        n.id AS equipment_id,
+        n.name AS equipment_name,
+        n.data->>'equipment_type' AS equipment_type,
+        0 AS hop_distance,
+        ARRAY[n.id]::text[] AS path
     FROM nodes n
-    WHERE n.node_type = 'Equipment'
+    WHERE n.id = $1 AND n.node_type = 'Equipment'
 
     UNION ALL
 
+    -- Propagation via FEEDS (équipements alimentés)
     SELECT
-        cs.start_id,
         n.id,
-        cs.path || n.id,
-        cs.depth + 1,
-        n.id = cs.start_id AS found_cycle
-    FROM cycle_search cs
-    JOIN edges e ON e.source_id = cs.current_id AND e.rel_type = 'FEEDS'
+        n.name,
+        n.data->>'equipment_type',
+        ip.hop_distance + 1,
+        ip.path || n.id
+    FROM impact_propagation ip
+    JOIN edges e ON e.source_id = ip.equipment_id AND e.rel_type = 'FEEDS'
     JOIN nodes n ON n.id = e.target_id AND n.node_type = 'Equipment'
-    WHERE cs.depth < 10
-      AND NOT cs.found_cycle
-      AND (n.id = cs.start_id OR NOT (n.id = ANY(cs.path)))
+    WHERE ip.hop_distance < 10
+      AND NOT (n.id = ANY(ip.path))
+),
+impacted_spaces AS (
+    -- Espaces desservis par les équipements impactés
+    SELECT DISTINCT
+        s.id AS space_id,
+        s.name AS space_name,
+        ip.equipment_id,
+        ip.equipment_name,
+        ip.hop_distance
+    FROM impact_propagation ip
+    JOIN edges e ON e.source_id = ip.equipment_id AND e.rel_type IN ('SERVES', 'MONITORS', 'LOCATED_IN')
+    JOIN nodes s ON s.id = e.target_id AND s.node_type = 'Space'
 )
-SELECT DISTINCT
-    n.id AS node_id,
-    n.data->>'equipment_type' AS node_type,
-    n.name AS node_name,
-    cs.depth AS cycle_length
-FROM cycle_search cs
-JOIN nodes n ON n.id = cs.start_id AND n.node_type = 'Equipment'
-WHERE cs.found_cycle
-ORDER BY cycle_length, node_id;
+SELECT
+    'equipment' AS impact_type,
+    equipment_id AS impacted_id,
+    equipment_name AS impacted_name,
+    equipment_type AS impacted_subtype,
+    hop_distance,
+    NULL AS served_by_equipment
+FROM impact_propagation
+WHERE hop_distance > 0  -- Exclure l'équipement source
+
+UNION ALL
+
+SELECT
+    'space' AS impact_type,
+    space_id AS impacted_id,
+    space_name AS impacted_name,
+    'Space' AS impacted_subtype,
+    hop_distance,
+    equipment_name AS served_by_equipment
+FROM impacted_spaces
+
+ORDER BY hop_distance, impact_type, impacted_id;

@@ -9,7 +9,7 @@ WITH RECURSIVE all_paths AS (
         ARRAY[eq.id]::text[] AS path_nodes,
         1 AS path_length
     FROM equipment eq
-    WHERE eq.id = $1 AND eq.equipment_type = 'Transformer'
+    WHERE eq.id = $1 AND eq.equipment_type = 'Transformer_HT_BT'
 
     UNION ALL
 

@@ -40,6 +40,7 @@ class SampledParams:
     critical_equipment_id: Optional[str] = None     # Q21
     building_with_offices_id: Optional[str] = None  # Q13
     transformer_id: Optional[str] = None            # Q29
+    evacuation_space_id: Optional[str] = None       # Q27
     domain: str = "HVAC"                            # Q26, Q32
 
     # Dates (from dataset or defaults)
@@ -395,10 +396,10 @@ def get_params_for_query(query_id: str, sampled: SampledParams) -> Dict[str, Any
         "Q25": {"EQUIPMENT_ID": sampled.equipment_id},
         "Q26": {"DOMAIN": sampled.domain},
         # Q27-Q30: Graph-native extended
-        "Q27": {"SPACE_ID": sampled.space_id},
+        "Q27": {"SPACE_ID": sampled.evacuation_space_id or sampled.space_id},
         "Q28": {"METER_ID": sampled.meter_id},
         "Q29": {"TRANSFORMER_ID": sampled.transformer_id or sampled.meter_id},
-        "Q30": {},  # No parameters
+        "Q30": {"EQUIPMENT_ID": sampled.meter_id or sampled.equipment_id},  # Failure Impact Analysis
         # Q31-Q34: SQL-native
         "Q31": {
             "BUILDING_ID": sampled.building_id,

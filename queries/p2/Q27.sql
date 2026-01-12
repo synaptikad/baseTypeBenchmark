@@ -23,7 +23,7 @@ WITH RECURSIVE paths AS (
         n2.name,
         p.path || n2.id,
         p.path_names || n2.name,
-        p.total_distance + COALESCE((e.data->>'distance')::float, 1.0),
+        p.total_distance + COALESCE((e.properties->>'distance')::float, 1.0),
         p.depth + 1
     FROM paths p
     JOIN edges e ON e.source_id = p.current_id

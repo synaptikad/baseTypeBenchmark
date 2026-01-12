@@ -10,7 +10,7 @@ WITH eq,
          point_id: p.id,
          last_calibration: p.calibration_last_date,
          next_calibration: p.calibration_next_date,
-         is_overdue: p.calibration_next_date < date()
+         is_overdue: p.calibration_next_date < toString(date())
      }) AS points_calibration
 RETURN eq.id AS equipment_id,
        eq.name AS name,

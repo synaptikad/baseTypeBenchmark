@@ -115,7 +115,7 @@ class M1M2Extractor(BaseExtractor):
         filepath = self.output_dir / "timeseries.csv"
         write_csv(filepath, rows, ["time", "point_id", "value"])
         print(f"  Created {filepath} ({len(rows)} rows)")
-        print(f"  Note: timeseries.csv pour M2 (TimescaleDB), ignoré par M1")
+        print(f"  Note: timeseries.csv utilisé par M1 (TimeseriesChunk) et M2 (TimescaleDB)")
         return [filepath]
 
     def get_schema_commands(self) -> List[str]:

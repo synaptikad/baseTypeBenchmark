@@ -15,16 +15,16 @@ SELECT
         ELSE 'invalid'
     END AS schema_status,
     ARRAY_REMOVE(ARRAY[
-        CASE WHEN NOT n.data ? 'protocol' THEN 'protocol' END,
-        CASE WHEN NOT n.data ? 'metadata' THEN 'metadata' END,
+        CASE WHEN NOT n.data ? 'protocol' THEN 'protocol'::text END,
+        CASE WHEN NOT n.data ? 'metadata' THEN 'metadata'::text END,
         CASE WHEN n.data ? 'protocol' AND jsonb_typeof(n.data->'protocol') != 'object'
-             THEN 'protocol_type' END,
+             THEN 'protocol_type'::text END,
         CASE WHEN n.data ? 'metadata' AND jsonb_typeof(n.data->'metadata') != 'object'
-             THEN 'metadata_type' END
-    ], NULL) AS missing_fields
+             THEN 'metadata_type'::text END
+    ], NULL::text) AS missing_fields
 FROM nodes n
 WHERE n.node_type = 'Equipment'
-  AND n.data @> jsonb_build_object('domain', $1)
+  AND n.data @> jsonb_build_object('domain', $1::text)
 ORDER BY
     CASE
         WHEN n.data ? 'protocol' AND n.data ? 'metadata' THEN 'valid'

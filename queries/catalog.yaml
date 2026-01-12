@@ -1493,27 +1493,37 @@ queries:
       O2: {status: IMPOSSIBLE, note: "Énumération exhaustive non supportée"}
 
   Q30:
-    name: "Cycle Detection"
+    name: "Failure Impact Analysis"
     category: graph_native
     intention: |
-      Détecter les cycles dans les relations FEEDS (erreur de configuration).
-      Un cycle électrique est une anomalie à corriger.
-    use_case: "Validation données, détection erreurs import, audit qualité"
-    parameters: []
-    relations: [FEEDS]
+      Si cet équipement tombe en panne, quels espaces et équipements sont impactés?
+      Propagation récursive via FEEDS pour identifier la cascade d'impact.
+    use_case: "Analyse d'impact, maintenance préventive, gestion des pannes"
+    parameters:
+      - name: EQUIPMENT_ID
+        type: string
+        description: "ID de l'équipement en panne"
+        format:
+          sql: "$1"
+          cypher: "$equipment_id"
+          sparql: "?equipmentId"
+        example: "eq_mainmeter_4"
+    relations: [FEEDS, SERVES, MONITORS, LOCATED_IN]
     result_schema:
       columns:
-        - {name: node_id, type: string, description: "ID nœud impliqué dans un cycle"}
-        - {name: node_type, type: string, description: "Type d'équipement"}
-        - {name: node_name, type: string, description: "Nom équipement"}
-        - {name: cycle_length, type: integer, description: "Longueur du cycle détecté"}
-      order_by: [cycle_length, node_id]
+        - {name: impact_type, type: string, description: "Type d'entité impactée (equipment/space)"}
+        - {name: impacted_id, type: string, description: "ID de l'entité impactée"}
+        - {name: impacted_name, type: string, description: "Nom de l'entité impactée"}
+        - {name: impacted_subtype, type: string, description: "Sous-type (equipment_type ou Space)"}
+        - {name: hop_distance, type: integer, description: "Distance en hops depuis l'équipement source"}
+        - {name: served_by_equipment, type: string, description: "Équipement qui dessert cet espace (pour spaces)"}
+      order_by: [hop_distance, impact_type, impacted_id]
     paradigm_status:
-      P1: {status: DEGRADED, note: "CTE avec détection revisite via ARRAY, O(n²)"}
-      P2: {status: DEGRADED, note: "CTE avec détection revisite via ARRAY, O(n²)"}
-      M1: {status: NATIVE, note: "Pattern (n)-[:FEEDS*2..10]->(n) optimisé"}
-      M2: {status: NATIVE, note: "Pattern (n)-[:FEEDS*2..10]->(n) optimisé"}
-      O2: {status: DEGRADED, note: "Property path cyclique possible mais lent"}
+      P1: {status: DEGRADED, note: "CTE récursif avec ARRAY pour éviter cycles"}
+      P2: {status: DEGRADED, note: "CTE récursif avec ARRAY pour éviter cycles"}
+      M1: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
+      M2: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
+      O2: {status: DEGRADED, note: "Property path SPARQL possible mais verbeux"}
 
   # -------------------------------------------------------------------------
   # SQL-NATIVE (Q31-Q34) - Avantage SQL
