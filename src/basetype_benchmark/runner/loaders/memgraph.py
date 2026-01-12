@@ -263,6 +263,37 @@ class MemgraphLoader(BaseLoader):
         finally:
             self._close_driver()
 
+        # Validate actual counts in database vs reported counts
+        # Note: Exclude TimeseriesChunk from node count (they are loaded separately)
+        # and exclude HAS_CHUNK from edge count
+        try:
+            driver = self._get_driver()
+            with driver.session() as session:
+                # Count only data nodes, not TimeseriesChunk
+                actual_nodes = session.run(
+                    "MATCH (n) WHERE NOT n:TimeseriesChunk RETURN count(n) as c"
+                ).single()["c"]
+                # Count only data edges, not HAS_CHUNK
+                actual_edges = session.run(
+                    "MATCH ()-[r]->() WHERE type(r) <> 'HAS_CHUNK' RETURN count(r) as c"
+                ).single()["c"]
+
+                if actual_nodes != result.nodes_loaded:
+                    result.add_error(
+                        f"Node count mismatch: reported {result.nodes_loaded}, actual {actual_nodes}"
+                    )
+                    result.nodes_loaded = actual_nodes  # Correct to actual
+
+                if actual_edges != result.edges_loaded:
+                    result.add_error(
+                        f"Edge count mismatch: reported {result.edges_loaded}, actual {actual_edges}"
+                    )
+                    result.edges_loaded = actual_edges  # Correct to actual
+        except Exception as e:
+            result.add_error(f"Post-load validation failed: {e}")
+        finally:
+            self._close_driver()
+
         # Calcul des stats
         result.duration_seconds = time.time() - start_time
         if result.duration_seconds > 0:
@@ -367,8 +398,15 @@ class MemgraphLoader(BaseLoader):
 
         for i in range(0, len(nodes), batch_size):
             batch = nodes[i:i + batch_size]
-            session.run(query, rows=batch)
-            loaded += len(batch)
+            try:
+                result = session.run(query, rows=batch)
+                summary = result.consume()
+                actual_created = summary.counters.nodes_created
+                loaded += actual_created
+                if actual_created < len(batch):
+                    print(f"Warning: JSON nodes batch {i//batch_size}: only {actual_created}/{len(batch)} created")
+            except Exception as e:
+                print(f"Error loading JSON nodes batch {i//batch_size} ({node_type}): {e}")
 
         return loaded
 
@@ -510,7 +548,9 @@ class MemgraphLoader(BaseLoader):
                     # Parse JSON string back to native Cypher list
                     try:
                         clean_row[k] = json.loads(v) if isinstance(v, str) else v
-                    except (json.JSONDecodeError, TypeError):
+                    except (json.JSONDecodeError, TypeError) as e:
+                        preview = v[:50] if isinstance(v, str) else str(v)[:50]
+                        print(f"Warning: JSON parse failed for {k}={preview}...: {e}")
                         clean_row[k] = v  # Keep as string if parsing fails
                 else:
                     clean_row[k] = v
@@ -522,8 +562,16 @@ class MemgraphLoader(BaseLoader):
 
         for i in range(0, len(clean_rows), batch_size):
             batch = clean_rows[i:i + batch_size]
-            session.run(query, rows=batch)
-            loaded += len(batch)
+            try:
+                result = session.run(query, rows=batch)
+                summary = result.consume()
+                actual_created = summary.counters.nodes_created
+                loaded += actual_created
+                if actual_created < len(batch):
+                    print(f"Warning: Nodes batch {i//batch_size}: only {actual_created}/{len(batch)} created")
+            except Exception as e:
+                print(f"Error loading nodes batch {i//batch_size} ({node_type}): {e}")
+                # Continue with next batch instead of crashing
 
         return loaded
 
@@ -645,8 +693,15 @@ class MemgraphLoader(BaseLoader):
 
         for i in range(0, len(rows), batch_size):
             batch = rows[i:i + batch_size]
-            session.run(query, rows=batch)
-            loaded += len(batch)
+            try:
+                result = session.run(query, rows=batch)
+                summary = result.consume()
+                actual_created = summary.counters.relationships_created
+                loaded += actual_created
+                if actual_created < len(batch):
+                    print(f"Warning: Edges batch {i//batch_size} ({rel_type}): only {actual_created}/{len(batch)} created (missing source/target nodes?)")
+            except Exception as e:
+                print(f"Error loading edges batch {i//batch_size} ({rel_type}): {e}")
 
         return loaded
 
@@ -729,8 +784,12 @@ class MemgraphLoader(BaseLoader):
 
         return total_count
 
-    def _create_ts_chunks(self, session: Session, chunks: list[dict]) -> None:
-        """Create TimeseriesChunk nodes and link to Points."""
+    def _create_ts_chunks(self, session: Session, chunks: list[dict]) -> int:
+        """Create TimeseriesChunk nodes and link to Points.
+
+        Returns:
+            Number of chunks actually created
+        """
         query = """
         UNWIND $chunks AS chunk
         MATCH (p:Point {id: chunk.point_id})
@@ -742,7 +801,16 @@ class MemgraphLoader(BaseLoader):
         })
         CREATE (p)-[:HAS_CHUNK]->(ts)
         """
-        session.run(query, chunks=chunks)
+        try:
+            result = session.run(query, chunks=chunks)
+            summary = result.consume()
+            actual_created = summary.counters.nodes_created
+            if actual_created < len(chunks):
+                print(f"Warning: TS chunks: only {actual_created}/{len(chunks)} created (missing Point nodes?)")
+            return actual_created
+        except Exception as e:
+            print(f"Error creating timeseries chunks: {e}")
+            return 0
 
     def _load_timeseries_m2(
         self,

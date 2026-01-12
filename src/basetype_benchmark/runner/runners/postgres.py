@@ -10,6 +10,7 @@ Supports P1 (relational) and P2 (JSONB) paradigms with:
 """
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -297,9 +298,16 @@ class PostgresRunner(BaseRunner):
                 return converted_query, expanded_params
             return query, params
 
-        # If query uses %(name)s style, return as-is
+        # If query uses %(name)s style, serialize dict values to JSON for JSONB params
         if "%(" in query:
-            return query, params
+            serialized_params = {}
+            for key, value in params.items():
+                if isinstance(value, dict):
+                    # psycopg3 cannot adapt dict directly - serialize to JSON string
+                    serialized_params[key] = json.dumps(value)
+                else:
+                    serialized_params[key] = value
+            return query, serialized_params
 
         # If query uses $1, $2 style (PostgreSQL native), convert to psycopg format
         if "$1" in query:
