@@ -610,9 +610,14 @@ class RAMGradientExecutor:
                 params = self._get_variant_params(query_id, variant_id)
 
                 # Convert params to ordered tuple for P1/P2 (SQL positional binding)
-                # Skip for write_workload, jsonb_write, and jsonb_validation which use named placeholders %(name)s
+                # Skip for categories that use named placeholders %(name)s
                 if self.paradigm in ("P1", "P2") and query_def.category not in (
-                    QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE, QueryCategory.JSONB_VALIDATION
+                    QueryCategory.WRITE_WORKLOAD,
+                    QueryCategory.JSONB_WRITE,
+                    QueryCategory.JSONB_VALIDATION,
+                    QueryCategory.WRITE_VALIDATION,
+                    QueryCategory.TENANT_WRITE,
+                    QueryCategory.TENANT_VALIDATION,
                 ):
                     from ..core.query_utils import get_ordered_params
                     params = get_ordered_params(params, query_def.parameter_order)
@@ -1072,6 +1077,7 @@ class RAMGradientExecutor:
             meter_id=file_params.get("meter_id"),
             ups_id=file_params.get("ups_id"),
             tenant_id=file_params.get("tenant_id"),
+            tenant_id_alt=file_params.get("tenant_id_alt"),  # Second tenant for QW11/QW12
             point_id=file_params.get("point_id"),
             source_type=file_params.get("source_type", "MainMeter"),
             tag_pattern=file_params.get("tag_pattern", "^brick:"),

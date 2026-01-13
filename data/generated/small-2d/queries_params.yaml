@@ -1,0 +1,79 @@
+metadata:
+  duration: 2d
+  generated_at: '2026-01-13T16:53:52.405456'
+  generator_version: '3.0'
+  profile: small
+  seed: 42
+parameters:
+  building_id: building_1
+  building_with_offices_id: building_1
+  capability: humidity_control
+  co2_factor: 0.0569
+  critical_equipment_id: eq_pdu_557
+  date_end: '2024-01-16T23:59:51Z'
+  date_start: '2024-01-15T00:00:00Z'
+  days_ahead: 90
+  device_id: 1002
+  domain: HVAC
+  equipment_id: eq_submeter_6
+  evacuation_space_id: space_1_2_4
+  floor_id: floor_1_1
+  hvac_source_equipment_id: eq_vav_49
+  hvac_target_space_id: space_1_2_6
+  max_hops: 3
+  meter_id: eq_mainmeter_4
+  point_id: point_eq_vav_320_damper_position
+  qw1_chunks:
+  - date: '2024-01-15'
+    point_id: point_eq_vav_320_damper_position
+    timestamps: &id001
+    - '2024-01-15T00:00:00Z'
+    - '2024-01-15T01:00:00Z'
+    - '2024-01-15T02:00:00Z'
+    values: &id002
+    - 21.5
+    - 22.0
+    - 21.8
+  qw1_point_ids:
+  - point_eq_vav_320_damper_position
+  - point_eq_vav_320_damper_position
+  - point_eq_vav_320_damper_position
+  qw1_timestamps: *id001
+  qw1_values: *id002
+  qw2_node_id: eq_submeter_6
+  qw2_tag_key: calibration_status
+  qw2_tag_value: verified_2024
+  qw3_rel_type: FEEDS
+  qw3_source_id: eq_mainmeter_4
+  qw3_target_id: eq_submeter_6
+  qw4_equipment_id: eq_submeter_6
+  qw4_event:
+    cost: 150.0
+    date: '2024-01-15'
+    description: Benchmark test maintenance event
+    parts_replaced:
+    - filter
+    - belt
+    technician: Tech_Benchmark
+    type: preventive
+  qw5_calibration_date: '2024-01-15'
+  qw5_next_date: '2025-01-14'
+  qw5_point_id: point_eq_vav_320_damper_position
+  qw5_technician: Calibration_Corp
+  qw6_equipment_id: eq_submeter_6
+  qw6_metadata_patch:
+    firmware_version: 3.2.1
+    last_update: '2024-01-15'
+  qw7_equipment_id: eq_ahu_9
+  qw7_new_capability: demand_control_ventilation
+  qw8_key_to_remove: legacy_protocol_id
+  qw8_node_id: eq_submeter_6
+  reference_date: '2024-01-15'
+  source_type: MainMeter
+  space_id: space_1_1_4
+  submeter_id: eq_submeter_5
+  tag_pattern: '^brick:'
+  tenant_id: tenant_1
+  tenant_id_alt: tenant_2
+  transformer_id: eq_transformer_ht_bt_2
+  ups_id: eq_ups_556

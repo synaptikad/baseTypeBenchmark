@@ -39,6 +39,9 @@ class QueryCategory(str, Enum):
     JSONB_WRITE = "jsonb_write"         # QW4-QW8
     JSONB_VALIDATION = "jsonb_validation"  # Q24-Q26
     SQL_NATIVE = "sql_native"           # Q31-Q34
+    WRITE_VALIDATION = "write_validation"   # Q35-Q38
+    TENANT_WRITE = "tenant_write"           # QW9-QW12
+    TENANT_VALIDATION = "tenant_validation" # Q39-Q41
 
 
 class ParadigmStatus(str, Enum):
@@ -218,7 +221,7 @@ DATASET_SIZE_ESTIMATES: dict[str, DatasetSizeEstimate] = {
 class PostgresConfig(BaseModel):
     """PostgreSQL connection configuration."""
     dsn: str = Field(
-        default="postgresql://postgres:benchmark@localhost:5432/benchmark",
+        default="postgresql://postgres:postgres@localhost:5432/benchmark",
         description="PostgreSQL DSN"
     )
     pool_size: int = Field(default=5, ge=1, le=50)
