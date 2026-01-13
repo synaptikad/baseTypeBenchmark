@@ -1,0 +1,18 @@
+# Q37: Validate Relation Mutation (QW3)
+# Status: NATIVE pour O2 (SPARQL pattern matching)
+# Paramètres: ?sourceId, ?targetId
+# Semantic: Vérifie que la relation FEEDS existe entre source et target
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?source_id ?source_name ?rel_type ?target_id ?target_name
+WHERE {
+    ?source btb:id ?sourceId ;
+            btb:id ?source_id ;
+            btb:name ?source_name ;
+            btb:feeds ?target .
+    ?target btb:id ?targetId ;
+            btb:id ?target_id ;
+            btb:name ?target_name .
+    BIND("FEEDS" AS ?rel_type)
+}

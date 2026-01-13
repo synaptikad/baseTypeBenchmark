@@ -39,6 +39,12 @@ categories:
   write_validation:
     description: "Lectures de validation des écritures QW (post-write checks)"
     queries: [Q35, Q36, Q37, Q38]
+  tenant_write:
+    description: "Mutations tenant/space (graph-native)"
+    queries: [QW9, QW10, QW11, QW12]
+  tenant_validation:
+    description: "Vérification post-write tenant"
+    queries: [Q39, Q40, Q41]
 
 # ===========================================================================
 # QUERIES
@@ -1834,6 +1840,268 @@ queries:
       M1: {status: NATIVE, note: "n.custom_tag IS NULL"}
       M2: {status: NATIVE, note: "n.custom_tag IS NULL"}
       O2: {status: NATIVE, note: "NOT EXISTS triple check"}
+
+  # -------------------------------------------------------------------------
+  # TENANT WRITE WORKLOADS (QW9-QW12) - Graph-Native
+  # -------------------------------------------------------------------------
+
+  QW9:
+    name: "Tenant Move-In"
+    category: tenant_write
+    validates: Q39  # Q39 verifies spaces, Q40 verifies meters
+    intention: |
+      Un nouveau locataire s'installe dans un espace. Créer la relation OCCUPIES
+      et optionnellement METERS_TENANT vers un sous-compteur.
+    use_case: "Signature de bail, emménagement"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID du locataire"
+        format:
+          sql: "%(tenant_id)s"
+          cypher: "$tenant_id"
+        example: "tenant_3"
+      - name: SPACE_ID
+        type: string
+        description: "ID de l'espace à occuper"
+        format:
+          sql: "%(space_id)s"
+          cypher: "$space_id"
+        example: "space_floor1_b2_5"
+      - name: METER_ID
+        type: string
+        description: "ID du sous-compteur à associer (optionnel)"
+        format:
+          sql: "%(meter_id)s"
+          cypher: "$meter_id"
+        example: "eq_submeter_tenant_3"
+        optional: true
+    relations: [OCCUPIES, METERS_TENANT]
+    write_mode: insert
+    result_schema:
+      columns:
+        - {name: tenant_id, type: string, description: "ID locataire"}
+        - {name: relations_created, type: integer, description: "Nombre de relations créées"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "INSERT INTO edges avec ON CONFLICT DO NOTHING"}
+      P2: {status: NATIVE, note: "INSERT INTO edges avec ON CONFLICT DO NOTHING"}
+      M1: {status: NATIVE, note: "MERGE (t)-[:OCCUPIES]->(s)"}
+      M2: {status: NATIVE, note: "MERGE (t)-[:OCCUPIES]->(s)"}
+      O2: {status: DEGRADED, note: "INSERT DATA triples"}
+
+  QW10:
+    name: "Tenant Move-Out"
+    category: tenant_write
+    validates: Q39  # Q39 verifies space was removed
+    intention: |
+      Un locataire quitte un espace. Supprimer la relation OCCUPIES.
+      Note: METERS_TENANT n'est PAS supprimé (historique facturation).
+    use_case: "Fin de bail, déménagement"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID du locataire"
+        format:
+          sql: "%(tenant_id)s"
+          cypher: "$tenant_id"
+        example: "tenant_3"
+      - name: SPACE_ID
+        type: string
+        description: "ID de l'espace libéré"
+        format:
+          sql: "%(space_id)s"
+          cypher: "$space_id"
+        example: "space_floor1_b2_5"
+    relations: [OCCUPIES]
+    write_mode: delete
+    result_schema:
+      columns:
+        - {name: tenant_id, type: string, description: "ID locataire"}
+        - {name: space_id, type: string, description: "ID espace libéré"}
+        - {name: relations_deleted, type: integer, description: "Nombre de relations supprimées"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "DELETE FROM edges WHERE ..."}
+      P2: {status: NATIVE, note: "DELETE FROM edges WHERE ..."}
+      M1: {status: NATIVE, note: "MATCH ... DELETE r"}
+      M2: {status: NATIVE, note: "MATCH ... DELETE r"}
+      O2: {status: DEGRADED, note: "DELETE DATA triple"}
+
+  QW11:
+    name: "Space Reassignment"
+    category: tenant_write
+    validates: Q39  # Q39 x2 verifies old lost space, new gained space
+    intention: |
+      Réaffecter un espace d'un locataire A vers un locataire B.
+      Opération atomique: supprimer OCCUPIES de A, créer OCCUPIES vers B.
+    use_case: "Changement d'affectation, restructuration des baux"
+    parameters:
+      - name: SPACE_ID
+        type: string
+        description: "ID de l'espace à réaffecter"
+        format:
+          sql: "%(space_id)s"
+          cypher: "$space_id"
+        example: "space_floor1_b2_5"
+      - name: OLD_TENANT_ID
+        type: string
+        description: "ID du locataire actuel"
+        format:
+          sql: "%(old_tenant_id)s"
+          cypher: "$old_tenant_id"
+        example: "tenant_2"
+      - name: NEW_TENANT_ID
+        type: string
+        description: "ID du nouveau locataire"
+        format:
+          sql: "%(new_tenant_id)s"
+          cypher: "$new_tenant_id"
+        example: "tenant_3"
+    relations: [OCCUPIES]
+    write_mode: update
+    result_schema:
+      columns:
+        - {name: space_id, type: string, description: "ID espace réaffecté"}
+        - {name: old_tenant_id, type: string, description: "Ancien locataire"}
+        - {name: new_tenant_id, type: string, description: "Nouveau locataire"}
+        - {name: reassigned, type: boolean, description: "True si réaffectation réussie"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "DELETE + INSERT atomique via CTE"}
+      P2: {status: NATIVE, note: "DELETE + INSERT atomique via CTE"}
+      M1: {status: NATIVE, note: "DELETE r WITH MERGE pattern"}
+      M2: {status: NATIVE, note: "DELETE r WITH MERGE pattern"}
+      O2: {status: DEGRADED, note: "DELETE + INSERT DATA (non atomique)"}
+
+  QW12:
+    name: "Tenant Merge"
+    category: tenant_write
+    validates: Q41  # Q41 verifies all relations transferred
+    intention: |
+      Fusionner deux locataires. Transférer toutes les relations OCCUPIES et
+      METERS_TENANT du source vers le target. Le node source reste (historique).
+    use_case: "Rachat d'entreprise, consolidation entités juridiques"
+    parameters:
+      - name: SOURCE_TENANT_ID
+        type: string
+        description: "ID du locataire à absorber"
+        format:
+          sql: "%(source_tenant_id)s"
+          cypher: "$source_tenant_id"
+        example: "tenant_2"
+      - name: TARGET_TENANT_ID
+        type: string
+        description: "ID du locataire qui absorbe"
+        format:
+          sql: "%(target_tenant_id)s"
+          cypher: "$target_tenant_id"
+        example: "tenant_1"
+    relations: [OCCUPIES, METERS_TENANT]
+    write_mode: update
+    result_schema:
+      columns:
+        - {name: source_tenant_id, type: string, description: "Locataire source (absorbé)"}
+        - {name: target_tenant_id, type: string, description: "Locataire target (absorbant)"}
+        - {name: spaces_transferred, type: integer, description: "Nombre d'espaces transférés"}
+        - {name: meters_transferred, type: integer, description: "Nombre de compteurs transférés"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "UPDATE edges SET source_id/target_id"}
+      P2: {status: NATIVE, note: "UPDATE edges SET source_id/target_id"}
+      M1: {status: NATIVE, note: "MATCH + DELETE + MERGE pattern"}
+      M2: {status: NATIVE, note: "MATCH + DELETE + MERGE pattern"}
+      O2: {status: DEGRADED, note: "Multiple DELETE + INSERT DATA"}
+
+  # -------------------------------------------------------------------------
+  # TENANT VALIDATION QUERIES (Q39-Q41) - Post-Write Checks
+  # -------------------------------------------------------------------------
+
+  Q39:
+    name: "Verify Tenant Spaces"
+    category: tenant_validation
+    validates_write: [QW9, QW10, QW11]
+    intention: |
+      Lister tous les espaces occupés par un locataire donné.
+      Utilisé pour valider QW9 (move-in), QW10 (move-out), QW11 (reassignment).
+    use_case: "Validation occupation, audit locataire"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID du locataire"
+        format:
+          sql: "%(tenant_id)s"
+          cypher: "$tenant_id"
+        example: "tenant_3"
+    relations: [OCCUPIES]
+    result_schema:
+      columns:
+        - {name: space_id, type: string, description: "ID espace occupé"}
+        - {name: space_name, type: string, description: "Nom de l'espace"}
+        - {name: space_type, type: string, description: "Type de l'espace"}
+      order_by: [space_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "SELECT edges JOIN nodes"}
+      P2: {status: NATIVE, note: "SELECT edges JOIN nodes"}
+      M1: {status: NATIVE, note: "MATCH (t)-[:OCCUPIES]->(s)"}
+      M2: {status: NATIVE, note: "MATCH (t)-[:OCCUPIES]->(s)"}
+      O2: {status: NATIVE, note: "SELECT pattern SPARQL"}
+
+  Q40:
+    name: "Verify Tenant Meters"
+    category: tenant_validation
+    validates_write: QW9
+    intention: |
+      Lister tous les compteurs associés à un locataire (via METERS_TENANT).
+      Utilisé pour valider QW9 avec meter_id optionnel.
+    use_case: "Validation compteurs, audit facturation"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID du locataire"
+        format:
+          sql: "%(tenant_id)s"
+          cypher: "$tenant_id"
+        example: "tenant_3"
+    relations: [METERS_TENANT]
+    result_schema:
+      columns:
+        - {name: meter_id, type: string, description: "ID compteur associé"}
+        - {name: meter_name, type: string, description: "Nom du compteur"}
+        - {name: meter_type, type: string, description: "Type de compteur"}
+      order_by: [meter_id]
+    paradigm_status:
+      P1: {status: NATIVE, note: "SELECT edges JOIN nodes"}
+      P2: {status: NATIVE, note: "SELECT edges JOIN nodes"}
+      M1: {status: NATIVE, note: "MATCH (m)-[:METERS_TENANT]->(t)"}
+      M2: {status: NATIVE, note: "MATCH (m)-[:METERS_TENANT]->(t)"}
+      O2: {status: NATIVE, note: "SELECT pattern SPARQL"}
+
+  Q41:
+    name: "Verify Tenant Consolidation"
+    category: tenant_validation
+    validates_write: QW12
+    intention: |
+      Après un merge, vérifier le nombre total de relations du tenant target.
+      Retourne les counts OCCUPIES et METERS_TENANT.
+    use_case: "Validation merge, audit consolidation"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        description: "ID du tenant (target après merge)"
+        format:
+          sql: "%(tenant_id)s"
+          cypher: "$tenant_id"
+        example: "tenant_1"
+    relations: [OCCUPIES, METERS_TENANT]
+    result_schema:
+      columns:
+        - {name: tenant_id, type: string, description: "ID locataire"}
+        - {name: occupied_spaces, type: integer, description: "Nombre d'espaces occupés"}
+        - {name: associated_meters, type: integer, description: "Nombre de compteurs associés"}
+      order_by: []
+    paradigm_status:
+      P1: {status: NATIVE, note: "COUNT FILTER sur edges"}
+      P2: {status: NATIVE, note: "COUNT FILTER sur edges"}
+      M1: {status: NATIVE, note: "count(DISTINCT) avec OPTIONAL MATCH"}
+      M2: {status: NATIVE, note: "count(DISTINCT) avec OPTIONAL MATCH"}
+      O2: {status: NATIVE, note: "COUNT SPARQL"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

@@ -25,6 +25,7 @@ class SampledParams:
 
     # Tenant
     tenant_id: Optional[str] = None
+    tenant_id_alt: Optional[str] = None  # Second tenant for QW11/QW12
 
     # Point
     point_id: Optional[str] = None
@@ -88,8 +89,9 @@ class ParamSampler:
         params.meter_id = self._sample_equipment_by_type("MainMeter", "SubMeter", "Meter")
         params.ups_id = self._sample_equipment_by_type("UPS")
 
-        # Tenant
+        # Tenant (sample two different tenants for QW11/QW12)
         params.tenant_id = self._sample_id("tenant")
+        params.tenant_id_alt = self._sample_different_id("tenant", params.tenant_id)
 
         # Point
         params.point_id = self._sample_id("point")
@@ -116,6 +118,23 @@ class ParamSampler:
         if not ids:
             return None
         return self.rng.choice(ids)
+
+    def _sample_different_id(self, node_type: str, exclude_id: Optional[str]) -> Optional[str]:
+        """Échantillonne un ID différent de exclude_id."""
+        cache_key = f"ids_{node_type}"
+
+        if cache_key not in self._cache:
+            self._cache[cache_key] = self._fetch_ids(node_type)
+
+        ids = self._cache[cache_key]
+        if not ids:
+            return None
+
+        # Filter out the excluded ID
+        remaining = [id for id in ids if id != exclude_id]
+        if not remaining:
+            return None
+        return self.rng.choice(remaining)
 
     def _sample_equipment_by_type(self, *types: str) -> Optional[str]:
         """Échantillonne un ID d'équipement par type."""
@@ -426,6 +445,24 @@ def get_params_for_query(
             "DATE_START": sampled.date_start,
             "DATE_END": sampled.date_end,
         },
+        # Q35-Q38: Write validation queries (QW1-QW3, QW8)
+        "Q35": {
+            "POINT_ID": sampled.point_id,
+            "REFERENCE_DATE": sampled.reference_date,
+        },
+        "Q36": {"NODE_ID": sampled.equipment_id},
+        "Q37": {
+            "SOURCE_ID": sampled.meter_id,
+            "TARGET_ID": sampled.equipment_id,
+        },
+        "Q38": {
+            "NODE_ID": sampled.equipment_id,
+            "KEY_TO_REMOVE": "legacy_protocol_id",
+        },
+        # Q39-Q41: Tenant validation queries
+        "Q39": {"TENANT_ID": sampled.tenant_id},
+        "Q40": {"TENANT_ID": sampled.tenant_id},
+        "Q41": {"TENANT_ID": sampled.tenant_id},
     }
 
     return query_params.get(query_id, {})
@@ -522,6 +559,36 @@ def _get_qw_params(
         return {
             "NODE_ID": file_params.get("qw8_node_id", sampled.equipment_id),
             "KEY_TO_REMOVE": file_params.get("qw8_key_to_remove", "legacy_protocol_id"),
+        }
+
+    # QW9: Tenant Move-In
+    if query_id == "QW9":
+        return {
+            "TENANT_ID": file_params.get("tenant_id", sampled.tenant_id),
+            "SPACE_ID": file_params.get("space_id", sampled.space_id),
+            "METER_ID": file_params.get("meter_id", sampled.meter_id),
+        }
+
+    # QW10: Tenant Move-Out
+    if query_id == "QW10":
+        return {
+            "TENANT_ID": file_params.get("tenant_id", sampled.tenant_id),
+            "SPACE_ID": file_params.get("space_id", sampled.space_id),
+        }
+
+    # QW11: Space Reassignment
+    if query_id == "QW11":
+        return {
+            "SPACE_ID": file_params.get("space_id", sampled.space_id),
+            "OLD_TENANT_ID": file_params.get("old_tenant_id", sampled.tenant_id),
+            "NEW_TENANT_ID": file_params.get("new_tenant_id", sampled.tenant_id_alt),
+        }
+
+    # QW12: Tenant Merge
+    if query_id == "QW12":
+        return {
+            "SOURCE_TENANT_ID": file_params.get("source_tenant_id", sampled.tenant_id),
+            "TARGET_TENANT_ID": file_params.get("target_tenant_id", sampled.tenant_id_alt),
         }
 
     # Fallback: pas de params

@@ -174,6 +174,10 @@ class ExpectedAnswerGenerator:
             ("Q36", self._gen_q36),
             ("Q37", self._gen_q37),
             ("Q38", self._gen_q38),
+            # Tenant validation queries (Q39-Q41) - validate QW9-QW12
+            ("Q39", self._gen_q39),
+            ("Q40", self._gen_q40),
+            ("Q41", self._gen_q41),
         ]
 
         for query_id, method in query_methods:
@@ -2220,6 +2224,121 @@ class ExpectedAnswerGenerator:
             query_id="Q38",
             parameters={"node_id": node_id},
             answer_type="document",
+            semantic_content=result,
+            row_count=1,
+            content_hash=_compute_hash(result),
+            full_rows=[result],
+        )
+
+    # =========================================================================
+    # TENANT VALIDATION QUERIES (Q39-Q41) - Validate QW9-QW12 tenant operations
+    # =========================================================================
+
+    def _gen_q39(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q39: Verify Tenant Spaces - validates QW9/QW10/QW11 writes.
+
+        Lists all spaces occupied by a tenant via OCCUPIES relationship.
+        """
+        tenant_id = params.get("tenant_id")
+        if not tenant_id:
+            return None
+
+        # Find all spaces this tenant occupies
+        occupied_spaces = set()
+        full_rows = []
+
+        for edge in self.edges_by_source.get(tenant_id, []):
+            if edge.rel_type == "OCCUPIES":
+                space_id = edge.target_id
+                occupied_spaces.add(space_id)
+                space = self.nodes_by_id.get(space_id)
+                full_rows.append({
+                    "space_id": space_id,
+                    "space_name": space.name if space else "",
+                    "space_type": space.type if space else "",
+                })
+
+        full_rows.sort(key=lambda x: x["space_id"])
+
+        return ExpectedAnswer(
+            query_id="Q39",
+            parameters={"tenant_id": tenant_id},
+            answer_type="set",
+            semantic_content=occupied_spaces,
+            row_count=len(occupied_spaces),
+            content_hash=_compute_hash(occupied_spaces),
+            full_rows=full_rows,
+        )
+
+    def _gen_q40(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q40: Verify Tenant Meters - validates QW9 meter association.
+
+        Lists all meters associated with a tenant via METERS_TENANT relationship.
+        Note: METERS_TENANT goes (meter)-[:METERS_TENANT]->(tenant)
+        """
+        tenant_id = params.get("tenant_id")
+        if not tenant_id:
+            return None
+
+        # Find all meters pointing to this tenant
+        associated_meters = set()
+        full_rows = []
+
+        for edge in self.edges_by_target.get(tenant_id, []):
+            if edge.rel_type == "METERS_TENANT":
+                meter_id = edge.source_id
+                associated_meters.add(meter_id)
+                meter = self.nodes_by_id.get(meter_id)
+                full_rows.append({
+                    "meter_id": meter_id,
+                    "meter_name": meter.name if meter else "",
+                    "meter_type": meter.type if meter else "",
+                })
+
+        full_rows.sort(key=lambda x: x["meter_id"])
+
+        return ExpectedAnswer(
+            query_id="Q40",
+            parameters={"tenant_id": tenant_id},
+            answer_type="set",
+            semantic_content=associated_meters,
+            row_count=len(associated_meters),
+            content_hash=_compute_hash(associated_meters),
+            full_rows=full_rows,
+        )
+
+    def _gen_q41(self, params: dict[str, Any]) -> ExpectedAnswer:
+        """Q41: Verify Tenant Consolidation - validates QW12 merge.
+
+        Returns counts of OCCUPIES and METERS_TENANT relations for a tenant.
+        Used to verify that all relations were transferred during merge.
+        """
+        tenant_id = params.get("tenant_id")
+        if not tenant_id:
+            return None
+
+        # Count OCCUPIES relations (tenant is source)
+        occupied_count = 0
+        for edge in self.edges_by_source.get(tenant_id, []):
+            if edge.rel_type == "OCCUPIES":
+                occupied_count += 1
+
+        # Count METERS_TENANT relations (tenant is target)
+        metered_count = 0
+        for edge in self.edges_by_target.get(tenant_id, []):
+            if edge.rel_type == "METERS_TENANT":
+                metered_count += 1
+
+        result = {
+            "tenant_id": tenant_id,
+            "occupied_spaces": occupied_count,
+            "associated_meters": metered_count,
+        }
+
+        return ExpectedAnswer(
+            query_id="Q41",
+            parameters={"tenant_id": tenant_id},
+            answer_type="aggregate",
             semantic_content=result,
             row_count=1,
             content_hash=_compute_hash(result),

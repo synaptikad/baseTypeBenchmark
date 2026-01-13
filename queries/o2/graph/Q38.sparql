@@ -1,0 +1,14 @@
+# Q38: Validate Property Removal (QW8)
+# Status: NATIVE pour O2 (NOT EXISTS check)
+# Paramètres: ?nodeId
+# Semantic: Vérifie que la propriété a été supprimée
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?node_id ?node_name ?tag_removed
+WHERE {
+    ?node btb:id ?nodeId ;
+          btb:id ?node_id ;
+          btb:name ?node_name .
+    BIND(NOT EXISTS { ?node btb:custom_tag ?val } AS ?tag_removed)
+}

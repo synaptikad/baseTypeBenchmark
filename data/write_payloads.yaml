@@ -147,6 +147,79 @@ qw8_payloads:
         other_keys_preserved: true
 
 # =============================================================================
+# QW9: Tenant Move-In
+# =============================================================================
+qw9_payloads:
+  - id: "movein_001"
+    tenant_id: "tenant_3"
+    space_id: "space_floor1_b2_5"
+    meter_id: "eq_submeter_tenant_3"
+    validation:
+      query: "Q39"
+      expected:
+        space_in_tenant_spaces: "space_floor1_b2_5"
+      query_meter: "Q40"
+      expected_meter:
+        meter_in_tenant_meters: "eq_submeter_tenant_3"
+
+  - id: "movein_002"
+    tenant_id: "tenant_4"
+    space_id: "space_floor2_b3_10"
+    meter_id: null  # No meter association
+    validation:
+      query: "Q39"
+      expected:
+        space_in_tenant_spaces: "space_floor2_b3_10"
+
+# =============================================================================
+# QW10: Tenant Move-Out
+# =============================================================================
+qw10_payloads:
+  - id: "moveout_001"
+    tenant_id: "tenant_3"
+    space_id: "space_floor1_b2_5"
+    validation:
+      query: "Q39"
+      expected:
+        space_not_in_tenant_spaces: "space_floor1_b2_5"
+      # Note: METERS_TENANT should remain (per spec)
+      query_meter: "Q40"
+      expected_meter:
+        meter_still_associated: true
+
+# =============================================================================
+# QW11: Space Reassignment
+# =============================================================================
+qw11_payloads:
+  - id: "reassign_001"
+    space_id: "space_floor1_b2_5"
+    old_tenant_id: "tenant_2"
+    new_tenant_id: "tenant_3"
+    validation:
+      query: "Q39"
+      expected_old:
+        space_not_in_tenant_spaces: "space_floor1_b2_5"
+      expected_new:
+        space_in_tenant_spaces: "space_floor1_b2_5"
+
+# =============================================================================
+# QW12: Tenant Merge
+# =============================================================================
+qw12_payloads:
+  - id: "merge_001"
+    source_tenant_id: "tenant_2"
+    target_tenant_id: "tenant_1"
+    validation:
+      query: "Q41"
+      expected:
+        # After merge, target should have sum of relations
+        target_has_all_relations: true
+      query_source: "Q41"
+      expected_source:
+        # Source should have 0 relations
+        source_relations_count: 0
+
+# =============================================================================
 # COMBINED SCENARIO: Full Equipment Lifecycle
 # =============================================================================
 lifecycle_scenario:

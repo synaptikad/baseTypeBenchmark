@@ -1,0 +1,16 @@
+# Q36: Validate Metadata Tag Update (QW2)
+# Status: DEGRADED pour O2 (property triples)
+# Paramètres: ?nodeId
+# Semantic: Vérifie que la propriété calibration_status a la valeur attendue
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?node_id ?node_name ?custom_tag ?node_type
+WHERE {
+    ?node btb:id ?nodeId ;
+          btb:id ?node_id ;
+          btb:name ?node_name .
+    OPTIONAL { ?node btb:calibration_status ?custom_tag }
+    OPTIONAL { ?node a ?type . BIND(STRAFTER(STR(?type), "#") AS ?node_type) }
+}
+LIMIT 1
