@@ -221,6 +221,12 @@ class OxigraphLoader(BaseLoader):
         start_time = time.time()
         result = LoadResult(engine="O2")
 
+        # Wait for Oxigraph HTTP endpoint to be ready before loading
+        # This prevents silent failures when container is still starting
+        if not self.check_connection():
+            result.add_error("Oxigraph not ready after 30 connection attempts")
+            return result
+
         try:
             # Phase 1: Schema (ontology)
             self._emit_progress(progress_callback, LoadPhase.SCHEMA, 0, 1)

@@ -414,19 +414,24 @@ class BenchmarkOrchestrator:
         current_paradigm: str,
         all_paradigms: list[str]
     ) -> bool:
-        """Check if containers should stay running for next paradigm.
+        """Check if TimescaleDB container should stay running for later paradigms.
 
         Returns True if:
         - Current paradigm uses TimescaleDB (P1, P2, M2, O2)
-        - Next paradigm in queue also uses TimescaleDB
+        - ANY remaining paradigm in queue also uses TimescaleDB
         - This enables Option A (shared TimescaleDB across paradigms)
+
+        Note: We check ALL remaining paradigms, not just the next one.
+        This is critical for sequences like P1→P2→M1→M2→O2 where M1 doesn't
+        use TimescaleDB but M2 and O2 do. We must keep TimescaleDB running
+        across the M1 gap to preserve the shared timeseries data.
 
         Args:
             current_paradigm: Current paradigm that just finished
             all_paradigms: Full list of paradigms in execution order
 
         Returns:
-            True if containers should stay running, False otherwise
+            True if TimescaleDB container should stay running, False otherwise
         """
         # TimescaleDB paradigms that can share state via Option A
         # WITH schema isolation: P1, P2, M2, O2 can all share ts.timeseries
@@ -446,9 +451,9 @@ class BenchmarkOrchestrator:
         if current_idx >= len(all_paradigms) - 1:
             return False  # Last paradigm, safe to stop
 
-        # Check if next paradigm also uses TimescaleDB
-        next_paradigm = all_paradigms[current_idx + 1]
-        return next_paradigm in timescale_paradigms
+        # FIX: Check if ANY remaining paradigm uses TimescaleDB (not just next)
+        remaining_paradigms = all_paradigms[current_idx + 1:]
+        return any(p in timescale_paradigms for p in remaining_paradigms)
 
     def _get_extractor(self, paradigm: str, output_dir: Path, input_dir: Path):
         """Get extractor instance for a paradigm.
@@ -637,10 +642,10 @@ class BenchmarkOrchestrator:
 
     def _get_all_queries(self) -> list[str]:
         """Get all available query IDs."""
-        # Q1-Q34: read queries
-        # QW1-QW8: write queries
-        read_queries = [f"Q{i}" for i in range(1, 35)]
-        write_queries = [f"QW{i}" for i in range(1, 9)]
+        # Q1-Q41: read queries (includes Q39-Q41 for QW9-QW12 validation)
+        # QW1-QW12: write queries
+        read_queries = [f"Q{i}" for i in range(1, 42)]
+        write_queries = [f"QW{i}" for i in range(1, 13)]
         return read_queries + write_queries
 
     def _print_summary(self, results: BenchmarkResults) -> None:

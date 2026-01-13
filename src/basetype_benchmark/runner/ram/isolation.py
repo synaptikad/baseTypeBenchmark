@@ -329,18 +329,35 @@ class IsolationManager:
             )
 
     def _compose_down(self, services: list[str]) -> None:
-        """Stop services via docker compose."""
+        """Stop specific services via docker compose.
+
+        Note: Uses 'docker compose stop' instead of 'down' to preserve other
+        running services. 'down' would stop ALL services regardless of the
+        services parameter.
+        """
+        if not services:
+            return
+
         cmd = [
             "docker", "compose",
             "-f", str(self.compose_file),
-            "down", "--remove-orphans",  # Removed -v flag to preserve volumes (Option A)
-        ]
+            "stop",
+        ] + services
 
-        subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            # Log error but don't raise - stopping is best-effort
+            import sys
+            print(f"Warning: docker compose stop failed: {result.stderr}", file=sys.stderr)
 
     def _clean_volumes(self, container_set: ContainerSet) -> None:
-        """Remove volumes for containers."""
-        # docker-compose down -v handles this
+        """Remove volumes for containers.
+
+        Note: For Option A (shared TimescaleDB), we don't actually clean volumes
+        to preserve timeseries data across paradigms. The timeseries is loaded
+        once and shared between P1, P2, M2, and O2.
+        """
+        # Option A: don't clean volumes to preserve shared timeseries
         pass
 
     def _compute_limit_split(
