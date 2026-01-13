@@ -604,7 +604,25 @@ class RAMGradientExecutor:
                 stats[query_id] = query_stats
                 continue
 
-            query_files = self._load_query_files(query_id)
+            try:
+                query_files = self._load_query_files(query_id)
+            except GradientError as e:
+                # Query file not found - skip gracefully
+                if self.verbose:
+                    self._console.print(f"[yellow]SKIPPED (no query file)[/yellow]")
+                query_stats.runs.append(QueryRunResult(
+                    query_id=query_id,
+                    variant_id=0,
+                    run_id=0,
+                    result=RunResult(
+                        rows=[],
+                        duration_ms=0,
+                        status=RunStatus.SKIPPED,
+                        error_message=str(e),
+                    ),
+                ))
+                stats[query_id] = query_stats
+                continue
 
             for variant_id in range(self.n_variants):
                 params = self._get_variant_params(query_id, variant_id)
@@ -930,22 +948,49 @@ class RAMGradientExecutor:
                     "ts_query": strip_query_comments(ts_text, "sql"),
                 }
 
-            elif category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE):
-                # Write workloads: look in write/ subdirectory
+            elif category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE,
+                              QueryCategory.TENANT_WRITE):
+                # Write workloads: look in write/ subdirectory first, then graph/
                 # For hybrid paradigms, write queries may be either graph (cypher/sparql) or SQL
                 write_dir = queries_dir / self.paradigm.lower() / "write"
-                
-                # Try graph extension first (cypher/sparql)
+                graph_dir = queries_dir / self.paradigm.lower() / "graph"
+
+                # Try write/ with graph extension first (cypher/sparql)
                 query_file = self._find_query_file(write_dir, query_id, ext)
                 actual_ext = ext
-                
-                # If not found, try SQL (e.g., QW1 writes to TimescaleDB)
+
+                # If not found in write/, try SQL in write/ (e.g., QW1 writes to TimescaleDB)
                 if query_file is None:
                     query_file = self._find_query_file(write_dir, query_id, "sql")
                     actual_ext = "sql"
 
+                # If not found in write/, try graph/ (e.g., QW9-QW12 tenant writes)
                 if query_file is None:
-                    raise GradientError(f"Query file not found for {query_id} in {self.paradigm}/write")
+                    query_file = self._find_query_file(graph_dir, query_id, ext)
+                    actual_ext = ext
+
+                if query_file is None:
+                    raise GradientError(f"Query file not found for {query_id} in {self.paradigm}/write or graph")
+
+                text = query_file.read_text(encoding="utf-8")
+                cleaned = strip_query_comments(text, actual_ext)
+                return {"query": cleaned}
+
+            elif category in (QueryCategory.WRITE_VALIDATION, QueryCategory.TENANT_VALIDATION):
+                # Validation queries for writes: may be in ts/ (Q35) or graph/ (Q36-Q41)
+                # Try ts/ first (SQL), then graph/
+                ts_dir = queries_dir / self.paradigm.lower() / "ts"
+                graph_dir = queries_dir / self.paradigm.lower() / "graph"
+
+                query_file = self._find_query_file(ts_dir, query_id, "sql")
+                actual_ext = "sql"
+
+                if query_file is None:
+                    query_file = self._find_query_file(graph_dir, query_id, ext)
+                    actual_ext = ext
+
+                if query_file is None:
+                    raise GradientError(f"Query file not found for {query_id} in {self.paradigm}/ts or graph")
 
                 text = query_file.read_text(encoding="utf-8")
                 cleaned = strip_query_comments(text, actual_ext)
