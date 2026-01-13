@@ -5,6 +5,7 @@ Simple, iterative workflow following the natural benchmark process.
 """
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import shutil
@@ -26,6 +27,31 @@ except ImportError:
     from rich.table import Table
 
 console = Console()
+
+
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        prog="python run.py",
+        description="BaseType Benchmark V3 - Interactive Runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python run.py              Launch interactive menu
+  python run.py --help       Show this help
+
+For scripting, use btb-runner directly:
+  btb-runner benchmark -s data/generated/small-1w -p P1,M1 --ram 8
+  btb-runner validate results.json --cross-matrix
+  btb-runner run-query Q7 -p M1
+
+See 'btb-runner --help' for all CLI commands.
+"""
+    )
+    parser.add_argument("--version", "-V", action="store_true",
+                        help="Show version and exit")
+    return parser.parse_args()
+
 
 # Paths
 PROJECT_DIR = Path(__file__).parent
@@ -103,6 +129,60 @@ def dir_size(path: Path) -> str:
     return f"{total:.1f} TB"
 
 
+def show_help():
+    """Display detailed help using Rich formatting."""
+    header("Help")
+
+    console.print(Panel.fit(
+        "[bold blue]BaseType Benchmark V3[/bold blue]\n"
+        "[dim]Interactive Runner - Menu-driven benchmark interface[/dim]",
+        border_style="blue"
+    ))
+    console.print()
+
+    # Interactive menus table
+    table = Table(title="Interactive Menus", show_header=True)
+    table.add_column("Key", style="cyan", width=4)
+    table.add_column("Menu", width=12)
+    table.add_column("Actions")
+
+    table.add_row("1", "Dataset", "Generate synthetic data, Delete datasets")
+    table.add_row("2", "Benchmark", "Run benchmark wizard, Debug query, Validate matrix")
+    table.add_row("3", "Results", "Validate cross-paradigm, Expected answers, Reports")
+    table.add_row("4", "System", "Docker containers, Logs, Schema status, Info")
+    table.add_row("h", "Help", "Show this help")
+    table.add_row("q", "Quit", "Exit the program")
+    console.print(table)
+    console.print()
+
+    # btb-runner equivalents
+    table2 = Table(title="Equivalent btb-runner Commands (for scripting)", show_header=True)
+    table2.add_column("Action", width=22)
+    table2.add_column("Command")
+
+    table2.add_row("Generate dataset", "btb-runner generate --profile small --duration 1w")
+    table2.add_row("Run benchmark", "btb-runner benchmark -s <source> -p P1,M1 --ram 8,16,32")
+    table2.add_row("Debug query", "btb-runner run-query Q7 -p M1")
+    table2.add_row("Validate results", "btb-runner validate results.json --cross-matrix")
+    table2.add_row("Validate expected", "btb-runner validate-expected --archive <run> --dataset <ds>")
+    table2.add_row("Check system", "btb-runner status")
+    table2.add_row("List queries", "btb-runner dry-run --matrix")
+    table2.add_row("Query info", "btb-runner info Q7")
+    console.print(table2)
+    console.print()
+
+    # Paradigms info
+    console.print("[bold]Paradigms:[/bold]")
+    console.print("  P1 = PostgreSQL relational")
+    console.print("  P2 = PostgreSQL JSON/EAV")
+    console.print("  M1 = Memgraph graph-only")
+    console.print("  M2 = Memgraph + TimescaleDB hybrid")
+    console.print("  O2 = Oxigraph RDF + TimescaleDB hybrid")
+    console.print()
+
+    console.print("[dim]For full CLI documentation: btb-runner --help[/dim]")
+
+
 def select_from_list(items: list, prompt: str = "Select") -> int | None:
     """Display numbered list, return index (0-based) or None."""
     if not items:
@@ -136,10 +216,11 @@ def main_menu() -> str:
     console.print("[cyan]3[/cyan]. Results     [dim]View & export[/dim]")
     console.print("[cyan]4[/cyan]. System      [dim]Docker, info[/dim]")
     console.print()
+    console.print("[cyan]h[/cyan]. Help")
     console.print("[cyan]q[/cyan]. Quit")
     console.print()
 
-    return Prompt.ask("", choices=["1", "2", "3", "4", "q"], default="1", show_choices=False)
+    return Prompt.ask("", choices=["1", "2", "3", "4", "h", "q"], default="1", show_choices=False)
 
 
 # =============================================================================
@@ -1452,6 +1533,11 @@ def show_system_info():
 # =============================================================================
 
 def main():
+    args = parse_args()
+    if args.version:
+        console.print("BaseType Benchmark V3 - 2025.1.0")
+        return
+
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1461,6 +1547,9 @@ def main():
         if choice == "q":
             console.print("\n[dim]Bye![/dim]")
             break
+        elif choice == "h":
+            show_help()
+            wait()
         elif choice == "1":
             menu_dataset()
         elif choice == "2":
