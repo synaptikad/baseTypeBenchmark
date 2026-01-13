@@ -235,16 +235,29 @@ class OxigraphLoader(BaseLoader):
                 self._load_ontology(ontology_file)
             self._emit_progress(progress_callback, LoadPhase.SCHEMA, 1, 1)
 
-            # Phase 2+3: Nodes + Edges (combined in data.nt)
-            nt_file = data_dir / "data.nt"
-            if nt_file.exists():
-                triples_loaded = self._load_ntriples(
-                    nt_file, progress_callback
-                )
-                # N-Triples combines nodes and edges
+            # Phase 2+3: Nodes + Edges
+            # Support both combined (data.nt) and separate (nodes.nt + edges.nt) files
+            combined_nt = data_dir / "data.nt"
+            nodes_nt = data_dir / "nodes.nt"
+            edges_nt = data_dir / "edges.nt"
+
+            triples_loaded = 0
+            if combined_nt.exists():
+                # Combined file format
+                triples_loaded = self._load_ntriples(combined_nt, progress_callback)
                 # Estimate: ~60% nodes, ~40% edges
                 result.nodes_loaded = int(triples_loaded * 0.6)
                 result.edges_loaded = int(triples_loaded * 0.4)
+            else:
+                # Separate files format (nodes.nt + edges.nt)
+                if nodes_nt.exists():
+                    nodes_triples = self._load_ntriples(nodes_nt, progress_callback)
+                    result.nodes_loaded = nodes_triples
+                    triples_loaded += nodes_triples
+                if edges_nt.exists():
+                    edges_triples = self._load_ntriples(edges_nt, progress_callback)
+                    result.edges_loaded = edges_triples
+                    triples_loaded += edges_triples
 
             # Phase 4: Timeseries (vers TimescaleDB)
             ts_file = data_dir / "timeseries.csv"

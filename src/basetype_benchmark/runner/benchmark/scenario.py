@@ -641,12 +641,38 @@ class BenchmarkOrchestrator:
         return None
 
     def _get_all_queries(self) -> list[str]:
-        """Get all available query IDs."""
-        # Q1-Q41: read queries (includes Q39-Q41 for QW9-QW12 validation)
-        # QW1-QW12: write queries
-        read_queries = [f"Q{i}" for i in range(1, 42)]
-        write_queries = [f"QW{i}" for i in range(1, 13)]
-        return read_queries + write_queries
+        """Get all available query IDs in correct execution order.
+
+        Order matters! Write queries (QW) must execute BEFORE their
+        corresponding validation queries (Q35-Q41).
+
+        Execution order:
+        - Q1-Q23: Independent read queries
+        - Q27-Q34: Independent read queries
+        - QW1→Q35, QW2→Q36, ...: Write-then-validate pairs
+        - QW9-QW12→Q39-Q41: Tenant write queries and validation
+        """
+        # Independent read queries (no dependencies)
+        independent_reads = (
+            [f"Q{i}" for i in range(1, 24)] +   # Q1-Q23
+            [f"Q{i}" for i in range(27, 35)]    # Q27-Q34
+        )
+
+        # Write-then-validate pairs (order critical!)
+        write_validation_pairs = (
+            ["QW1", "Q35"] +                     # QW1 → Q35 (timeseries append)
+            ["QW2", "Q36"] +                     # QW2 → Q36 (metadata tag)
+            ["QW3", "Q37"] +                     # QW3 → Q37 (relation mutation)
+            ["QW4", "Q24"] +                     # QW4 → Q24 (maintenance event)
+            ["QW5", "QW6", "Q25"] +              # QW5, QW6 → Q25 (calibration/firmware)
+            ["QW7", "Q26"] +                     # QW7 → Q26 (capability)
+            ["QW8", "Q38"] +                     # QW8 → Q38 (remove property)
+            ["QW9", "Q39"] +                     # QW9 → Q39 (tenant move-in)
+            ["QW10", "Q40"] +                    # QW10 → Q40 (tenant move-out)
+            ["QW11", "QW12", "Q41"]              # QW11, QW12 → Q41 (space reassign/merge)
+        )
+
+        return independent_reads + write_validation_pairs
 
     def _print_summary(self, results: BenchmarkResults) -> None:
         """Print benchmark summary."""

@@ -2073,6 +2073,35 @@ class DatasetGenerator:
             params["qw8_node_id"] = params["equipment_id"]
             params["qw8_key_to_remove"] = "legacy_protocol_id"
 
+        # =====================================================================
+        # TENANT WRITE QUERY PARAMETERS (QW9-QW12)
+        # =====================================================================
+
+        # Get all tenants for QW9-QW12
+        tenant_ids = [n.id for n in self.nodes if n.type == "Tenant"]
+        if len(tenant_ids) >= 2:
+            # Use first two different tenants
+            params["tenant_id_alt"] = tenant_ids[1]  # Second tenant for QW11/QW12
+            params["old_tenant_id"] = tenant_ids[0]
+            params["new_tenant_id"] = tenant_ids[1]
+            params["source_tenant_id"] = tenant_ids[0]
+            params["target_tenant_id"] = tenant_ids[1]
+        elif len(tenant_ids) == 1:
+            # Fallback: use same tenant (will still test syntax)
+            params["tenant_id_alt"] = tenant_ids[0]
+            params["old_tenant_id"] = tenant_ids[0]
+            params["new_tenant_id"] = tenant_ids[0]
+            params["source_tenant_id"] = tenant_ids[0]
+            params["target_tenant_id"] = tenant_ids[0]
+
+        # Space for tenant operations (QW9, QW10, QW11)
+        # Find a space occupied by the first tenant
+        if params.get("tenant_id"):
+            for edge in self.edges:
+                if edge.rel_type == "OCCUPIES" and edge.source_id == params["tenant_id"]:
+                    params["qw_space_id"] = edge.target_id
+                    break
+
         return params
 
     def _write_query_params(self, output_dir: Path):
