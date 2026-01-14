@@ -863,7 +863,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif explore tout avant filtrage"}
       M1: {status: NATIVE, note: "shortestPath() natif Cypher"}
       M2: {status: NATIVE, note: "shortestPath() natif Cypher"}
-      O2: {status: IMPOSSIBLE, note: "No shortestPath in SPARQL, UNION-based workaround too slow"}
+      O2: {status: VERY_DEGRADED, note: "BFS applicatif sur résultats SPARQL"}
 
   Q21:
     name: "Electrical Resilience"
@@ -905,7 +905,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif exhaustif - explosion combinatoire"}
       M1: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
       M2: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
-      O2: {status: IMPOSSIBLE, note: "Non supporté efficacement"}
+      O2: {status: VERY_DEGRADED, note: "Énumération BFS applicative"}
 
   Q22:
     name: "Equipment Siblings"
@@ -1157,7 +1157,7 @@ queries:
       P2: {status: NATIVE, note: "jsonb_set + array append avec ||"}
       M1: {status: DEGRADED, note: "Nécessite MAGE pour manipulation liste"}
       M2: {status: DEGRADED, note: "Nécessite MAGE pour manipulation liste"}
-      O2: {status: IMPOSSIBLE, note: "RDF n'a pas de structure array native"}
+      O2: {status: DEGRADED, note: "Multiple triples maintenanceEvent + orchestration applicative"}
 
   QW5:
     name: "Deep Calibration Update"
@@ -1237,7 +1237,7 @@ queries:
       P2: {status: NATIVE, note: "Opérateur || pour merge"}
       M1: {status: DEGRADED, note: "SET multiple propriétés"}
       M2: {status: DEGRADED, note: "SET multiple propriétés"}
-      O2: {status: IMPOSSIBLE, note: "Pas de merge natif RDF"}
+      O2: {status: DEGRADED, note: "DELETE+INSERT orchestration applicative"}
 
   QW7:
     name: "Add Capability"
@@ -1343,7 +1343,7 @@ queries:
       P2: {status: NATIVE, note: "Full JSONB array processing"}
       M1: {status: DEGRADED, note: "Si exporté comme liste propriété"}
       M2: {status: DEGRADED, note: "Si exporté comme liste propriété"}
-      O2: {status: IMPOSSIBLE, note: "Pas de structure array RDF"}
+      O2: {status: DEGRADED, note: "Multiple triples maintenanceEvent + agrégation applicative"}
 
   Q25:
     name: "Equipment Audit Trail"
@@ -1444,7 +1444,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif avec accumulation poids, non optimal"}
       M1: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
       M2: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de shortestPath pondéré"}
+      O2: {status: VERY_DEGRADED, note: "Dijkstra applicatif sur graphe SPARQL"}
 
   Q28:
     name: "Tenant Impact Chain"
@@ -1510,7 +1510,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE avec ARRAY accumulation, risque mémoire"}
       M1: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
       M2: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
-      O2: {status: IMPOSSIBLE, note: "Énumération exhaustive non supportée"}
+      O2: {status: VERY_DEGRADED, note: "DFS applicatif sur graphe SPARQL"}
 
   Q30:
     name: "Failure Impact Analysis"
@@ -1590,7 +1590,7 @@ queries:
       P2: {status: NATIVE, note: "Window functions PostgreSQL optimisées"}
       M1: {status: DEGRADED, note: "Pas de window functions, UNWIND + collect"}
       M2: {status: NATIVE, note: "Via TimescaleDB"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL lacks window functions for rolling aggregation"}
+      O2: {status: NATIVE, note: "Via TimescaleDB (O2 = Oxigraph + TimescaleDB)"}
 
   Q32:
     name: "JSON Schema Validation"
@@ -1620,7 +1620,7 @@ queries:
       P2: {status: NATIVE, note: "Opérateurs JSONB: ?, @>, jsonb_typeof"}
       M1: {status: DEGRADED, note: "Pas d'opérateurs JSON natifs en Cypher"}
       M2: {status: DEGRADED, note: "Pas d'opérateurs JSON natifs en Cypher"}
-      O2: {status: IMPOSSIBLE, note: "RDF n'a pas de validation schéma inline"}
+      O2: {status: DEGRADED, note: "SHACL ou validation applicative Python"}
 
   Q33:
     name: "Latest Value per Space"
@@ -1651,7 +1651,7 @@ queries:
       P2: {status: NATIVE, note: "LATERAL JOIN optimisé"}
       M1: {status: IMPOSSIBLE, note: "Cypher n'a pas de LATERAL, pas de TS"}
       M2: {status: DEGRADED, note: "Orchestration Cypher → SQL requise"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de subquery corrélée efficace"}
+      O2: {status: DEGRADED, note: "Orchestration SPARQL → TimescaleDB"}
 
   Q34:
     name: "Materialized Energy Summary"
@@ -1691,7 +1691,7 @@ queries:
       P2: {status: NATIVE, note: "Vues matérialisées PostgreSQL"}
       M1: {status: IMPOSSIBLE, note: "Memgraph n'a pas de vues matérialisées"}
       M2: {status: DEGRADED, note: "Via TimescaleDB continuous aggregates"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL n'a pas de vues matérialisées"}
+      O2: {status: DEGRADED, note: "Via TimescaleDB continuous aggregates"}
 
   # -------------------------------------------------------------------------
   # WRITE VALIDATION QUERIES (Q35-Q38) - Post-Write Checks
