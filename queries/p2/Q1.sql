@@ -2,12 +2,12 @@
 -- Paramètre: $1 = METER_ID
 
 WITH RECURSIVE energy_chain AS (
-    -- Base: le compteur source
+    -- Base: le compteur source (depth=0, sera exclu)
     SELECT
         n.id,
         n.data->>'equipment_type' AS type,
         n.name,
-        1 AS depth
+        0 AS depth
     FROM nodes n
     WHERE n.id = $1
       AND n.node_type = 'Equipment'

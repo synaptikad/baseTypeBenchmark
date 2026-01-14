@@ -482,8 +482,8 @@ def _get_qw_params(
     """
     # QW1: Timeseries Append
     if query_id == "QW1":
-        if paradigm in ("M1", "M2"):
-            # Cypher UNWIND $chunks - format SpinalCom
+        if paradigm == "M1":
+            # Cypher UNWIND $chunks - format SpinalCom (M1 only)
             return {"CHUNKS": file_params.get("qw1_chunks", [])}
         else:
             # SQL UNNEST arrays séparés

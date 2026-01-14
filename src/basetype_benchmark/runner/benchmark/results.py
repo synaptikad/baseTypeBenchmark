@@ -67,6 +67,7 @@ class QueryResult:
     sample_rows: list[dict[str, Any]] | None = None # First N rows for comparison
     row_hash: str | None = None                     # SHA256 of full result for integrity
     column_names: list[str] | None = None           # Column names returned
+    parameters: dict[str, Any] | None = None        # Query parameters used (for semantic validation)
 
     def to_dict(self) -> dict:
         result = {
@@ -90,6 +91,8 @@ class QueryResult:
             result["row_hash"] = self.row_hash
         if self.column_names is not None:
             result["column_names"] = self.column_names
+        if self.parameters is not None:
+            result["parameters"] = self.parameters
         return result
 
 
@@ -281,6 +284,7 @@ class BenchmarkResults:
                         sample_rows=qdata.get("sample_rows"),
                         row_hash=qdata.get("row_hash"),
                         column_names=qdata.get("column_names"),
+                        parameters=qdata.get("parameters"),
                     )
 
                 pr.levels.append(level)

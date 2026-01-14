@@ -138,8 +138,35 @@ class QueryDefinition:
 class SemanticNormalizer:
     """Extracts semantic information from query results."""
 
+    # Column name aliases for cross-paradigm normalization
+    COLUMN_ALIASES: dict[str, list[str]] = {
+        "time_bucket": ["time_bucket", "hour_bucket", "bucket", "hour", "ts"],
+        "id": ["id", "node_id", "equipment_id", "eq_id", "n_id"],
+        "depth": ["depth", "hop_distance", "distance", "level", "hops"],
+        "node_id": ["node_id", "id", "n_id"],
+        "point_id": ["point_id", "p_id"],
+        "space_id": ["space_id", "s_id"],
+    }
+
     def __init__(self, definitions: dict[str, QueryDefinition]):
         self.definitions = definitions
+        # Build reverse lookup: alias -> canonical name
+        self._alias_to_canonical: dict[str, str] = {}
+        for canonical, aliases in self.COLUMN_ALIASES.items():
+            for alias in aliases:
+                self._alias_to_canonical[alias] = canonical
+
+    def _get_column_value(self, row: dict, canonical_name: str) -> Any:
+        """Get column value using canonical name or any alias."""
+        # Try canonical name first
+        if canonical_name in row:
+            return row[canonical_name]
+        # Try aliases
+        aliases = self.COLUMN_ALIASES.get(canonical_name, [])
+        for alias in aliases:
+            if alias in row:
+                return row[alias]
+        return None
 
     def normalize(
         self,
@@ -203,12 +230,12 @@ class SemanticNormalizer:
             )
 
     def _extract_key(self, row: dict, semantic_key: str | list[str]) -> Any:
-        """Extract key from row."""
+        """Extract key from row, using column aliases for normalization."""
         if isinstance(semantic_key, list):
             # Composite key (tuple)
-            return tuple(row.get(k) for k in semantic_key)
+            return tuple(self._get_column_value(row, k) for k in semantic_key)
         else:
-            return row.get(semantic_key)
+            return self._get_column_value(row, semantic_key)
 
     def _normalize_set(
         self,
@@ -286,7 +313,8 @@ class SemanticNormalizer:
             if key is None:
                 continue
 
-            values = {col: row.get(col) for col in defn.value_columns}
+            # Use column aliases for value extraction
+            values = {col: self._get_column_value(row, col) for col in defn.value_columns}
             data[key] = values
 
         return SemanticAnswer(

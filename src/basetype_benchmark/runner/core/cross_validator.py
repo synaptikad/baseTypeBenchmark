@@ -75,6 +75,8 @@ EQUIVALENCE_RULES = {
         },
         "M1": {
             "Q19": "No JSONB for digital twin data",
+            "Q33": "No LATERAL JOIN or TimescaleDB for latest values",
+            "Q34": "No LATERAL JOIN or TimescaleDB for latest values",
         },
         "O2": {
             "Q20": "SPARQL lacks shortestPath algorithm",
@@ -308,6 +310,7 @@ class CrossParadigmValidator:
         float_tolerance: float = 0.01,
         rules: dict | None = None,
         semantic_definitions_path: Path | None = None,
+        query_params_path: Path | None = None,
     ):
         self.reference = reference
         self.float_tolerance = float_tolerance
@@ -318,6 +321,14 @@ class CrossParadigmValidator:
         if semantic_definitions_path and semantic_definitions_path.exists():
             from .semantic_validator import SemanticValidator
             self.semantic_validator = SemanticValidator(semantic_definitions_path)
+
+        # Load query parameters from dataset (for exclude_parameter logic)
+        self.query_params: dict = {}
+        if query_params_path and query_params_path.exists():
+            import yaml
+            with open(query_params_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                self.query_params = data.get("parameters", {})
 
     def validate_matrix(self, results: BenchmarkResults) -> CrossValidationMatrix:
         """Validate all paradigm pairs (asymmetric cross-validation matrix).
@@ -392,7 +403,8 @@ class CrossParadigmValidator:
                     old_ref = self.reference
                     self.reference = ref_paradigm
                     comparison = self._compare_query(
-                        query_id, result_ref, result_cmp, cmp_paradigm
+                        query_id, result_ref, result_cmp, cmp_paradigm,
+                        parameters=self.query_params,
                     )
                     self.reference = old_ref
 
@@ -460,7 +472,8 @@ class CrossParadigmValidator:
 
                 # Compare
                 comparison = self._compare_query(
-                    query_id, ref_query, cmp_query, paradigm_name
+                    query_id, ref_query, cmp_query, paradigm_name,
+                    parameters=self.query_params,
                 )
 
                 # Store result
