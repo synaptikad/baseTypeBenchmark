@@ -1,0 +1,14 @@
+# QW3: Relation Mutation
+# Status: DEGRADED pour O2 (INSERT DATA)
+# Semantic: Crée une relation FEEDS entre source et target
+# Paramètres: ?sourceId, ?targetId
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+INSERT {
+    ?source btb:feeds ?target .
+}
+WHERE {
+    ?source btb:id ?sourceId .
+    ?target btb:id ?targetId .
+}

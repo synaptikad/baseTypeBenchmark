@@ -1,0 +1,20 @@
+# Q41: Verify Tenant Consolidation
+# Status: NATIVE pour O2 (count patterns)
+# Semantic: Compter les espaces et compteurs d'un locataire après fusion
+# Paramètres: ?tenantId
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?tenant_id ?tenant_name
+       (COUNT(DISTINCT ?space) AS ?space_count)
+       (COUNT(DISTINCT ?meter) AS ?meter_count)
+WHERE {
+    ?tenant btb:id ?tenantId ;
+            btb:id ?tenant_id ;
+            btb:name ?tenant_name ;
+            a btb:Tenant .
+
+    OPTIONAL { ?tenant btb:occupies ?space . ?space a btb:Space . }
+    OPTIONAL { ?meter btb:metersTenant ?tenant . ?meter a btb:Equipment . }
+}
+GROUP BY ?tenant_id ?tenant_name

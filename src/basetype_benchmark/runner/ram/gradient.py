@@ -604,25 +604,7 @@ class RAMGradientExecutor:
                 stats[query_id] = query_stats
                 continue
 
-            try:
-                query_files = self._load_query_files(query_id)
-            except GradientError as e:
-                # Query file not found - skip gracefully
-                if self.verbose:
-                    self._console.print(f"[yellow]SKIPPED (no query file)[/yellow]")
-                query_stats.runs.append(QueryRunResult(
-                    query_id=query_id,
-                    variant_id=0,
-                    run_id=0,
-                    result=RunResult(
-                        rows=[],
-                        duration_ms=0,
-                        status=RunStatus.SKIPPED,
-                        error_message=str(e),
-                    ),
-                ))
-                stats[query_id] = query_stats
-                continue
+            query_files = self._load_query_files(query_id)
 
             for variant_id in range(self.n_variants):
                 params = self._get_variant_params(query_id, variant_id)

@@ -1,0 +1,20 @@
+# Q40: Verify Tenant Meters
+# Status: NATIVE pour O2 (simple pattern)
+# Semantic: Liste tous les compteurs associés à un locataire
+# Paramètres: ?tenantId
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?meter_id ?meter_name ?meter_type
+WHERE {
+    ?tenant btb:id ?tenantId ;
+            a btb:Tenant .
+
+    ?meter btb:metersTenant ?tenant ;
+           a btb:Equipment ;
+           btb:id ?meter_id ;
+           btb:name ?meter_name .
+
+    OPTIONAL { ?meter btb:equipmentType ?meter_type }
+}
+ORDER BY ?meter_id

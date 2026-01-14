@@ -1543,7 +1543,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif avec ARRAY pour éviter cycles"}
       M1: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
       M2: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
-      O2: {status: DEGRADED, note: "Property path SPARQL possible mais verbeux"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL property paths cannot compute hop_distance"}
 
   # -------------------------------------------------------------------------
   # SQL-NATIVE (Q31-Q34) - Avantage SQL
@@ -1590,7 +1590,7 @@ queries:
       P2: {status: NATIVE, note: "Window functions PostgreSQL optimisées"}
       M1: {status: DEGRADED, note: "Pas de window functions, UNWIND + collect"}
       M2: {status: NATIVE, note: "Via TimescaleDB"}
-      O2: {status: DEGRADED, note: "SPARQL n'a pas de window functions"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL lacks window functions for rolling aggregation"}
 
   Q32:
     name: "JSON Schema Validation"

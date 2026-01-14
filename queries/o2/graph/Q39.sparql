@@ -1,0 +1,20 @@
+# Q39: Verify Tenant Spaces
+# Status: NATIVE pour O2 (simple pattern)
+# Semantic: Liste tous les espaces occupés par un locataire
+# Paramètres: ?tenantId
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?space_id ?space_name ?space_type
+WHERE {
+    ?tenant btb:id ?tenantId ;
+            a btb:Tenant ;
+            btb:occupies ?space .
+
+    ?space a btb:Space ;
+           btb:id ?space_id ;
+           btb:name ?space_name .
+
+    OPTIONAL { ?space btb:spaceType ?space_type }
+}
+ORDER BY ?space_id
