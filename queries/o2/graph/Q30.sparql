@@ -1,0 +1,93 @@
+# Q30: Failure Impact Analysis
+# Status: DEGRADED pour O2 (UNION pour simuler profondeur variable)
+# Semantic: Si cet équipement tombe en panne, quels espaces/équipements sont impactés?
+# Paramètres: ?equipmentId
+
+PREFIX btb: <http://basetype.benchmark/ontology#>
+
+SELECT ?impact_type ?impacted_id ?impacted_name ?impacted_subtype ?hop_distance ?served_by_equipment
+WHERE {
+    {
+        # Equipment impacts via FEEDS chain (hop 1-5)
+        SELECT ("equipment" AS ?impact_type) ?impacted_id ?impacted_name ?impacted_subtype ?hop_distance ('' AS ?served_by_equipment)
+        WHERE {
+            ?source btb:id ?equipmentId ;
+                    a btb:Equipment .
+            {
+                # Hop 1
+                ?source btb:feeds ?impacted .
+                BIND(1 AS ?hop_distance)
+            } UNION {
+                # Hop 2
+                ?source btb:feeds ?mid1 .
+                ?mid1 btb:feeds ?impacted .
+                BIND(2 AS ?hop_distance)
+            } UNION {
+                # Hop 3
+                ?source btb:feeds ?mid1 .
+                ?mid1 btb:feeds ?mid2 .
+                ?mid2 btb:feeds ?impacted .
+                BIND(3 AS ?hop_distance)
+            } UNION {
+                # Hop 4
+                ?source btb:feeds ?mid1 .
+                ?mid1 btb:feeds ?mid2 .
+                ?mid2 btb:feeds ?mid3 .
+                ?mid3 btb:feeds ?impacted .
+                BIND(4 AS ?hop_distance)
+            } UNION {
+                # Hop 5
+                ?source btb:feeds ?mid1 .
+                ?mid1 btb:feeds ?mid2 .
+                ?mid2 btb:feeds ?mid3 .
+                ?mid3 btb:feeds ?mid4 .
+                ?mid4 btb:feeds ?impacted .
+                BIND(5 AS ?hop_distance)
+            }
+            ?impacted a btb:Equipment ;
+                      btb:id ?impacted_id ;
+                      btb:name ?impacted_name .
+            OPTIONAL { ?impacted btb:equipmentType ?impacted_subtype }
+        }
+    }
+    UNION
+    {
+        # Space impacts via FEEDS + SERVES chain
+        SELECT ("space" AS ?impact_type) ?impacted_id ?impacted_name ("Space" AS ?impacted_subtype) ?hop_distance ?served_by_equipment
+        WHERE {
+            ?source btb:id ?equipmentId ;
+                    a btb:Equipment .
+            {
+                # Direct serve (hop 0)
+                ?source btb:serves ?space .
+                ?source btb:name ?served_by_equipment .
+                BIND(0 AS ?hop_distance)
+            } UNION {
+                # Via 1 hop
+                ?source btb:feeds ?eq .
+                ?eq btb:serves ?space .
+                ?eq btb:name ?served_by_equipment .
+                BIND(1 AS ?hop_distance)
+            } UNION {
+                # Via 2 hops
+                ?source btb:feeds ?mid1 .
+                ?mid1 btb:feeds ?eq .
+                ?eq btb:serves ?space .
+                ?eq btb:name ?served_by_equipment .
+                BIND(2 AS ?hop_distance)
+            } UNION {
+                # Via 3 hops
+                ?source btb:feeds ?mid1 .
+                ?mid1 btb:feeds ?mid2 .
+                ?mid2 btb:feeds ?eq .
+                ?eq btb:serves ?space .
+                ?eq btb:name ?served_by_equipment .
+                BIND(3 AS ?hop_distance)
+            }
+            ?space a btb:Space ;
+                   btb:id ?impacted_id ;
+                   btb:name ?impacted_name .
+        }
+    }
+}
+ORDER BY ?hop_distance ?impact_type ?impacted_id

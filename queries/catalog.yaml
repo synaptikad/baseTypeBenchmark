@@ -1543,7 +1543,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif avec ARRAY pour éviter cycles"}
       M1: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
       M2: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL property paths cannot compute hop_distance"}
+      O2: {status: DEGRADED, note: "UNION pattern pour simuler profondeur variable (5 hops max)"}
 
   # -------------------------------------------------------------------------
   # SQL-NATIVE (Q31-Q34) - Avantage SQL
