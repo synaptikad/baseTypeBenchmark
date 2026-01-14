@@ -111,7 +111,7 @@ def dry_run(
         Optional[str],
         typer.Option(
             "--engine", "-e",
-            help="Specific engine to validate (P1, P2, M1, M2, O2)"
+            help="Specific engine to validate (P1, P2, M1, M2)"
         )
     ] = None,
     verbose: Annotated[
@@ -410,7 +410,7 @@ def run_query(
         str,
         typer.Option(
             "--paradigm", "-p",
-            help="Paradigm to use (P1, P2, M1, M2, O2)"
+            help="Paradigm to use (P1, P2, M1, M2)"
         )
     ],
     params: Annotated[
@@ -434,9 +434,10 @@ def run_query(
     paradigm = paradigm.upper()
     query_id = query.upper()
 
-    # Validate paradigm
-    if paradigm not in ("P1", "P2", "M1", "M2", "O2"):
+    # Validate paradigm (O2 is exploratory only)
+    if paradigm not in ("P1", "P2", "M1", "M2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
+        console.print("[dim]Note: O2 (Oxigraph) is exploratory only[/dim]")
         raise typer.Exit(1)
 
     # Parse params
@@ -617,7 +618,7 @@ def benchmark(
             ram_levels_mb = [int(float(r.strip()) * 1024) for r in ram_levels.split(",")]
     else:
         # Parse from CLI options
-        paradigm_list = ["P1", "P2", "M1", "M2", "O2"]
+        paradigm_list = ["P1", "P2", "M1", "M2"]  # O2 is exploratory only
         if paradigms:
             paradigm_list = [p.strip().upper() for p in paradigms.split(",")]
 
@@ -685,7 +686,7 @@ def benchmark(
 def gradient(
     paradigm: Annotated[
         str,
-        typer.Argument(help="Paradigm to test (P1, P2, M1, M2, O2)")
+        typer.Argument(help="Paradigm to test (P1, P2, M1, M2)")
     ],
     data_dir: Annotated[
         Path,
@@ -711,9 +712,10 @@ def gradient(
 
     paradigm = paradigm.upper()
 
-    # Validate
-    if paradigm not in ("P1", "P2", "M1", "M2", "O2"):
+    # Validate (O2 is exploratory only)
+    if paradigm not in ("P1", "P2", "M1", "M2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
+        console.print("[dim]Note: O2 (Oxigraph) is exploratory only[/dim]")
         raise typer.Exit(1)
 
     if not data_dir.exists():
@@ -784,7 +786,7 @@ def gradient(
 def load(
     paradigm: Annotated[
         str,
-        typer.Argument(help="Target paradigm (P1, P2, M1, M2, O2)")
+        typer.Argument(help="Target paradigm (P1, P2, M1, M2)")
     ],
     data_dir: Annotated[
         Path,
@@ -819,7 +821,6 @@ def load(
     Examples:
         btb-runner load P1 -d data/export/p1
         btb-runner load M2 -d data/export/m1m2 -w 16 --clear
-        btb-runner load O2 -d data/export/o2 --dry-run
     """
     from .config import (
         PostgresConfig,
@@ -836,10 +837,11 @@ def load(
 
     paradigm = paradigm.upper()
 
-    # Validate paradigm
-    if paradigm not in ("P1", "P2", "M1", "M2", "O2"):
+    # Validate paradigm (O2 is exploratory only)
+    if paradigm not in ("P1", "P2", "M1", "M2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
-        console.print("Valid paradigms: P1, P2, M1, M2, O2")
+        console.print("Valid paradigms: P1, P2, M1, M2")
+        console.print("[dim]Note: O2 (Oxigraph) is exploratory only[/dim]")
         raise typer.Exit(1)
 
     # Validate data directory
@@ -1135,7 +1137,7 @@ def status() -> None:
     # Exports
     console.print("\n[cyan]Exports:[/cyan]")
     export_dir = data_dir / "exports"
-    paradigms = ["p1", "p2", "m1", "m2", "o2"]
+    paradigms = ["p1", "p2", "m1", "m2"]  # O2 is exploratory only
     for p in paradigms:
         p_dir = export_dir / p
         if p_dir.exists() and list(p_dir.glob("*")):
@@ -1233,7 +1235,7 @@ def generate(
 def export_cmd(
     paradigm: Annotated[
         str,
-        typer.Argument(help="Target paradigm (P1, P2, M1, M2, O2)")
+        typer.Argument(help="Target paradigm (P1, P2, M1, M2)")
     ],
     source: Annotated[
         Path,
@@ -1412,12 +1414,26 @@ def validate_cmd(
         else:
             console.print(f"[dim]Semantic validation enabled: {semantic_path}[/dim]")
 
+    # Find query parameters file from data profile
+    query_params_path = None
+    if results.config and results.config.data_profile:
+        # Try to find queries_params.yaml in the dataset directory
+        data_profile = results.config.data_profile
+        # Try multiple locations
+        for base in [Path("data/generated"), Path(__file__).parent.parent.parent / "data" / "generated"]:
+            candidate = base / data_profile / "queries_params.yaml"
+            if candidate.exists():
+                query_params_path = candidate
+                console.print(f"[dim]Query params loaded: {query_params_path}[/dim]")
+                break
+
     # Run validation
     try:
         validator = CrossParadigmValidator(
             reference=reference,
             float_tolerance=tolerance,
             semantic_definitions_path=semantic_path,
+            query_params_path=query_params_path,
         )
 
         if cross_matrix:

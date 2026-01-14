@@ -66,13 +66,15 @@ ARCHIVE_DIR = RESULTS_DIR / "runs"  # Raw results archive for replay
 
 PROFILES = ["small", "medium", "large", "xlarge"]
 DURATIONS = ["2d", "1w", "1m", "6m", "1y"]
-PARADIGMS = ["P1", "P2", "M1", "M2", "O2"]
+# Note: O2 (Oxigraph) is exploratory only - not included in benchmark runs
+# O2 code remains for research purposes but is excluded from standard benchmarks
+PARADIGMS = ["P1", "P2", "M1", "M2"]
 SCENARIOS_DIR = CONFIG_DIR / "scenarios"
 
 # All query IDs for reference
 # Note: Order matters! Writes (QW) must execute before their validation queries
-ALL_READ_QUERIES = [f"Q{i}" for i in range(1, 39)]   # Q1-Q38
-ALL_WRITE_QUERIES = [f"QW{i}" for i in range(1, 9)]  # QW1-QW8
+ALL_READ_QUERIES = [f"Q{i}" for i in range(1, 42)]   # Q1-Q41
+ALL_WRITE_QUERIES = [f"QW{i}" for i in range(1, 13)]  # QW1-QW12
 # Correct order: independent reads, then write→validation pairs
 # Q1-Q23 (independent) + Q27-Q34 (independent) +
 # QW1→Q35 + QW2→Q36 + QW3→Q37 + QW4→Q24 + QW5/QW6→Q25 + QW7→Q26 + QW8→Q38
@@ -86,8 +88,11 @@ ALL_QUERIES = (
     ["QW4", "Q24"] +                     # QW4 → Q24 (maintenance event then validate)
     ["QW5", "QW6", "Q25"] +              # QW5, QW6 → Q25 (calibration/firmware then validate)
     ["QW7", "Q26"] +                     # QW7 → Q26 (capability then validate)
-    ["QW8", "Q38"]                       # QW8 → Q38 (remove property then validate)
-)  # 46 total
+    ["QW8", "Q38"] +                     # QW8 → Q38 (remove property then validate)
+    ["QW9", "Q39"] +                     # QW9 → Q39 (tenant move-in then validate)
+    ["QW10", "Q40"] +                    # QW10 → Q40 (tenant move-out then validate)
+    ["QW11", "QW12", "Q41"]              # QW11, QW12 → Q41 (space reassignment/merge then validate)
+)  # 53 total
 
 
 def run_cmd(cmd: list[str]) -> int:
@@ -177,7 +182,7 @@ def show_help():
     console.print("  P2 = PostgreSQL JSON/EAV")
     console.print("  M1 = Memgraph graph-only")
     console.print("  M2 = Memgraph + TimescaleDB hybrid")
-    console.print("  O2 = Oxigraph RDF + TimescaleDB hybrid")
+    console.print("  [dim](O2 = Oxigraph - exploratory, not in benchmarks)[/dim]")
     console.print()
 
     console.print("[dim]For full CLI documentation: btb-runner --help[/dim]")
@@ -436,16 +441,16 @@ def run_benchmark_wizard(datasets: list[Path]):
     bench_mode = Prompt.ask("Select", choices=["1", "2"], default="2")
 
     # 4. Select paradigms
-    console.print("\n[bold]4. Paradigms[/bold]: P1, P2, M1, M2, O2 (or ALL)")
+    console.print("\n[bold]4. Paradigms[/bold]: P1, P2, M1, M2 (or ALL)")
     paradigms = Prompt.ask("Select", default="ALL")
     if paradigms.upper() == "ALL":
-        paradigms = "P1,P2,M1,M2,O2"
+        paradigms = "P1,P2,M1,M2"
 
     # 5. Select queries
     console.print("\n[bold]5. Queries[/bold]")
-    console.print("  [cyan]1[/cyan]. ALL          [dim]Q1-Q38 + QW1-QW8 (46 queries)[/dim]")
-    console.print("  [cyan]2[/cyan]. Read only    [dim]Q1-Q38 (38 queries)[/dim]")
-    console.print("  [cyan]3[/cyan]. Write only   [dim]QW1-QW8 (8 queries)[/dim]")
+    console.print("  [cyan]1[/cyan]. ALL          [dim]Q1-Q41 + QW1-QW12 (53 queries)[/dim]")
+    console.print("  [cyan]2[/cyan]. Read only    [dim]Q1-Q41 (41 queries)[/dim]")
+    console.print("  [cyan]3[/cyan]. Write only   [dim]QW1-QW12 (12 queries)[/dim]")
     console.print("  [cyan]4[/cyan]. Core         [dim]Q1-Q23 (original 23 queries)[/dim]")
     console.print("  [cyan]5[/cyan]. Custom       [dim]Specify query IDs[/dim]")
     console.print()
@@ -1142,7 +1147,8 @@ def get_required_services(paradigms: list[str]) -> set[str]:
         "P2": ["timescale"],
         "M1": ["memgraph"],
         "M2": ["memgraph", "timescale"],  # Hybrid: graph + timeseries
-        "O2": ["oxigraph", "timescale"],  # Hybrid: RDF + timeseries
+        # O2 is exploratory only - not included in standard benchmarks
+        # "O2": ["oxigraph", "timescale"],  # Hybrid: RDF + timeseries
     }
     required = set()
     for p in paradigms:
