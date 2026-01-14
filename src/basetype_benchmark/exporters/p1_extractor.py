@@ -81,7 +81,8 @@ class P1Extractor(BaseExtractor):
             columns = self.TABLE_COLUMNS.get(table_name)
 
             if columns is None:
-                print(f"  WARN: No column mapping for {table_name}, skipping")
+                # Silently skip types not used in P1 benchmark queries
+                # (schedules, leases, technicians, workorders, alarms)
                 continue
 
             rows = []
