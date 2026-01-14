@@ -419,6 +419,20 @@ def run_benchmark_wizard(datasets: list[Path]):
     """Unified benchmark wizard: Dataset → Type → Mode → Paradigms → RAM."""
     header("Run Benchmark")
 
+    # Step 0: Clean Docker option (before dataset selection)
+    n_containers, n_volumes, container_list = get_docker_status_summary()
+
+    if n_containers > 0 or n_volumes > 0:
+        console.print("[bold]0. Docker Status[/bold]")
+        console.print(f"   Containers: {n_containers}, Volumes: {n_volumes}")
+        for c in container_list[:3]:  # Show first 3
+            console.print(f"   [dim]{c}[/dim]")
+        console.print()
+
+        if Confirm.ask("[yellow]Clean Docker state before benchmark?[/yellow]", default=True):
+            docker_prune_all()
+            console.print()
+
     # 1. Select dataset
     console.print("[bold]1. Dataset[/bold]")
     idx = select_from_list(datasets)
@@ -1258,6 +1272,76 @@ def stop_containers(services: list[str]) -> None:
         )
     except Exception as e:
         console.print(f"[yellow]Warning: Could not stop containers: {e}[/yellow]")
+
+
+def docker_prune_all() -> bool:
+    """Stop all benchmark containers and remove volumes for clean slate.
+
+    Returns True if successful.
+    """
+    compose_file = PROJECT_DIR / "docker" / "docker-compose.yml"
+
+    console.print("[yellow]Cleaning Docker state...[/yellow]")
+
+    try:
+        # Stop all services and remove volumes
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "down", "-v", "--remove-orphans"],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0 and result.stderr:
+            console.print(f"[yellow]Warning: {result.stderr.strip()}[/yellow]")
+
+        # Also remove any orphan benchmark volumes
+        vol_result = subprocess.run(
+            ["docker", "volume", "ls", "-q"],
+            capture_output=True, text=True
+        )
+        for vol in vol_result.stdout.strip().split("\n"):
+            if vol and ("benchmark" in vol.lower() or "basetype" in vol.lower()):
+                subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
+
+        console.print("[green]Docker state cleaned![/green]")
+        return True
+    except Exception as e:
+        console.print(f"[red]Failed to clean Docker state: {e}[/red]")
+        return False
+
+
+def get_docker_status_summary() -> tuple[int, int, list[str]]:
+    """Get current Docker status for benchmark containers.
+
+    Returns:
+        (container_count, volume_count, container_status_list)
+    """
+    compose_file = PROJECT_DIR / "docker" / "docker-compose.yml"
+    container_status = []
+    volumes = 0
+
+    try:
+        # Get containers with status
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "ps", "-a", "--format", "{{.Name}}:{{.State}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    container_status.append(line)
+
+        # Count benchmark volumes
+        vol_result = subprocess.run(
+            ["docker", "volume", "ls", "-q"],
+            capture_output=True, text=True
+        )
+        for vol in vol_result.stdout.strip().split("\n"):
+            if vol and ("benchmark" in vol.lower() or "basetype" in vol.lower()):
+                volumes += 1
+
+    except Exception:
+        pass
+
+    return len(container_status), volumes, container_status
 
 
 def get_volume_info() -> dict[str, str]:

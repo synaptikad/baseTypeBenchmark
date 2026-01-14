@@ -522,8 +522,17 @@ class BenchmarkOrchestrator:
 
         loader = get_loader(paradigm, config, ts_config)
 
-        if not loader.check_connection():
-            raise RuntimeError(f"Cannot connect to {paradigm} database")
+        # Retry connection with exponential backoff (container may not be ready)
+        max_retries = 5
+        for attempt in range(max_retries):
+            if loader.check_connection():
+                break
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
+                console.print(f"  [dim]Waiting {wait_time}s for {paradigm} database...[/dim]")
+                time.sleep(wait_time)
+        else:
+            raise RuntimeError(f"Cannot connect to {paradigm} database after {max_retries} attempts")
 
         # Determine if we should keep timeseries (Option A)
         keep_ts = self._should_keep_timeseries(paradigm)
