@@ -1622,10 +1622,48 @@ def show_system_info():
 # MAIN
 # =============================================================================
 
+def check_sudo_recommendation() -> bool:
+    """Check if running with sudo and warn if not.
+
+    Returns True if user wants to continue without sudo.
+    Returns False if user wants to restart with sudo.
+    """
+    if os.geteuid() == 0:
+        return True  # Already root, continue
+
+    console.print(Panel.fit(
+        "[yellow]Running without sudo[/yellow]\n\n"
+        "Memory metrics will be [bold]less accurate[/bold] without root access.\n"
+        "The benchmark uses cgroups v2 memory.peak which requires sudo\n"
+        "to reset the counter between queries.\n\n"
+        "[dim]Without sudo: global memory peak (less granular)\n"
+        "With sudo: per-query memory peak (recommended)[/dim]",
+        title="[yellow]Warning[/yellow]",
+        border_style="yellow"
+    ))
+
+    console.print("\n[bold]Options:[/bold]")
+    console.print("  [cyan]1[/cyan]. Continue anyway (memory metrics less precise)")
+    console.print("  [cyan]2[/cyan]. Exit and restart with: [green]sudo -E python3 run.py[/green]")
+    console.print()
+
+    choice = Prompt.ask("Select", choices=["1", "2"], default="2")
+
+    if choice == "2":
+        console.print("\n[dim]Restart with:[/dim] [green]sudo -E python3 run.py[/green]")
+        return False
+
+    return True
+
+
 def main():
     args = parse_args()
     if args.version:
         console.print("BaseType Benchmark V3 - 2025.1.0")
+        return
+
+    # Check sudo recommendation
+    if not check_sudo_recommendation():
         return
 
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
