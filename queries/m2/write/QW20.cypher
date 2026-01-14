@@ -1,11 +1,8 @@
-// QW20: Restore Removed Key (Cleanup for QW8)
-// Restaure une propriete precedemment supprimee
-// Parametres: $node_id, $value_to_restore
-//
-// Use case: Annuler la suppression de custom_tag (cleanup QW8)
-// Status: DEGRADED - Cypher ne supporte pas SET dynamique n[$key]
-// Workaround: Restaure la propriete statique 'custom_tag'
+// QW20: Restore Removed Key (cleanup QW8)
+// Restaure la propriété custom_tag supprimée par QW8
+// Paramètres: $qw8_node_id, $qw8_original_value
+// Note: Cypher ne supporte pas SET dynamique, donc on utilise le nom statique
 
-MATCH (n {id: $node_id})
-SET n.custom_tag = $value_to_restore
-RETURN n.id AS id, n.custom_tag AS restored_value;
+MATCH (n {id: $qw8_node_id})
+SET n.custom_tag = $qw8_original_value
+RETURN n.id AS node_id;

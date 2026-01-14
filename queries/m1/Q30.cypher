@@ -6,11 +6,11 @@
 // Trouver tous les équipements impactés via FEEDS
 MATCH (source:Equipment {id: $equipment_id})
 OPTIONAL MATCH path = (source)-[:FEEDS*1..10]->(impacted:Equipment)
-WITH source, impacted, length(path) AS hop_distance
+WITH source, impacted, min(length(path)) AS hop_distance
 WHERE impacted IS NOT NULL
 
-// Collecter les équipements impactés
-WITH collect({
+// Collecter les équipements impactés (DISTINCT par impacted_id)
+WITH collect(DISTINCT {
     impact_type: 'equipment',
     impacted_id: impacted.id,
     impacted_name: impacted.name,

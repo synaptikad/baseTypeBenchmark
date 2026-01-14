@@ -9,6 +9,8 @@ WITH RECURSIVE paths AS (
         'Equipment' AS node_type,
         eq.name AS node_name,
         ARRAY[eq.id]::text[] AS path,
+        ARRAY['Equipment']::text[] AS path_types,
+        ARRAY[eq.name]::text[] AS path_names,
         0 AS depth
     FROM equipment eq
     WHERE eq.id = $1
@@ -21,6 +23,8 @@ WITH RECURSIVE paths AS (
         CASE WHEN eq2.id IS NOT NULL THEN 'Equipment' ELSE 'Space' END AS node_type,
         COALESCE(eq2.name, s.name) AS node_name,
         p.path || COALESCE(eq2.id, s.id)::text,
+        p.path_types || CASE WHEN eq2.id IS NOT NULL THEN 'Equipment' ELSE 'Space' END,
+        p.path_names || COALESCE(eq2.name, s.name),
         p.depth + 1
     FROM paths p
     JOIN edges e ON e.source_id = p.node_id AND e.rel_type IN ('FEEDS', 'SERVES')
@@ -28,15 +32,21 @@ WITH RECURSIVE paths AS (
     LEFT JOIN spaces s ON s.id = e.target_id
     WHERE p.depth < 10
       AND NOT (COALESCE(eq2.id, s.id)::text = ANY(p.path))
+),
+shortest AS (
+    SELECT path, path_types, path_names
+    FROM paths
+    WHERE node_id = $2
+    ORDER BY depth
+    LIMIT 1
 )
 SELECT
-    ROW_NUMBER() OVER (ORDER BY depth) - 1 AS path_index,
-    node_id,
-    node_type,
-    node_name
-FROM paths
-WHERE node_id = $2
-ORDER BY depth
-LIMIT 1;
+    idx - 1 AS path_index,
+    path[idx] AS node_id,
+    path_types[idx] AS node_type,
+    path_names[idx] AS node_name
+FROM shortest,
+     LATERAL generate_series(1, array_length(path, 1)) AS idx
+ORDER BY path_index;
 
--- Note: Retourne le premier chemin trouve (pas garanti le plus court)
+-- Note: Retourne tous les noeuds du chemin le plus court trouve

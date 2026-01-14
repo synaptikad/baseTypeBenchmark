@@ -27,12 +27,19 @@ complete_paths AS (
     FROM all_paths ap
     JOIN equipment eq ON eq.id = ap.current_id
     WHERE eq.equipment_type = $2
+),
+-- Inverser le path pour avoir source->target (comme M1)
+reversed_paths AS (
+    SELECT array_agg(elem ORDER BY idx DESC) AS path_nodes
+    FROM complete_paths,
+         LATERAL unnest(path) WITH ORDINALITY AS t(elem, idx)
+    GROUP BY path
 )
 SELECT
     ROW_NUMBER() OVER () AS path_id,
-    path AS path_nodes,
-    array_length(path, 1) AS path_length
-FROM complete_paths
+    path_nodes,
+    array_length(path_nodes, 1) - 1 AS path_length
+FROM reversed_paths
 ORDER BY path_length, path_id;
 
 -- Note: SPOF = noeuds presents dans TOUS les chemins (calcul applicatif requis)

@@ -28,10 +28,11 @@ WITH RECURSIVE all_paths AS (
 SELECT
     ROW_NUMBER() OVER (ORDER BY path_length, path_nodes) AS path_id,
     path_nodes,
-    path_length,
+    array_length(path_nodes, 1) AS path_length,
     path_nodes[array_length(path_nodes, 1)] AS target_equipment
 FROM all_paths ap
 JOIN nodes n ON n.id = ap.current_id AND n.node_type = 'Equipment'
 WHERE COALESCE((n.data->>'critical')::boolean, false) = true
+  AND ap.path_length > 1  -- Exclure le source (transformer seul)
 ORDER BY path_length, path_id
 LIMIT 100;

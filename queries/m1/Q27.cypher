@@ -12,6 +12,8 @@ WITH path,
      relationships(path) AS path_rels
 WITH path_nodes, path_rels,
      reduce(total = 0.0, r IN path_rels | total + COALESCE(r.distance, 1.0)) AS total_distance
+ORDER BY total_distance
+LIMIT 1  // Ne garder qu'un seul chemin (le plus court)
 UNWIND range(0, size(path_nodes) - 1) AS idx
 RETURN
     idx AS path_index,
