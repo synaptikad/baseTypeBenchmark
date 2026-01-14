@@ -837,12 +837,14 @@ def load(
 
     paradigm = paradigm.upper()
 
-    # Validate paradigm (O2 is exploratory only)
-    if paradigm not in ("P1", "P2", "M1", "M2"):
+    # Validate paradigm (O2 is exploratory only but supported for load)
+    if paradigm not in ("P1", "P2", "M1", "M2", "O2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
-        console.print("Valid paradigms: P1, P2, M1, M2")
-        console.print("[dim]Note: O2 (Oxigraph) is exploratory only[/dim]")
+        console.print("Valid paradigms: P1, P2, M1, M2, O2")
         raise typer.Exit(1)
+
+    if paradigm == "O2":
+        console.print("[yellow]Note: O2 (Oxigraph) is exploratory only, not part of official benchmark[/yellow]")
 
     # Validate data directory
     if not data_dir.exists():
@@ -871,6 +873,10 @@ def load(
     # Check connection
     if not loader.check_connection():
         console.print(f"[red]Cannot connect to {paradigm} database[/red]")
+        raise typer.Exit(1)
+
+    # Check timeseries dependency (for P2, M2, O2)
+    if not _check_timeseries_dependency(loader, paradigm, data_dir):
         raise typer.Exit(1)
 
     # Clear database if requested
@@ -978,6 +984,86 @@ def _count_file_rows(filepath: Path) -> int:
         with open(filepath, "r", encoding="utf-8") as f:
             return sum(1 for line in f if line.strip() and not line.startswith("#"))
     return 0
+
+
+def _check_timeseries_dependency(loader, paradigm: str, data_dir: Path) -> bool:
+    """Check timeseries dependency and prompt user if missing.
+
+    For engines that share TimescaleDB (P2, M2, O2), checks if timeseries
+    data is available. If not, prompts the user to either:
+    1. Load timeseries now
+    2. Cancel the operation
+
+    Args:
+        loader: The loader instance with check_timeseries_dependency method
+        paradigm: The target paradigm (P1, P2, M1, M2, O2)
+        data_dir: Path to the data directory (for loading timeseries if needed)
+
+    Returns:
+        True if loading should continue, False if user cancelled
+    """
+    from .loaders import TimeseriesDependencyStatus
+
+    # Check if loader has dependency check method
+    if not hasattr(loader, "check_timeseries_dependency"):
+        return True
+
+    result = loader.check_timeseries_dependency()
+
+    # Handle different statuses
+    if result.status == TimeseriesDependencyStatus.NOT_NEEDED:
+        # M1 doesn't need TimescaleDB
+        console.print(f"[dim]{result.message}[/dim]")
+        return True
+
+    if result.status == TimeseriesDependencyStatus.AVAILABLE:
+        # Timeseries already loaded - show info
+        console.print(f"[green]✓ {result.message}[/green]")
+        return True
+
+    if result.status == TimeseriesDependencyStatus.CONNECTION_ERROR:
+        # Cannot connect - show error and exit
+        console.print(f"[red]✗ {result.message}[/red]")
+        return False
+
+    if result.status == TimeseriesDependencyStatus.MISSING:
+        # Timeseries missing - prompt user
+        console.print(Panel.fit(
+            f"[yellow]⚠ Timeseries manquantes pour {paradigm}[/yellow]\n\n"
+            f"{result.message}",
+            title="Dépendance TimescaleDB",
+            border_style="yellow",
+        ))
+
+        # Check if timeseries.csv exists in data_dir
+        ts_file = data_dir / "timeseries.csv"
+        if not ts_file.exists():
+            console.print(f"[red]✗ Fichier timeseries.csv non trouvé dans {data_dir}[/red]")
+            console.print("[dim]Impossible de charger les timeseries sans ce fichier.[/dim]")
+            return False
+
+        # Prompt user
+        console.print()
+        if paradigm == "P1":
+            # P1 is the primary provider - just inform user
+            console.print("[dim]Les timeseries seront chargées pendant le load P1.[/dim]")
+            return True
+
+        # For P2, M2, O2 - ask user
+        load_ts = typer.confirm(
+            f"Voulez-vous charger les timeseries maintenant pour {paradigm}?",
+            default=True,
+        )
+
+        if not load_ts:
+            console.print("[yellow]Opération annulée.[/yellow]")
+            console.print("[dim]Conseil: Chargez d'abord P1 pour avoir les timeseries partagées.[/dim]")
+            return False
+
+        console.print("[green]Les timeseries seront chargées.[/green]")
+        return True
+
+    return True
 
 
 def _get_loader_configs(paradigm: str):

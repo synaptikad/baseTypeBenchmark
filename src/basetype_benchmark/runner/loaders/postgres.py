@@ -35,7 +35,15 @@ from typing import TYPE_CHECKING, Iterator, Literal
 import psycopg
 
 from ..config import PostgresConfig
-from .base import BaseLoader, LoadPhase, LoadProgress, LoadResult, ProgressCallback
+from .base import (
+    BaseLoader,
+    LoadPhase,
+    LoadProgress,
+    LoadResult,
+    ProgressCallback,
+    TimeseriesDependencyResult,
+    TimeseriesDependencyStatus,
+)
 
 if TYPE_CHECKING:
     pass
@@ -129,6 +137,61 @@ class PostgresLoader(BaseLoader):
             return True
         except Exception:
             return False
+
+    def check_timeseries_dependency(self) -> TimeseriesDependencyResult:
+        """Vérifie si les timeseries sont disponibles pour ce paradigme.
+
+        Pour P1/P2, vérifie si ts.timeseries existe et contient des données.
+        P1 est le "fournisseur" principal des timeseries, P2 en dépend.
+
+        Returns:
+            TimeseriesDependencyResult avec le status et les détails
+        """
+        try:
+            # Check connection first
+            if not self.check_connection():
+                return TimeseriesDependencyResult(
+                    status=TimeseriesDependencyStatus.CONNECTION_ERROR,
+                    message=f"Cannot connect to PostgreSQL for {self.paradigm}",
+                    can_load=False,
+                )
+
+            # Check if timeseries table exists and has data
+            if self._is_timeseries_populated():
+                row_count = self._count_timeseries_rows()
+                return TimeseriesDependencyResult(
+                    status=TimeseriesDependencyStatus.AVAILABLE,
+                    row_count=row_count,
+                    message=f"Timeseries available: {row_count:,} rows in ts.timeseries",
+                    can_load=True,
+                )
+
+            # Timeseries missing - P1 can load them, P2 needs them from P1
+            if self.paradigm == "P1":
+                return TimeseriesDependencyResult(
+                    status=TimeseriesDependencyStatus.MISSING,
+                    message="Timeseries not loaded. Will be loaded during P1 load.",
+                    can_load=True,
+                )
+            else:  # P2
+                return TimeseriesDependencyResult(
+                    status=TimeseriesDependencyStatus.MISSING,
+                    message=(
+                        "Timeseries manquantes dans ts.timeseries.\n"
+                        "P2 partage les timeseries avec P1.\n"
+                        "Options:\n"
+                        "  1. Charger P1 d'abord (recommandé)\n"
+                        "  2. Charger les timeseries maintenant pour P2"
+                    ),
+                    can_load=True,  # P2 can also load timeseries if needed
+                )
+
+        except Exception as e:
+            return TimeseriesDependencyResult(
+                status=TimeseriesDependencyStatus.CONNECTION_ERROR,
+                message=f"Error checking timeseries: {e}",
+                can_load=False,
+            )
 
     def clear_database(self, keep_timeseries: bool = False) -> bool:
         """Clear database using schema isolation strategy.

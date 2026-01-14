@@ -31,7 +31,14 @@ from typing import TYPE_CHECKING, Iterator, Literal
 from neo4j import GraphDatabase
 
 from ..config import MemgraphConfig, PostgresConfig
-from .base import BaseLoader, LoadPhase, LoadResult, ProgressCallback
+from .base import (
+    BaseLoader,
+    LoadPhase,
+    LoadResult,
+    ProgressCallback,
+    TimeseriesDependencyResult,
+    TimeseriesDependencyStatus,
+)
 
 if TYPE_CHECKING:
     from neo4j import Driver, Session
@@ -135,6 +142,79 @@ class MemgraphLoader(BaseLoader):
             return True
         except Exception:
             return False
+
+    def check_timeseries_dependency(self) -> TimeseriesDependencyResult:
+        """Vérifie si les timeseries sont disponibles pour M1/M2.
+
+        - M1: N'a pas besoin de TimescaleDB (tout en Memgraph)
+        - M2: Nécessite TimescaleDB avec ts.timeseries peuplé
+
+        Returns:
+            TimeseriesDependencyResult avec le status et les détails
+        """
+        # M1 doesn't need TimescaleDB - timeseries are stored as graph nodes
+        if self.paradigm == "M1":
+            return TimeseriesDependencyResult(
+                status=TimeseriesDependencyStatus.NOT_NEEDED,
+                message="M1 stocke les timeseries dans Memgraph (TimeseriesChunk nodes)",
+                can_load=True,
+            )
+
+        # M2 needs TimescaleDB
+        if not self.timescale_config:
+            return TimeseriesDependencyResult(
+                status=TimeseriesDependencyStatus.CONNECTION_ERROR,
+                message=(
+                    "M2 nécessite TimescaleDB mais aucune configuration fournie.\n"
+                    "Vérifiez que timescale_config est passé au loader."
+                ),
+                can_load=False,
+            )
+
+        # Check TimescaleDB connection and data
+        try:
+            from .postgres import PostgresLoader
+
+            pg_loader = PostgresLoader(self.timescale_config, paradigm="P1")
+
+            if not pg_loader.check_connection():
+                return TimeseriesDependencyResult(
+                    status=TimeseriesDependencyStatus.CONNECTION_ERROR,
+                    message=(
+                        "Impossible de se connecter à TimescaleDB.\n"
+                        "Vérifiez que le service PostgreSQL/TimescaleDB est démarré."
+                    ),
+                    can_load=False,
+                )
+
+            if pg_loader._is_timeseries_populated():
+                row_count = pg_loader._count_timeseries_rows()
+                return TimeseriesDependencyResult(
+                    status=TimeseriesDependencyStatus.AVAILABLE,
+                    row_count=row_count,
+                    message=f"Timeseries disponibles: {row_count:,} rows dans ts.timeseries",
+                    can_load=True,
+                )
+
+            # Timeseries missing
+            return TimeseriesDependencyResult(
+                status=TimeseriesDependencyStatus.MISSING,
+                message=(
+                    "Timeseries manquantes dans TimescaleDB (ts.timeseries).\n"
+                    "M2 partage les timeseries avec P1/P2.\n"
+                    "Options:\n"
+                    "  1. Charger P1 ou P2 d'abord (recommandé)\n"
+                    "  2. Charger les timeseries maintenant pour M2"
+                ),
+                can_load=True,
+            )
+
+        except Exception as e:
+            return TimeseriesDependencyResult(
+                status=TimeseriesDependencyStatus.CONNECTION_ERROR,
+                message=f"Erreur lors de la vérification TimescaleDB: {e}",
+                can_load=False,
+            )
 
     # =========================================================================
     # PUBLIC INTERFACE

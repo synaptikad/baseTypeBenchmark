@@ -32,6 +32,8 @@ from .base import (
     LoadProgress,
     LoadResult,
     ProgressCallback,
+    TimeseriesDependencyResult,
+    TimeseriesDependencyStatus,
 )
 from .memgraph import MemgraphLoader
 from .oxigraph import OxigraphLoader
@@ -57,6 +59,8 @@ __all__ = [
     "LoadProgress",
     "LoadResult",
     "ProgressCallback",
+    "TimeseriesDependencyResult",
+    "TimeseriesDependencyStatus",
     # Loaders
     "PostgresLoader",
     "MemgraphLoader",

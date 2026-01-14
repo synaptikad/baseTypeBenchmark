@@ -23,6 +23,14 @@ class LoadPhase(str, Enum):
     TIMESERIES = "timeseries"
 
 
+class TimeseriesDependencyStatus(str, Enum):
+    """Status de la dépendance aux timeseries."""
+    NOT_NEEDED = "not_needed"     # Engine doesn't need timeseries (M1)
+    AVAILABLE = "available"       # Timeseries data is available
+    MISSING = "missing"           # Timeseries data is missing, needs loading
+    CONNECTION_ERROR = "error"    # Cannot connect to TimescaleDB
+
+
 # =============================================================================
 # PROGRESS MODELS
 # =============================================================================
@@ -55,6 +63,19 @@ ProgressCallback = Callable[[LoadProgress], None]
 # =============================================================================
 # RESULT MODEL
 # =============================================================================
+
+class TimeseriesDependencyResult(BaseModel):
+    """Résultat de la vérification de dépendance timeseries."""
+    status: TimeseriesDependencyStatus
+    row_count: int = Field(default=0, ge=0, description="Nombre de rows si AVAILABLE")
+    message: str = Field(default="", description="Message explicatif")
+    can_load: bool = Field(default=False, description="True si on peut charger les TS")
+
+    @property
+    def needs_user_action(self) -> bool:
+        """True si l'utilisateur doit décider (TS manquantes)."""
+        return self.status == TimeseriesDependencyStatus.MISSING
+
 
 class LoadResult(BaseModel):
     """Resultat d'un chargement bulk."""
