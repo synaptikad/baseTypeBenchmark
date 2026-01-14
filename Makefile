@@ -127,7 +127,6 @@ install:
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -e .
-	$(PIP) install -r requirements.txt
 	@echo "Python environment ready"
 	@# Create .env from example if not exists
 	@if [ ! -f .env ]; then \

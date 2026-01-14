@@ -16,7 +16,7 @@ Data cleanup, schema migration, GDPR compliance.
 | Nom | Type | Description | Exemple |
 |-----|------|-------------|---------|
 | NODE_ID | string | ID du nœud | `eq_ahu_6` |
-| KEY_TO_REMOVE | string | Clé à supprimer | `legacy_protocol_id` |
+| KEY_TO_REMOVE | string | Clé à supprimer | `deprecated_protocol` |
 
 ## Support
 | P1 | P2 | M1 | M2 | O2 |

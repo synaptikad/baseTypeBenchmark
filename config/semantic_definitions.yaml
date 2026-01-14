@@ -339,3 +339,233 @@ queries:
       P1:
         status: IMPOSSIBLE
         reason: "No JSONB capabilities"
+
+  # ===========================================================================
+  # GRAPH-NATIVE (Q27-Q30)
+  # ===========================================================================
+
+  Q27:
+    question: "Quel est le chemin d'évacuation le plus court vers une sortie?"
+    answer_type: path
+    semantic_key: space_id
+    validation:
+      same_start: true
+      same_end: true
+      path_exists: true
+    value_columns: [total_distance]
+    info_columns: [step, space_name, is_exit]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "CTE exploration, not guaranteed shortest"
+      P2:
+        status: DEGRADED
+        reason: "CTE exploration, not guaranteed shortest"
+      O2:
+        status: IMPOSSIBLE
+        reason: "No shortest path in SPARQL"
+
+  Q28:
+    question: "Quels locataires sont impactés par la coupure de ce sous-compteur?"
+    answer_type: aggregate
+    semantic_key: tenant_id
+    value_columns: [affected_equipment_count]
+    info_columns: [tenant_name]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "Multiple JOINs required"
+      P2:
+        status: DEGRADED
+        reason: "Multiple JOINs required"
+      O2:
+        status: DEGRADED
+        reason: "Complex SPARQL path queries"
+
+  Q29:
+    question: "Quels sont tous les chemins électriques vers les équipements critiques?"
+    answer_type: path
+    semantic_key: path_nodes
+    validation:
+      all_paths_required: true
+      target_is_critical: true
+    info_columns: [path_index, path_length, target_id]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "CTE with ARRAY accumulation"
+      P2:
+        status: DEGRADED
+        reason: "CTE with ARRAY accumulation"
+      O2:
+        status: IMPOSSIBLE
+        reason: "No allPaths in SPARQL"
+
+  Q30:
+    question: "Quels espaces et équipements sont impactés par cette panne?"
+    answer_type: aggregate
+    semantic_key: impacted_id
+    value_columns: [impacted_equipment_count, impacted_spaces_count, max_hop_distance]
+    info_columns: [impact_type, impacted_name, impacted_subtype, hop_distance, served_by_equipment]
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "Recursive CTE required"
+      P2:
+        status: DEGRADED
+        reason: "Recursive CTE required"
+      O2:
+        status: DEGRADED
+        reason: "Complex SPARQL path queries"
+
+  # ===========================================================================
+  # SQL-NATIVE (Q31-Q34)
+  # ===========================================================================
+
+  Q31:
+    question: "Quels sont les agrégats glissants sur les timeseries du bâtiment?"
+    answer_type: aggregate
+    semantic_key: point_id
+    value_columns: [avg, stddev, p95, sample_count]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays instead of TimescaleDB"
+
+  Q32:
+    question: "Les données JSONB HVAC respectent-elles le schéma attendu?"
+    answer_type: aggregate
+    semantic_key: equipment_id
+    value_columns: [validation_status]
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB data column"
+      M1:
+        status: DEGRADED
+        reason: "Schema validation via application code"
+      M2:
+        status: DEGRADED
+        reason: "Schema validation via application code"
+      O2:
+        status: DEGRADED
+        reason: "Schema validation via application code"
+
+  Q33:
+    question: "Quelle est la dernière valeur par espace et type de mesure?"
+    answer_type: aggregate
+    semantic_key: [space_id, point_id]
+    value_columns: [latest_value]
+    tolerance:
+      default: 0.01
+      M1: 0.05
+    paradigm_status:
+      M1:
+        status: DEGRADED
+        reason: "TimeseriesChunk arrays"
+
+  Q34:
+    question: "Quel est le résumé énergétique matérialisé par jour?"
+    answer_type: aggregate
+    semantic_key: day
+    value_columns: [total_energy_kwh, peak_power_kw, meter_count]
+    tolerance:
+      default: 0.01
+    paradigm_status:
+      M1:
+        status: IMPOSSIBLE
+        reason: "No materialized views in Memgraph"
+      M2:
+        status: DEGRADED
+        reason: "Uses TimescaleDB continuous aggregates"
+      O2:
+        status: DEGRADED
+        reason: "Manual aggregation required"
+
+  # ===========================================================================
+  # VALIDATION QUERIES (Q35-Q41) - Validate QW write operations
+  # ===========================================================================
+
+  Q35:
+    question: "Qui occupe cet espace sur cette période (valide QW1)?"
+    answer_type: set
+    semantic_key: tenant_id
+    info_columns: [tenant_name, start_date, end_date]
+    notes: |
+      Validates QW1 (Space Reservation).
+      After QW1 creates OCCUPIES edge, Q35 should return the tenant.
+    paradigm_status:
+      O2:
+        status: IMPOSSIBLE
+        reason: "O2 write not implemented"
+
+  Q36:
+    question: "Les métadonnées ont-elles été mises à jour (valide QW2)?"
+    answer_type: document
+    semantic_key: node_id
+    structure:
+      required: [node_id, node_name, custom_tag]
+      optional: [node_type]
+    notes: |
+      Validates QW2 (Metadata Update).
+      After QW2 updates custom_tag, Q36 should return the new value.
+    paradigm_status:
+      P1:
+        status: DEGRADED
+        reason: "No JSONB metadata column"
+
+  Q37:
+    question: "La relation a-t-elle été modifiée (valide QW3)?"
+    answer_type: document
+    semantic_key: [source_id, target_id]
+    structure:
+      required: [source_id, target_id, rel_type]
+      optional: [source_name, target_name]
+    notes: |
+      Validates QW3 (Relation Mutation).
+      After QW3 creates/modifies edge, Q37 should return the relation.
+
+  Q38:
+    question: "La clé de métadonnées a-t-elle été supprimée (valide QW8)?"
+    answer_type: document
+    semantic_key: node_id
+    structure:
+      required: [node_id, tag_removed]
+      optional: [node_name, remaining_keys]
+    notes: |
+      Validates QW8 (Remove Metadata Key).
+      After QW8 removes key, Q38 should confirm removal.
+    paradigm_status:
+      P1:
+        status: IMPOSSIBLE
+        reason: "No JSONB metadata column"
+
+  Q39:
+    question: "Les espaces ont-ils été assignés au locataire (valide QW9)?"
+    answer_type: set
+    semantic_key: space_id
+    info_columns: [space_name, space_type]
+    notes: |
+      Validates QW9 (Tenant Move-In).
+      After QW9 assigns spaces, Q39 should return the spaces.
+
+  Q40:
+    question: "Les compteurs ont-ils été dissociés du locataire (valide QW10)?"
+    answer_type: set
+    semantic_key: meter_id
+    info_columns: [meter_name, meter_type]
+    notes: |
+      Validates QW10 (Tenant Move-Out).
+      After QW10 dissociates meters, Q40 should return remaining meters.
+
+  Q41:
+    question: "La consolidation locataire est-elle correcte (valide QW12)?"
+    answer_type: aggregate
+    semantic_key: tenant_id
+    value_columns: [occupied_spaces, associated_meters]
+    notes: |
+      Validates QW12 (Tenant Merge).
+      After QW12 merges tenants, Q41 should show consolidated counts.

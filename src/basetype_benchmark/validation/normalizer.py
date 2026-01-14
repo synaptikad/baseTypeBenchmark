@@ -476,3 +476,322 @@ def load_normalizer(
             definitions_path = default_path
 
     return FullResultNormalizer(definitions_path=definitions_path)
+
+
+class ParquetNormalizer:
+    """Normalize Parquet archive results to JSON format matching Expected Answers.
+
+    This class bridges the gap between:
+    - Benchmark results stored in Parquet (compact, efficient)
+    - Expected Answers stored in JSON (ground truth from generator)
+
+    The normalization pipeline:
+    1. Load Parquet rows from archive
+    2. Canonicalize column names (paradigm-specific -> canonical)
+    3. Extract semantic content based on query answer_type
+    4. Produce JSON comparable to expected_answers/
+
+    Usage:
+        normalizer = ParquetNormalizer(archive_path, definitions_path)
+        normalized = normalizer.normalize_paradigm("P1")
+        # normalized["Q1"] = {"semantic_content": {...}, "row_count": 343, ...}
+    """
+
+    def __init__(
+        self,
+        archive_path: Path,
+        definitions_path: Path | None = None,
+        rules_path: Path | None = None,
+    ):
+        """Initialize Parquet normalizer.
+
+        Args:
+            archive_path: Path to benchmark archive (contains raw_results/)
+            definitions_path: Path to semantic_definitions.yaml
+            rules_path: Path to validation_rules.yaml (for IMPOSSIBLE queries)
+        """
+        self.archive_path = Path(archive_path)
+        self.raw_results_path = self.archive_path / "raw_results"
+
+        # Load FullResultNormalizer for semantic extraction
+        self._normalizer = load_normalizer(definitions_path)
+
+        # Load validation rules (IMPOSSIBLE queries)
+        self.rules: dict[str, Any] = {}
+        if rules_path and Path(rules_path).exists():
+            with open(rules_path, "r", encoding="utf-8") as f:
+                self.rules = yaml.safe_load(f) or {}
+
+    def get_paradigms(self) -> list[str]:
+        """Get list of paradigms in archive."""
+        if not self.raw_results_path.exists():
+            return []
+        return sorted([p.name for p in self.raw_results_path.iterdir() if p.is_dir()])
+
+    def get_queries(self, paradigm: str) -> list[str]:
+        """Get list of queries for a paradigm."""
+        paradigm_dir = self.raw_results_path / paradigm
+        if not paradigm_dir.exists():
+            return []
+
+        queries = set()
+        # Parquet files (new format)
+        for f in paradigm_dir.glob("*.parquet"):
+            queries.add(f.stem)
+        # JSON files (legacy, exclude .meta.json)
+        for f in paradigm_dir.glob("*.json"):
+            if not f.name.endswith(".meta.json"):
+                queries.add(f.stem)
+
+        return sorted(queries, key=lambda x: (x[0], int(x[1:]) if x[1:].isdigit() else 999))
+
+    def is_impossible(self, query_id: str, paradigm: str) -> str | None:
+        """Check if query is IMPOSSIBLE for paradigm.
+
+        Returns:
+            Reason string if impossible, None otherwise
+        """
+        impossible = self.rules.get("impossible", {})
+        paradigm_impossible = impossible.get(paradigm, {})
+        return paradigm_impossible.get(query_id)
+
+    def load_query_rows(self, query_id: str, paradigm: str) -> tuple[list[dict], dict]:
+        """Load rows and metadata for a query.
+
+        Supports both Parquet (new) and JSON (legacy) formats.
+
+        Args:
+            query_id: Query ID (Q1, Q2, etc.)
+            paradigm: Paradigm (P1, P2, M1, M2)
+
+        Returns:
+            (rows, metadata) tuple
+        """
+        import pyarrow.parquet as pq
+
+        paradigm_dir = self.raw_results_path / paradigm
+
+        # Try Parquet format first
+        parquet_path = paradigm_dir / f"{query_id}.parquet"
+        meta_path = paradigm_dir / f"{query_id}.meta.json"
+
+        if parquet_path.exists():
+            table = pq.read_table(parquet_path)
+            rows = table.to_pylist()
+
+            metadata = {}
+            if meta_path.exists():
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+
+            return rows, metadata
+
+        # Fall back to legacy JSON
+        json_path = paradigm_dir / f"{query_id}.json"
+        if json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("rows", []), data
+
+        return [], {}
+
+    def normalize_query(
+        self,
+        query_id: str,
+        paradigm: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Normalize a single query result to Expected Answer format.
+
+        Args:
+            query_id: Query ID
+            paradigm: Paradigm
+            parameters: Query parameters (from metadata or expected answers)
+
+        Returns:
+            Dict matching ExpectedAnswer format:
+            {
+                "query_id": "Q1",
+                "paradigm": "P1",
+                "answer_type": "set",
+                "semantic_content": [...],
+                "row_count": 343,
+                "content_hash": "abc123...",
+                "status": "NORMALIZED" | "IMPOSSIBLE" | "MISSING"
+            }
+        """
+        # Check if IMPOSSIBLE
+        impossible_reason = self.is_impossible(query_id, paradigm)
+        if impossible_reason:
+            return {
+                "query_id": query_id,
+                "paradigm": paradigm,
+                "status": "IMPOSSIBLE",
+                "reason": impossible_reason,
+                "semantic_content": None,
+                "row_count": 0,
+                "content_hash": "",
+            }
+
+        # Load rows
+        rows, metadata = self.load_query_rows(query_id, paradigm)
+
+        if not rows and not metadata:
+            return {
+                "query_id": query_id,
+                "paradigm": paradigm,
+                "status": "MISSING",
+                "reason": "No result file found",
+                "semantic_content": None,
+                "row_count": 0,
+                "content_hash": "",
+            }
+
+        # Get parameters from metadata if not provided
+        if parameters is None:
+            parameters = metadata.get("parameters", {})
+
+        # Normalize using FullResultNormalizer
+        normalized = self._normalizer.normalize(rows, query_id, paradigm, parameters)
+
+        # Convert semantic_content to JSON-serializable format
+        semantic_content = normalized.semantic_content
+        if isinstance(semantic_content, (set, frozenset)):
+            semantic_content = sorted(list(semantic_content), key=str)
+
+        return {
+            "query_id": query_id,
+            "paradigm": paradigm,
+            "status": "NORMALIZED",
+            "answer_type": normalized.semantic_type,
+            "semantic_content": semantic_content,
+            "row_count": normalized.row_count,
+            "content_hash": normalized.content_hash,
+            "parameters": parameters,
+        }
+
+    def normalize_paradigm(
+        self,
+        paradigm: str,
+        query_ids: list[str] | None = None,
+        parameters_store: Any | None = None,
+    ) -> dict[str, dict]:
+        """Normalize all queries for a paradigm.
+
+        Args:
+            paradigm: Paradigm to normalize
+            query_ids: Optional list of query IDs to process (default: all)
+            parameters_store: Optional ExpectedAnswerStore for parameters
+
+        Returns:
+            Dict mapping query_id -> normalized result
+        """
+        if query_ids is None:
+            query_ids = self.get_queries(paradigm)
+
+        results = {}
+        for qid in query_ids:
+            # Get parameters from store if available
+            params = None
+            if parameters_store:
+                params = parameters_store.get_query_parameters(qid)
+
+            results[qid] = self.normalize_query(qid, paradigm, params)
+
+        return results
+
+    def normalize_all(
+        self,
+        paradigms: list[str] | None = None,
+        query_ids: list[str] | None = None,
+        parameters_store: Any | None = None,
+    ) -> dict[str, dict[str, dict]]:
+        """Normalize all paradigms and queries.
+
+        Args:
+            paradigms: Optional list of paradigms (default: all)
+            query_ids: Optional list of query IDs (default: all)
+            parameters_store: Optional ExpectedAnswerStore for parameters
+
+        Returns:
+            Dict mapping paradigm -> query_id -> normalized result
+        """
+        if paradigms is None:
+            paradigms = self.get_paradigms()
+
+        results = {}
+        for paradigm in paradigms:
+            results[paradigm] = self.normalize_paradigm(
+                paradigm, query_ids, parameters_store
+            )
+
+        return results
+
+    def save_normalized(
+        self,
+        output_dir: Path,
+        paradigms: list[str] | None = None,
+        query_ids: list[str] | None = None,
+        parameters_store: Any | None = None,
+    ) -> Path:
+        """Normalize and save results to JSON files.
+
+        Creates:
+            output_dir/
+            ├── P1/
+            │   ├── Q1.json
+            │   ├── Q2.json
+            │   └── ...
+            ├── M1/
+            │   └── ...
+            └── summary.json
+
+        Args:
+            output_dir: Output directory
+            paradigms: Optional list of paradigms
+            query_ids: Optional list of query IDs
+            parameters_store: Optional ExpectedAnswerStore for parameters
+
+        Returns:
+            Path to output directory
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        all_results = self.normalize_all(paradigms, query_ids, parameters_store)
+
+        summary = {
+            "archive": str(self.archive_path),
+            "paradigms": {},
+        }
+
+        for paradigm, queries in all_results.items():
+            paradigm_dir = output_dir / paradigm
+            paradigm_dir.mkdir(exist_ok=True)
+
+            paradigm_summary = {"total": 0, "normalized": 0, "impossible": 0, "missing": 0}
+
+            for query_id, result in queries.items():
+                # Save individual query result
+                query_path = paradigm_dir / f"{query_id}.json"
+                with open(query_path, "w", encoding="utf-8") as f:
+                    json.dump(result, f, indent=2, default=str)
+
+                # Update summary
+                paradigm_summary["total"] += 1
+                status = result.get("status", "MISSING")
+                if status == "NORMALIZED":
+                    paradigm_summary["normalized"] += 1
+                elif status == "IMPOSSIBLE":
+                    paradigm_summary["impossible"] += 1
+                else:
+                    paradigm_summary["missing"] += 1
+
+            summary["paradigms"][paradigm] = paradigm_summary
+
+        # Save summary
+        summary_path = output_dir / "summary.json"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+
+        return output_dir

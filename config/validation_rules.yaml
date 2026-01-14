@@ -10,13 +10,26 @@ version: "1.0"
 # Ces queries ne peuvent pas être exécutées par le paradigme
 impossible:
   P1:
+    # Read queries requiring JSONB
     Q14: "No JSONB protocol column in P1 schema"
     Q15: "No JSONB metadata column (warranty) in P1 schema"
     Q16: "No JSONB tags column in P1 schema"
     Q17: "No JSONB capabilities column in P1 schema"
+    Q18: "No JSONB calibration column in P1 schema"
     Q24: "No JSONB maintenance_history in P1 schema"
     Q25: "No JSONB for firmware/maintenance in P1 schema"
     Q26: "No JSONB capabilities in P1 schema"
+    Q32: "No JSONB schema validation possible in P1"
+    Q36: "No JSONB metadata to validate QW2 update in P1"
+    Q38: "No JSONB metadata to validate QW8 removal in P1"
+    # Write queries requiring JSONB updates
+    QW2: "Metadata update requires JSONB column"
+    QW4: "Maintenance event append requires JSONB"
+    QW5: "Calibration update requires JSONB"
+    QW6: "Metadata merge (firmware) requires JSONB"
+    QW7: "Capability addition requires JSONB array"
+    QW8: "Metadata key removal requires JSONB"
+    QW11: "Space reassignment metadata requires JSONB"
 
   M1:
     Q33: "LATERAL JOIN pattern impossible in Cypher without correlated subqueries"
@@ -44,6 +57,9 @@ degraded:
     Q13: "Business hours filter approximation on chunks"
     Q19: "No live stats without TimescaleDB"
 
+  M2:
+    Q13: "Hybrid architecture returns per-point aggregates; space context lost in graph→SQL handoff"
+
   O2:
     Q6: "SPARQL has no native time_bucket aggregation"
     Q15: "Date arithmetic approximation (365/30 days)"
@@ -53,11 +69,10 @@ degraded:
   # Q20 (Shortest Path) and Q21 (Electrical Paths/SPOF) are graph-native queries.
   # SQL CTEs cannot implement these optimally - this is an expected limitation.
   P1:
-    Q1: "CTE includes source at depth=1 - filtered by normalizer"
-    Q18: "Returns NULL for calibration columns"
     Q19: "Digital twin without JSONB richness"
     Q20: "SQL CTE cannot guarantee shortest path - graph-native algorithm required"
     Q21: "SQL CTE causes combinatorial explosion for SPOF analysis - graph-native algorithm required"
+    Q23: "Normalized schema only traverses Equipment/Space - misses Building/Floor nodes"
 
   P2:
     Q20: "SQL CTE cannot guarantee shortest path - graph-native algorithm required"
@@ -125,12 +140,6 @@ column_mappings:
 
 # Notes sur les différences attendues
 notes:
-  P1_Q1_source_inclusion: |
-    P1's CTE for Q1 includes the source meter at depth=1 because:
-    - Base case: SELECT ... WHERE source_id = $1 with depth=1
-    - Filter: WHERE depth > 0 (doesn't exclude depth=1)
-    The normalizer's exclude_parameter rule handles this.
-
   M1_timeseries_approximation: |
     M1 stores timeseries as TimeseriesChunk arrays instead of
     individual points in TimescaleDB. This causes approximate

@@ -1513,6 +1513,13 @@ def validate_cmd(
                 console.print(f"[dim]Query params loaded: {query_params_path}[/dim]")
                 break
 
+    # Load validation rules from YAML
+    rules_path = Path(__file__).parent.parent.parent.parent / "config" / "validation_rules.yaml"
+    if not rules_path.exists():
+        rules_path = Path("config/validation_rules.yaml")
+    if rules_path.exists():
+        console.print(f"[dim]Validation rules loaded: {rules_path}[/dim]")
+
     # Run validation
     try:
         validator = CrossParadigmValidator(
@@ -1520,10 +1527,33 @@ def validate_cmd(
             float_tolerance=tolerance,
             semantic_definitions_path=semantic_path,
             query_params_path=query_params_path,
+            rules_path=rules_path if rules_path.exists() else None,
         )
 
         if cross_matrix:
             # Cross-validation matrix mode
+
+            # First: Validate vs Expected Answers (ground truth)
+            # Try to find expected_answers in dataset directory
+            expected_store = None
+            if results.config and results.config.data_profile:
+                for base in [Path("data/generated"), Path(__file__).parent.parent.parent.parent / "data" / "generated"]:
+                    expected_dir = base / results.config.data_profile / "expected_answers"
+                    if expected_dir.exists():
+                        from ...validation import ExpectedAnswerStore
+                        expected_store = ExpectedAnswerStore(base / results.config.data_profile)
+                        expected_store.load()
+                        console.print(f"[dim]Expected Answers loaded: {len(expected_store)} queries[/dim]")
+                        break
+
+            if expected_store:
+                # Validate each paradigm vs Expected Answers
+                expected_summaries = validator.validate_vs_expected(results, expected_store)
+                _display_expected_validation_table(expected_summaries, verbose)
+            else:
+                console.print("[yellow]Note: expected_answers/ non trouvé, validation vs ground truth ignorée[/yellow]\n")
+
+            # Then: Cross-validation matrix (paradigms vs each other)
             matrix = validator.validate_matrix(results)
             _display_cross_matrix(matrix, verbose)
 
@@ -1790,6 +1820,82 @@ def _display_cross_matrix(matrix, verbose: bool = False) -> None:
                         console.print(f"    Row count: {comparison.row_count_ref} vs {comparison.row_count_cmp}")
                         if comparison.reason:
                             console.print(f"    Reason: {comparison.reason}")
+
+
+def _display_expected_validation_table(
+    summaries: dict,
+    verbose: bool = False,
+) -> None:
+    """Display validation results against Expected Answers (ground truth).
+
+    This table shows how each paradigm compares to the source of truth
+    computed during dataset generation.
+
+    Args:
+        summaries: Dict mapping paradigm name to ExpectedValidationSummary
+        verbose: Show detailed info
+    """
+    console.print("\n")
+
+    # Create table
+    table = Table(
+        title="Paradigm vs Expected Answers (Ground Truth)",
+        show_header=True,
+        header_style="bold"
+    )
+    table.add_column("Paradigm", style="bold cyan")
+    table.add_column("Match", justify="right")
+    table.add_column("Degraded", justify="right")
+    table.add_column("Impossible", justify="right")
+    table.add_column("Mismatch", justify="right")
+    table.add_column("Rate", justify="right")
+
+    # Sort paradigms: P1, P2, M1, M2
+    sorted_paradigms = sorted(summaries.keys(), key=lambda x: (x[0], int(x[1:]) if x[1:].isdigit() else 0))
+
+    full_coverage_paradigms = []
+
+    for paradigm in sorted_paradigms:
+        summary = summaries[paradigm]
+        rate = summary.match_rate
+
+        # Color coding for rate
+        if rate >= 99.9:
+            rate_style = "green bold"
+            full_coverage_paradigms.append(paradigm)
+        elif rate >= 90:
+            rate_style = "green"
+        elif rate >= 70:
+            rate_style = "yellow"
+        else:
+            rate_style = "red"
+
+        # Color coding for mismatch (bugs!)
+        mismatch_style = "red bold" if summary.mismatch > 0 else "dim"
+
+        table.add_row(
+            paradigm,
+            f"[green]{summary.match}[/green]" if summary.match > 0 else "[dim]0[/dim]",
+            f"[yellow]{summary.degraded}[/yellow]" if summary.degraded > 0 else "[dim]0[/dim]",
+            f"[dim]{summary.impossible}[/dim]",
+            f"[{mismatch_style}]{summary.mismatch}[/{mismatch_style}]",
+            f"[{rate_style}]{rate:.0f}%[/{rate_style}]",
+        )
+
+    console.print(table)
+    console.print("[dim]Rate = (Match + Degraded) / (Total - Impossible)[/dim]")
+
+    # Show reference paradigms
+    if full_coverage_paradigms:
+        console.print(f"\n[green]✓ {', '.join(full_coverage_paradigms)} = référence complète (100%)[/green]")
+
+    # Show any mismatches as warnings
+    has_mismatch = any(s.mismatch > 0 for s in summaries.values())
+    if has_mismatch:
+        console.print("\n[red bold]⚠ ATTENTION: Des MISMATCH ont été détectés![/red bold]")
+        console.print("[red]Cela indique potentiellement des bugs dans les queries.[/red]")
+
+    console.print("\n")
 
 
 def _generate_matrix_html_report(matrix, output_path: Path) -> None:
@@ -2650,7 +2756,7 @@ def validate_expected_cmd(
         btb-runner validate-expected archive/ --fail-on-mismatch
     """
     try:
-        from ..validation import ExpectedAnswerStore, AnswerValidator, ValidationStatus
+        from ..validation import ExpectedAnswerStore, AnswerValidator, ValidationStatus, ParquetNormalizer
     except ImportError as e:
         console.print(f"[red]Failed to import validation module: {e}[/red]")
         raise typer.Exit(1)
@@ -2750,6 +2856,16 @@ def validate_expected_cmd(
         paradigms_to_check = [paradigm] if paradigm else list(results.results.keys())
         query_ids = queries.split(",") if queries else None
 
+        # Initialize ParquetNormalizer for loading full rows from archive
+        parquet_normalizer = None
+        if archive.is_dir() and (archive / "raw_results").exists():
+            parquet_normalizer = ParquetNormalizer(
+                archive_path=archive,
+                definitions_path=semantic_path if semantic_path.exists() else None,
+                rules_path=rules_path if rules_path.exists() else None,
+            )
+            console.print(f"[dim]Using Parquet archive for full results[/dim]")
+
         # Run validation
         all_validations: dict[str, dict[str, any]] = {}
         counters = {"MATCH": 0, "DEGRADED": 0, "IMPOSSIBLE": 0, "MISMATCH": 0}
@@ -2762,25 +2878,17 @@ def validate_expected_cmd(
             pr = results.results[p]
             all_validations[p] = {}
 
-            # Get raw results from archive if available
-            raw_results_dir = archive / "raw_results" / p if archive.is_dir() else None
-
             for level in pr.levels:
                 for qid, qr in level.queries.items():
                     if query_ids and qid not in query_ids:
                         continue
 
-                    # Try to load full rows from archive
+                    # Load full rows from archive (Parquet or JSON)
                     rows = []
-                    if raw_results_dir:
-                        raw_file = raw_results_dir / f"{qid}.json"
-                        if raw_file.exists():
-                            import json
-                            with open(raw_file) as f:
-                                data = json.load(f)
-                                rows = data.get("rows", [])
+                    if parquet_normalizer:
+                        rows, _ = parquet_normalizer.load_query_rows(qid, p)
 
-                    # If no raw rows, use sample_rows from results
+                    # Fall back to sample_rows from results if no archive
                     if not rows and qr.sample_rows:
                         rows = qr.sample_rows
                         if verbose:

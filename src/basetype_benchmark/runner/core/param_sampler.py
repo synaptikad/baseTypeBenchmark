@@ -455,7 +455,7 @@ def get_params_for_query(
         },
         "Q38": {
             "NODE_ID": sampled.equipment_id,
-            "KEY_TO_REMOVE": "legacy_protocol_id",
+            "KEY_TO_REMOVE": "deprecated_protocol",
         },
         # Q39-Q41: Tenant validation queries
         "Q39": {"TENANT_ID": sampled.tenant_id},
@@ -569,7 +569,7 @@ def _get_qw_params(
     if query_id == "QW8":
         return {
             "NODE_ID": file_params.get("qw8_node_id", sampled.equipment_id),
-            "KEY_TO_REMOVE": file_params.get("qw8_key_to_remove", "legacy_protocol_id"),
+            "KEY_TO_REMOVE": file_params.get("qw8_key_to_remove", "deprecated_protocol"),
         }
 
     # QW9: Tenant Move-In
@@ -600,99 +600,6 @@ def _get_qw_params(
         return {
             "SOURCE_TENANT_ID": file_params.get("source_tenant_id", sampled.tenant_id),
             "TARGET_TENANT_ID": file_params.get("target_tenant_id", sampled.tenant_id_alt),
-        }
-
-    # =========================================================================
-    # CLEANUP QUERIES (QW13-QW24) - Undo corresponding QW1-QW12 operations
-    # =========================================================================
-
-    # QW13: Cancel Space Reservation (cleanup for QW1/QW9 style reservations)
-    if query_id == "QW13":
-        return {
-            "TENANT_ID": file_params.get("qw1_tenant_id", sampled.tenant_id),
-            "SPACE_ID": file_params.get("qw1_space_id", sampled.space_id),
-            "START_DATE": file_params.get("qw1_start_date", sampled.reference_date),
-            "END_DATE": file_params.get("qw1_end_date", sampled.reference_date),
-        }
-
-    # QW14: Remove Calibration Tag (cleanup QW2)
-    if query_id == "QW14":
-        return {
-            "NODE_ID": file_params.get("qw2_node_id", sampled.equipment_id),
-            "KEY_TO_REMOVE": file_params.get("qw2_tag_key", "calibration_status"),
-        }
-
-    # QW15: Remove Relation (cleanup QW3)
-    if query_id == "QW15":
-        return {
-            "SOURCE_ID": file_params.get("qw3_source_id", sampled.meter_id),
-            "TARGET_ID": file_params.get("qw3_target_id", sampled.equipment_id),
-            "REL_TYPE": file_params.get("qw3_rel_type", "FEEDS"),
-        }
-
-    # QW16: Remove Maintenance Event (cleanup QW4)
-    if query_id == "QW16":
-        return {
-            "EQUIPMENT_ID": file_params.get("qw4_equipment_id", sampled.equipment_id),
-        }
-
-    # QW17: Remove Calibration Info (cleanup QW5)
-    if query_id == "QW17":
-        return {
-            "POINT_ID": file_params.get("qw5_point_id", sampled.point_id),
-        }
-
-    # QW18: Remove Firmware Info (cleanup QW6)
-    if query_id == "QW18":
-        return {
-            "EQUIPMENT_ID": file_params.get("qw6_equipment_id", sampled.equipment_id),
-        }
-
-    # QW19: Remove Capability (cleanup QW7)
-    if query_id == "QW19":
-        return {
-            "EQUIPMENT_ID": file_params.get("qw7_equipment_id", sampled.equipment_id),
-            "CAPABILITY_TO_REMOVE": file_params.get("qw7_new_capability", "demand_control_ventilation"),
-        }
-
-    # QW20: Restore Removed Key (cleanup QW8)
-    if query_id == "QW20":
-        return {
-            "QW8_NODE_ID": file_params.get("qw8_node_id", sampled.equipment_id),
-            "QW8_KEY_TO_REMOVE": file_params.get("qw8_key_to_remove", "legacy_protocol_id"),
-            "QW8_ORIGINAL_VALUE": file_params.get("qw8_original_value", "MODBUS_RTU_v1"),
-        }
-
-    # QW21: Cancel Move-In (cleanup QW9)
-    if query_id == "QW21":
-        return {
-            "TENANT_ID": file_params.get("tenant_id", sampled.tenant_id),
-            "SPACE_ID": file_params.get("qw_space_id", sampled.space_id),
-            "METER_ID": file_params.get("submeter_id", sampled.meter_id),
-        }
-
-    # QW22: Cancel Move-Out (cleanup QW10)
-    if query_id == "QW22":
-        return {
-            "TENANT_ID": file_params.get("tenant_id", sampled.tenant_id),
-            "SPACE_ID": file_params.get("qw_space_id", sampled.space_id),
-        }
-
-    # QW23: Revert Space Reassignment (cleanup QW11)
-    if query_id == "QW23":
-        return {
-            "SPACE_ID": file_params.get("qw_space_id", sampled.space_id),
-            "OLD_TENANT_ID": file_params.get("old_tenant_id", sampled.tenant_id),
-            "NEW_TENANT_ID": file_params.get("new_tenant_id", sampled.tenant_id_alt),
-        }
-
-    # QW24: Revert Tenant Merge (cleanup QW12)
-    if query_id == "QW24":
-        return {
-            "SOURCE_TENANT_ID": file_params.get("source_tenant_id", sampled.tenant_id),
-            "TARGET_TENANT_ID": file_params.get("target_tenant_id", sampled.tenant_id_alt),
-            "SPACE_IDS": file_params.get("space_ids", []),
-            "METER_IDS": file_params.get("meter_ids", []),
         }
 
     # Fallback: pas de params

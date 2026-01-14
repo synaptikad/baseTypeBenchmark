@@ -16,7 +16,7 @@ Removal validation, data cleanup, GDPR compliance.
 | Nom | Type | Description | Exemple |
 |-----|------|-------------|---------|
 | NODE_ID | string | ID du nœud | `eq_ahu_6` |
-| KEY_TO_CHECK | string | Clé à vérifier absente | `legacy_protocol_id` |
+| KEY_TO_CHECK | string | Clé à vérifier absente | `deprecated_protocol` |
 
 ## Support
 | P1 | P2 | M1 | M2 | O2 |

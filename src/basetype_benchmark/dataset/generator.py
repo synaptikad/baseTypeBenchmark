@@ -283,6 +283,11 @@ class MetadataGenerator:
         if domain in ['HVAC', 'IT', 'Security']:
             metadata['firmware_version'] = f"{self.rng.randint(1, 5)}.{self.rng.randint(0, 9)}.{self.rng.randint(0, 99)}"
 
+        # Clé dépréciée pour QW8 (suppression de clé metadata)
+        # Simule un ancien champ de protocole à nettoyer lors d'une migration
+        if domain in ['HVAC', 'Electrical']:
+            metadata['deprecated_protocol'] = self.rng.choice(['MODBUS_RTU_v1', 'BACNET_MSTP_v2', 'LONWORKS_v1'])
+
         return metadata
 
 
@@ -2062,11 +2067,19 @@ class DatasetGenerator:
             params["qw7_equipment_id"] = params["equipment_id"]
             params["qw7_new_capability"] = "benchmark_capability"
 
-        # QW8: Remove Metadata Key - remove a custom key
-        if params.get("equipment_id"):
-            params["qw8_node_id"] = params["equipment_id"]
-            params["qw8_key_to_remove"] = "legacy_protocol_id"
-            params["qw8_original_value"] = "MODBUS_RTU_v1"
+        # QW8: Remove Metadata Key - remove deprecated_protocol key
+        # Find an equipment with deprecated_protocol in metadata (HVAC or Electrical domain)
+        equipment_with_deprecated_protocol = [
+            n for n in self.nodes
+            if n.type == "Equipment"
+            and n.metadata
+            and "deprecated_protocol" in n.metadata
+        ]
+        if equipment_with_deprecated_protocol:
+            target_eq = equipment_with_deprecated_protocol[0]
+            params["qw8_node_id"] = target_eq.id
+            params["qw8_key_to_remove"] = "deprecated_protocol"
+            params["qw8_original_value"] = target_eq.metadata["deprecated_protocol"]
 
         # =====================================================================
         # TENANT WRITE QUERY PARAMETERS (QW9-QW12)
@@ -2097,30 +2110,15 @@ class DatasetGenerator:
                     params["qw_space_id"] = edge.target_id
                     break
 
-        # QW24: Collect space_ids and meter_ids for tenant merge revert
-        # These are the spaces occupied by source_tenant and meters linked to source_tenant
-        if params.get("source_tenant_id"):
-            source_tenant = params["source_tenant_id"]
-            # Spaces occupied by source tenant (OCCUPIES edges)
-            space_ids = [
-                edge.target_id for edge in self.edges
-                if edge.rel_type == "OCCUPIES" and edge.source_id == source_tenant
-            ]
-            params["space_ids"] = space_ids[:5] if space_ids else []  # Limit to 5 for test
-
-            # Meters linked to source tenant (METERS_TENANT edges)
-            meter_ids = [
-                edge.source_id for edge in self.edges
-                if edge.rel_type == "METERS_TENANT" and edge.target_id == source_tenant
-            ]
-            params["meter_ids"] = meter_ids[:5] if meter_ids else []  # Limit to 5 for test
-
         return params
 
-    def _write_query_params(self, output_dir: Path):
-        """Write queries_params.yaml with validated parameters."""
-        params = self._generate_query_params()
+    def _write_query_params(self, output_dir: Path, params: Dict[str, Any]):
+        """Write queries_params.yaml with validated parameters.
 
+        Args:
+            output_dir: Directory to write to
+            params: Pre-generated query parameters (must be generated once and reused)
+        """
         output = {
             "metadata": {
                 "generator_version": "3.0",
@@ -2187,26 +2185,32 @@ class DatasetGenerator:
         ts_table = pa.Table.from_pylist(ts_data)
         pq.write_table(ts_table, output_dir / "timeseries.parquet")
 
-        # Write queries_params.yaml
-        self._write_query_params(output_dir)
+        # Generate query parameters ONCE and reuse for both files
+        # This ensures queries_params.yaml and expected_answers are aligned
+        params = self._generate_query_params()
 
-        # Generate expected answers for validation
-        self._write_expected_answers(output_dir)
+        # Write queries_params.yaml
+        self._write_query_params(output_dir, params)
+
+        # Generate expected answers using the SAME params
+        self._write_expected_answers(output_dir, params)
 
         print(f"Exported to Parquet: {output_dir}")
         return output_dir
 
-    def _write_expected_answers(self, output_dir: Path):
-        """Generate and write expected answers for Q1-Q23."""
+    def _write_expected_answers(self, output_dir: Path, params: Dict[str, Any]):
+        """Generate and write expected answers for all queries.
+
+        Args:
+            output_dir: Directory to write to
+            params: Pre-generated query parameters (must be same as used for queries_params.yaml)
+        """
         try:
             from .expected_answers import ExpectedAnswerGenerator, write_expected_answers
 
             print("Generating expected answers for validation...")
 
-            # Load parameters
-            params = self._generate_query_params()
-
-            # Generate answers
+            # Generate answers using the same params as queries_params.yaml
             generator = ExpectedAnswerGenerator(
                 nodes=self.nodes,
                 edges=self.edges,
@@ -2277,11 +2281,15 @@ class DatasetGenerator:
         with open(output_dir / "timeseries.json", 'w', encoding='utf-8') as f:
             json.dump(ts_data, f, indent=2)
 
-        # Write queries_params.yaml
-        self._write_query_params(output_dir)
+        # Generate query parameters ONCE and reuse for both files
+        # This ensures queries_params.yaml and expected_answers are aligned
+        params = self._generate_query_params()
 
-        # Generate expected answers for validation
-        self._write_expected_answers(output_dir)
+        # Write queries_params.yaml
+        self._write_query_params(output_dir, params)
+
+        # Generate expected answers using the SAME params
+        self._write_expected_answers(output_dir, params)
 
         print(f"Exported to JSON: {output_dir}")
         return output_dir

@@ -7,5 +7,5 @@
 MATCH (n {id: $node_id})
 RETURN n.id AS node_id,
        n.name AS node_name,
-       n.custom_tag IS NULL AS tag_removed,
+       n.custom_tag IS NULL AS key_removed,
        keys(n) AS remaining_properties;

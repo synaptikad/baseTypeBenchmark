@@ -3,7 +3,7 @@
 Sprint 3 - Benchmark BaseType V3
 
 Provides structured archiving of benchmark results:
-- Raw query results per paradigm/query
+- Raw query results per paradigm/query (Parquet format for efficiency)
 - Run metadata (config, params, git hash)
 - Enables validation replay without re-executing queries
 - Efficiency analysis with business-relevant thresholds
@@ -13,8 +13,8 @@ Archive structure:
     ├── metadata.json           # Config, params, git hash, timestamps
     ├── raw_results/
     │   ├── P1/
-    │   │   ├── Q1.json         # Full query result (all rows)
-    │   │   ├── Q2.json
+    │   │   ├── Q1.parquet      # Full query result rows (compact)
+    │   │   ├── Q1.meta.json    # Metadata (params, hash, timing)
     │   │   └── ...
     │   ├── M1/
     │   │   └── ...
@@ -35,6 +35,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import yaml
 
 
@@ -137,19 +139,25 @@ class QueryArchive:
     execution_time_ms: float = 0.0
     ram_limit_mb: int = 0
 
-    def to_dict(self) -> dict:
+    def to_meta_dict(self) -> dict:
+        """Return metadata only (without rows) for JSON storage."""
         return {
             "query_id": self.query_id,
             "paradigm": self.paradigm,
             "timestamp": self.timestamp.isoformat(),
             "row_count": self.row_count,
-            "rows": self.rows,
             "column_names": self.column_names,
             "content_hash": self.content_hash,
             "parameters": self.parameters,
             "execution_time_ms": self.execution_time_ms,
             "ram_limit_mb": self.ram_limit_mb,
         }
+
+    def to_dict(self) -> dict:
+        """Full dict including rows (for backwards compatibility)."""
+        result = self.to_meta_dict()
+        result["rows"] = self.rows
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "QueryArchive":
@@ -166,10 +174,63 @@ class QueryArchive:
             ram_limit_mb=data.get("ram_limit_mb", 0),
         )
 
+    @classmethod
+    def from_parquet(cls, parquet_path: Path, meta_path: Path) -> "QueryArchive":
+        """Load QueryArchive from Parquet + metadata files."""
+        # Load metadata
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        # Load rows from Parquet
+        table = pq.read_table(parquet_path)
+        rows = table.to_pylist()
+
+        return cls(
+            query_id=meta.get("query_id", ""),
+            paradigm=meta.get("paradigm", ""),
+            timestamp=datetime.fromisoformat(meta["timestamp"]) if meta.get("timestamp") else datetime.now(),
+            row_count=meta.get("row_count", len(rows)),
+            rows=rows,
+            column_names=meta.get("column_names", []),
+            content_hash=meta.get("content_hash", ""),
+            parameters=meta.get("parameters", {}),
+            execution_time_ms=meta.get("execution_time_ms", 0.0),
+            ram_limit_mb=meta.get("ram_limit_mb", 0),
+        )
+
     def compute_hash(self) -> str:
         """Compute SHA256 hash of row data for integrity verification."""
         content = json.dumps(self.rows, sort_keys=True, default=str)
         return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    def to_arrow_table(self) -> pa.Table:
+        """Convert rows to PyArrow Table for Parquet storage."""
+        if not self.rows:
+            # Empty table with no columns
+            return pa.table({})
+
+        # Convert list of dicts to columnar format
+        # Handle mixed types by converting to strings for problematic columns
+        columns = {}
+        if self.rows:
+            # Get all unique keys across all rows
+            all_keys = set()
+            for row in self.rows:
+                all_keys.update(row.keys())
+
+            for key in all_keys:
+                values = [row.get(key) for row in self.rows]
+                # Try to create array, fall back to string if mixed types
+                try:
+                    columns[key] = pa.array(values)
+                except (pa.ArrowInvalid, pa.ArrowTypeError):
+                    # Convert to strings for mixed/complex types
+                    columns[key] = pa.array([
+                        json.dumps(v, default=str) if not isinstance(v, (str, type(None))) else v
+                        for v in values
+                    ])
+
+        return pa.table(columns)
 
 
 class ResultsArchive:
@@ -315,13 +376,23 @@ class ResultsArchive:
         )
         archive.content_hash = archive.compute_hash()
 
-        # Save to file
+        # Save to files (Parquet for rows, JSON for metadata)
         paradigm_dir = self._get_run_path(self._current_run) / "raw_results" / paradigm
         paradigm_dir.mkdir(parents=True, exist_ok=True)
 
-        result_path = paradigm_dir / f"{query_id}.json"
-        with open(result_path, "w", encoding="utf-8") as f:
-            json.dump(archive.to_dict(), f, indent=2, default=str)
+        # Save rows as Parquet (compact, efficient)
+        parquet_path = paradigm_dir / f"{query_id}.parquet"
+        if rows:
+            table = archive.to_arrow_table()
+            pq.write_table(table, parquet_path, compression='snappy')
+        else:
+            # Empty result - write empty parquet
+            pq.write_table(pa.table({}), parquet_path)
+
+        # Save metadata as JSON (small, human-readable)
+        meta_path = paradigm_dir / f"{query_id}.meta.json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(archive.to_meta_dict(), f, indent=2, default=str)
 
         # Track parameters in metadata
         if self._metadata and parameters:
@@ -922,18 +993,25 @@ class ArchivedRun:
 
     @property
     def queries(self) -> list[str]:
-        """Get list of queries in this run."""
+        """Get list of queries in this run (supports Parquet and JSON)."""
         queries = set()
         raw_results = self.run_path / "raw_results"
         if raw_results.exists():
             for paradigm_dir in raw_results.iterdir():
                 if paradigm_dir.is_dir():
-                    for query_file in paradigm_dir.glob("Q*.json"):
+                    # Check for Parquet files (new format)
+                    for query_file in paradigm_dir.glob("*.parquet"):
                         queries.add(query_file.stem)
+                    # Check for JSON files (legacy format, exclude .meta.json)
+                    for query_file in paradigm_dir.glob("*.json"):
+                        if not query_file.name.endswith(".meta.json"):
+                            queries.add(query_file.stem)
         return sorted(queries)
 
     def get_query(self, query_id: str, paradigm: str) -> QueryArchive | None:
         """Get archived query result.
+
+        Supports both Parquet (new) and JSON (legacy) formats.
 
         Args:
             query_id: Query identifier
@@ -946,16 +1024,27 @@ class ArchivedRun:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        result_path = self.run_path / "raw_results" / paradigm / f"{query_id}.json"
-        if not result_path.exists():
-            return None
+        paradigm_dir = self.run_path / "raw_results" / paradigm
 
-        with open(result_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # Try Parquet format first (new)
+        parquet_path = paradigm_dir / f"{query_id}.parquet"
+        meta_path = paradigm_dir / f"{query_id}.meta.json"
 
-        archive = QueryArchive.from_dict(data)
-        self._cache[cache_key] = archive
-        return archive
+        if parquet_path.exists() and meta_path.exists():
+            archive = QueryArchive.from_parquet(parquet_path, meta_path)
+            self._cache[cache_key] = archive
+            return archive
+
+        # Fall back to JSON format (legacy)
+        json_path = paradigm_dir / f"{query_id}.json"
+        if json_path.exists():
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            archive = QueryArchive.from_dict(data)
+            self._cache[cache_key] = archive
+            return archive
+
+        return None
 
     def get_parameters(self, query_id: str) -> dict[str, Any]:
         """Get parameters used for a query.

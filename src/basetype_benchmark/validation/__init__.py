@@ -22,7 +22,7 @@ from .models import (
     ValidationResult,
     ValidationStatus,
 )
-from .normalizer import FullResultNormalizer
+from .normalizer import FullResultNormalizer, ParquetNormalizer
 from .expected_store import ExpectedAnswerStore
 from .validator import AnswerValidator, ComparativeValidator
 
@@ -35,6 +35,7 @@ __all__ = [
     "ValidationStatus",
     # Core
     "FullResultNormalizer",
+    "ParquetNormalizer",
     "ExpectedAnswerStore",
     "AnswerValidator",
     "ComparativeValidator",

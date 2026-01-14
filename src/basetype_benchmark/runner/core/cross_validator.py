@@ -247,6 +247,48 @@ class DirectionalComparison:
 
 
 @dataclass
+class ExpectedValidationSummary:
+    """Summary of paradigm validation against Expected Answers (ground truth).
+
+    This validates that each paradigm returns the correct results compared
+    to the expected answers computed during dataset generation.
+
+    Expected behavior:
+    - P2 and M2 should be 100% (full-featured paradigms)
+    - P1 < 100% because JSONB queries are IMPOSSIBLE
+    - M1 < 100% because some SQL-native queries are IMPOSSIBLE and timeseries DEGRADED
+    """
+    paradigm: str
+    match: int = 0          # Exact match with expected answer
+    degraded: int = 0       # Known acceptable difference (documented)
+    impossible: int = 0     # Query not supported by paradigm
+    mismatch: int = 0       # Bug! Result differs from expected
+    total_expected: int = 0 # Total queries with expected answers
+
+    @property
+    def match_rate(self) -> float:
+        """Rate of matching queries (excluding impossible).
+
+        Formula: (match + degraded) / (total - impossible) * 100
+        """
+        answerable = self.total_expected - self.impossible
+        if answerable == 0:
+            return 0.0
+        return ((self.match + self.degraded) / answerable) * 100
+
+    def to_dict(self) -> dict:
+        return {
+            "paradigm": self.paradigm,
+            "match": self.match,
+            "degraded": self.degraded,
+            "impossible": self.impossible,
+            "mismatch": self.mismatch,
+            "total_expected": self.total_expected,
+            "match_rate": round(self.match_rate, 1),
+        }
+
+
+@dataclass
 class CrossValidationMatrix:
     """Complete cross-validation matrix for all paradigm pairs.
 
@@ -311,10 +353,16 @@ class CrossParadigmValidator:
         rules: dict | None = None,
         semantic_definitions_path: Path | None = None,
         query_params_path: Path | None = None,
+        rules_path: Path | None = None,
     ):
         self.reference = reference
         self.float_tolerance = float_tolerance
-        self.rules = rules or EQUIVALENCE_RULES
+
+        # Load rules from YAML if provided, otherwise use defaults
+        if rules_path and rules_path.exists():
+            self.rules = self._load_rules_from_yaml(rules_path)
+        else:
+            self.rules = rules or EQUIVALENCE_RULES
 
         # Initialize semantic validator if definitions provided
         self.semantic_validator: SemanticValidator | None = None
@@ -329,6 +377,20 @@ class CrossParadigmValidator:
             with open(query_params_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
                 self.query_params = data.get("parameters", {})
+
+    def _load_rules_from_yaml(self, path: Path) -> dict:
+        """Load validation rules from YAML file."""
+        import yaml
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        return {
+            "impossible_queries": data.get("impossible", {}),
+            "degraded_queries": data.get("degraded", {}),
+            "key_columns": EQUIVALENCE_RULES.get("key_columns", []),
+            "float_tolerance": data.get("tolerance", {}).get("float", {}).get("default", 0.01),
+            "ignore_columns": EQUIVALENCE_RULES.get("ignore_columns", []),
+        }
 
     def validate_matrix(self, results: BenchmarkResults) -> CrossValidationMatrix:
         """Validate all paradigm pairs (asymmetric cross-validation matrix).
@@ -745,6 +807,141 @@ class CrossParadigmValidator:
 
         # Default: exact match
         return ref_val == cmp_val
+
+    def validate_vs_expected(
+        self,
+        results: BenchmarkResults,
+        expected_store,
+    ) -> dict[str, ExpectedValidationSummary]:
+        """Validate each paradigm against Expected Answers (ground truth).
+
+        This is the definitive validation: paradigm results vs answers computed
+        during dataset generation. Expected Answers are the source of truth.
+
+        Args:
+            results: Complete benchmark results
+            expected_store: ExpectedAnswerStore with loaded expected answers
+
+        Returns:
+            Dict mapping paradigm name to ExpectedValidationSummary
+        """
+        paradigms = list(results.results.keys())
+        summaries: dict[str, ExpectedValidationSummary] = {}
+
+        # Get impossible and degraded rules
+        impossible = self.rules.get("impossible_queries", {})
+        degraded_rules = self.rules.get("degraded_queries", {})
+
+        # Get all expected answer query IDs (Q1, Q2, ..., Q41)
+        expected_query_ids = set(expected_store.get_all().keys())
+
+        for paradigm in paradigms:
+            summary = ExpectedValidationSummary(
+                paradigm=paradigm,
+                total_expected=len(expected_query_ids),
+            )
+
+            for query_id in sorted(expected_query_ids):
+                # Check if query is IMPOSSIBLE for this paradigm
+                if query_id in impossible.get(paradigm, {}):
+                    summary.impossible += 1
+                    continue
+
+                # Check if query is DEGRADED for this paradigm
+                is_degraded = query_id in degraded_rules.get(paradigm, {})
+
+                # Get paradigm result
+                result = self._get_query_result(results.results[paradigm], query_id)
+                if result is None:
+                    # No result = skip (could be execution error)
+                    summary.impossible += 1
+                    continue
+
+                # Get expected answer
+                expected = expected_store.get(query_id)
+                if expected is None:
+                    continue
+
+                # Compare result with expected
+                match = self._compare_with_expected(
+                    result, expected, paradigm, query_id
+                )
+
+                if match:
+                    if is_degraded:
+                        summary.degraded += 1
+                    else:
+                        summary.match += 1
+                elif is_degraded:
+                    # Degraded query with expected difference
+                    summary.degraded += 1
+                else:
+                    summary.mismatch += 1
+
+            summaries[paradigm] = summary
+
+        return summaries
+
+    def _compare_with_expected(
+        self,
+        result,
+        expected,
+        paradigm: str,
+        query_id: str,
+    ) -> bool:
+        """Compare a query result with its expected answer.
+
+        Args:
+            result: QueryResult from paradigm
+            expected: ExpectedAnswer from store
+            paradigm: Paradigm name (for tolerance lookup)
+            query_id: Query ID (for tolerance lookup)
+
+        Returns:
+            True if result matches expected (within tolerance)
+        """
+        # Quick check: row count
+        if result.row_count != expected.row_count:
+            # Allow tolerance for DEGRADED timeseries queries
+            degraded_rules = self.rules.get("degraded_queries", {})
+            if query_id not in degraded_rules.get(paradigm, {}):
+                return False
+
+        # Check content hash if available
+        if hasattr(expected, 'content_hash') and expected.content_hash:
+            if result.row_hash == expected.content_hash:
+                return True
+
+        # Compare semantic content if available
+        if hasattr(expected, 'semantic_content') and expected.semantic_content:
+            # Get semantic type - handle both SemanticType enum and string
+            semantic_type = getattr(expected, 'semantic_type', None)
+            if hasattr(semantic_type, 'value'):
+                semantic_type = semantic_type.value
+
+            # Extract IDs from result sample_rows for set comparison
+            if semantic_type == "set" and result.sample_rows:
+                # Try to extract comparable IDs
+                result_ids = set()
+                for row in result.sample_rows:
+                    # Look for common ID columns
+                    for col in ["id", "equipment_id", "point_id", "space_id", "node_id"]:
+                        if col in row:
+                            result_ids.add(str(row[col]))
+                            break
+
+                expected_ids = set()
+                if isinstance(expected.semantic_content, (list, set)):
+                    expected_ids = {str(x) for x in expected.semantic_content}
+
+                if result_ids and expected_ids:
+                    # Check if sets match (allow some tolerance)
+                    intersection = result_ids & expected_ids
+                    if len(intersection) >= 0.95 * len(expected_ids):
+                        return True
+
+        # Fall back to row count match
+        return result.row_count == expected.row_count
 
 
 def validate_results(

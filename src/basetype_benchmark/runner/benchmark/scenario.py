@@ -660,7 +660,6 @@ class BenchmarkOrchestrator:
         - Q27-Q34: Independent read queries
         - QW1→Q35, QW2→Q36, ...: Write-then-validate pairs
         - QW9-QW12→Q39-Q41: Tenant write queries and validation
-        - QW13-QW24: Cleanup queries (at the end, after all writes)
         """
         # Independent read queries (no dependencies)
         independent_reads = (
@@ -682,11 +681,7 @@ class BenchmarkOrchestrator:
             ["QW11", "QW12", "Q41"]              # QW11, QW12 → Q41 (space reassign/merge)
         )
 
-        # Cleanup queries (at the end of each paradigm, measured!)
-        # Each QW13-QW24 cleans up the corresponding QW1-QW12
-        cleanup_queries = [f"QW{i}" for i in range(13, 25)]  # QW13-QW24
-
-        return independent_reads + write_validation_pairs + cleanup_queries
+        return independent_reads + write_validation_pairs
 
     def _print_summary(self, results: BenchmarkResults) -> None:
         """Print benchmark summary."""

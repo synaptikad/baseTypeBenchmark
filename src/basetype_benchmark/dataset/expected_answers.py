@@ -294,13 +294,20 @@ class ExpectedAnswerGenerator:
         )
 
     def _gen_q2(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q2: Impact analysis - equipment upstream affected by failure."""
+        """Q2: Impact analysis - equipment upstream affected by failure.
+
+        Aligns with SQL query which uses: FEEDS, SERVES, CONTAINS relations.
+        """
         equipment_id = params.get("equipment_id")
         if not equipment_id:
             return None
 
-        # Traverse upstream (reverse of any relationship)
-        upstream_ids = self._traverse_upstream(equipment_id)
+        # Traverse upstream using same relations as SQL query
+        # SQL uses: rel_type IN ('FEEDS', 'SERVES', 'CONTAINS')
+        upstream_ids = self._traverse_upstream(
+            equipment_id,
+            rel_types=["FEEDS", "SERVES", "CONTAINS"]
+        )
 
         full_rows = []
         for node_id in upstream_ids:
@@ -2088,41 +2095,46 @@ class ExpectedAnswerGenerator:
     # =========================================================================
 
     def _gen_q35(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q35: Validate Timeseries Append - validates QW1 write.
+        """Q35: Validate Space Reservation - validates QW1 write.
 
-        Expected result after QW1 adds timeseries data.
+        Expected result after QW1 creates an OCCUPIES edge between tenant and space.
         Uses qw1_* params from generator.
+
+        Q35 returns: tenants occupying a space during a given period
+        After QW1, the tenant should appear in the result.
         """
-        point_id = params.get("point_id")
-        reference_date = params.get("reference_date")
+        space_id = params.get("qw1_space_id")
+        tenant_id = params.get("qw1_tenant_id")
+        start_date = params.get("qw1_start_date")
+        end_date = params.get("qw1_end_date")
 
-        if not point_id:
+        if not space_id or not tenant_id or not start_date or not end_date:
             return None
 
-        # Get QW1 parameters (what will be written)
-        qw1_timestamps = params.get("qw1_timestamps", [])
-        qw1_values = params.get("qw1_values", [])
-
-        if not qw1_timestamps or not qw1_values:
+        # Get tenant info
+        tenant = self.nodes_by_id.get(tenant_id)
+        if not tenant:
             return None
 
-        # Expected result: the data that QW1 will write
+        # Expected result: the tenant that will occupy the space after QW1
         result = {
-            "point_id": point_id,
-            "chunk_date": reference_date[:10] if isinstance(reference_date, str) else str(reference_date)[:10],
-            "timestamp_count": len(qw1_timestamps),
-            "value_count": len(qw1_values),
-            "last_timestamps": qw1_timestamps[-3:] if len(qw1_timestamps) >= 3 else qw1_timestamps,
-            "last_values": qw1_values[-3:] if len(qw1_values) >= 3 else qw1_values,
+            "tenant_id": tenant_id,
+            "tenant_name": tenant.name,
+            "start_date": start_date,
+            "end_date": end_date,
         }
 
         return ExpectedAnswer(
             query_id="Q35",
-            parameters={"point_id": point_id, "reference_date": reference_date},
-            answer_type="document",
-            semantic_content=result,
+            parameters={
+                "qw1_space_id": space_id,
+                "qw1_start_date": start_date,
+                "qw1_end_date": end_date,
+            },
+            answer_type="set",  # Set of tenant occupations
+            semantic_content={tenant_id},  # Just the tenant ID as semantic key
             row_count=1,
-            content_hash=_compute_hash(result),
+            content_hash=_compute_hash({tenant_id}),
             full_rows=[result],
         )
 
