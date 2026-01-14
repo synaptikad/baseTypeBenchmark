@@ -863,7 +863,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif explore tout avant filtrage"}
       M1: {status: NATIVE, note: "shortestPath() natif Cypher"}
       M2: {status: NATIVE, note: "shortestPath() natif Cypher"}
-      O2: {status: VERY_DEGRADED, note: "BFS applicatif sur résultats SPARQL"}
+      O2: {status: IMPOSSIBLE, note: "Pas de shortestPath SPARQL, BFS applicatif trop lent"}
 
   Q21:
     name: "Electrical Resilience"
@@ -905,7 +905,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif exhaustif - explosion combinatoire"}
       M1: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
       M2: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
-      O2: {status: VERY_DEGRADED, note: "Énumération BFS applicative"}
+      O2: {status: IMPOSSIBLE, note: "Énumération chemins applicative trop lente"}
 
   Q22:
     name: "Equipment Siblings"
@@ -1444,7 +1444,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif avec accumulation poids, non optimal"}
       M1: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
       M2: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
-      O2: {status: VERY_DEGRADED, note: "Dijkstra applicatif sur graphe SPARQL"}
+      O2: {status: IMPOSSIBLE, note: "Dijkstra applicatif trop lent"}
 
   Q28:
     name: "Tenant Impact Chain"
@@ -1510,7 +1510,7 @@ queries:
       P2: {status: DEGRADED, note: "CTE avec ARRAY accumulation, risque mémoire"}
       M1: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
       M2: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
-      O2: {status: VERY_DEGRADED, note: "DFS applicatif sur graphe SPARQL"}
+      O2: {status: IMPOSSIBLE, note: "DFS applicatif trop lent"}
 
   Q30:
     name: "Failure Impact Analysis"
