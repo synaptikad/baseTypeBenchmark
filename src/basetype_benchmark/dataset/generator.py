@@ -1991,25 +1991,19 @@ class DatasetGenerator:
         # WRITE QUERY PARAMETERS (QW1-QW8)
         # =====================================================================
 
-        # QW1: Timeseries Append - use existing point with timeseries
-        # Generate sample data for batch insert
-        if params.get("point_id") and self.timeseries:
-            sample_point = params["point_id"]
-            # Use reference_date for new timestamps
-            ref_date = self.reference_date
-            params["qw1_point_ids"] = [sample_point, sample_point, sample_point]
-            params["qw1_timestamps"] = [
-                (ref_date + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                for i in range(3)
+        # QW1: Space Reservation - tenant reserves a space for a period
+        if params.get("tenant_id"):
+            available_spaces = [
+                n.id for n in self.nodes
+                if n.type == "Space" and n.id != params.get("qw_space_id")
             ]
-            params["qw1_values"] = [21.5, 22.0, 21.8]
-            # M1 format: chunks array
-            params["qw1_chunks"] = [{
-                "point_id": sample_point,
-                "date": ref_date.strftime("%Y-%m-%d"),
-                "timestamps": params["qw1_timestamps"],
-                "values": params["qw1_values"],
-            }]
+            if available_spaces:
+                params["qw1_space_id"] = self.rng.choice(available_spaces)
+                params["qw1_tenant_id"] = params["tenant_id"]
+                qw1_start = self.reference_date + timedelta(days=1)
+                qw1_end = qw1_start + timedelta(days=7)
+                params["qw1_start_date"] = qw1_start.strftime("%Y-%m-%d")
+                params["qw1_end_date"] = qw1_end.strftime("%Y-%m-%d")
 
         # QW2: Metadata Update - use equipment_id, add a custom tag
         if params.get("equipment_id"):
@@ -2072,6 +2066,7 @@ class DatasetGenerator:
         if params.get("equipment_id"):
             params["qw8_node_id"] = params["equipment_id"]
             params["qw8_key_to_remove"] = "legacy_protocol_id"
+            params["qw8_original_value"] = "MODBUS_RTU_v1"
 
         # =====================================================================
         # TENANT WRITE QUERY PARAMETERS (QW9-QW12)

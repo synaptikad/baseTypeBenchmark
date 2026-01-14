@@ -30,6 +30,9 @@ categories:
   write_workload:
     description: "Workloads d'écriture (ingestion, mutation)"
     queries: [QW1, QW2, QW3]
+  cleanup_workload:
+    description: "Cleanup queries pour annuler les QW (rollback, purge)"
+    queries: [QW13, QW14, QW15, QW16, QW17, QW18, QW19, QW20, QW21, QW22, QW23, QW24]
   jsonb_write:
     description: "Écritures JSONB avancées (P2=NATIVE)"
     queries: [QW4, QW5, QW6, QW7, QW8]
@@ -986,48 +989,53 @@ queries:
   # -------------------------------------------------------------------------
 
   QW1:
-    name: "Timeseries Append"
+    name: "Space Reservation"
     category: write_workload
     validates: Q35  # Q35 reads what QW1 writes
     intention: |
-      Simuler l'ingestion continue de nouvelles mesures IoT.
-      Append-only sur la table timeseries (usage middleware/gateway).
-    use_case: "Ingestion capteurs, gateway IoT, middleware temps réel"
+      Créer une réservation de salle par un tenant sur une période donnée.
+      Crée un edge OCCUPIES avec dates de début et fin.
+    use_case: "Gestion des espaces, réservation de salles de réunion"
     parameters:
-      - name: POINT_IDS
-        type: array_string
-        description: "Liste d'IDs de points pour l'insertion batch"
+      - name: QW1_TENANT_ID
+        type: string
+        description: "ID du locataire qui réserve"
         format:
-          sql: "%(point_ids)s"
-          cypher: "$point_ids"
-        example: "['point_1', 'point_2', 'point_3']"
-      - name: TIMESTAMPS
-        type: array_timestamp
-        description: "Liste de timestamps correspondants"
+          sql: "%(qw1_tenant_id)s"
+          cypher: "$qw1_tenant_id"
+        example: "tenant_1"
+      - name: QW1_SPACE_ID
+        type: string
+        description: "ID de la salle à réserver"
         format:
-          sql: "%(timestamps)s"
-          cypher: "$timestamps"
-        example: "['2024-01-15T10:00:00Z', '2024-01-15T10:00:01Z']"
-      - name: VALUES
-        type: array_float
-        description: "Liste de valeurs mesurées"
+          sql: "%(qw1_space_id)s"
+          cypher: "$qw1_space_id"
+        example: "space_1_2_5"
+      - name: QW1_START_DATE
+        type: date
+        description: "Date début de la réservation"
         format:
-          sql: "%(values)s"
-          cypher: "$values"
-        example: "[21.5, 22.0, 21.8]"
-    write_mode: append
+          sql: "%(qw1_start_date)s"
+          cypher: "$qw1_start_date"
+        example: "2024-01-20"
+      - name: QW1_END_DATE
+        type: date
+        description: "Date fin de la réservation"
+        format:
+          sql: "%(qw1_end_date)s"
+          cypher: "$qw1_end_date"
+        example: "2024-01-27"
+    write_mode: insert
     result_schema:
       columns:
-        - {name: rows_written, type: integer, description: "Nombre de lignes insérées"}
-      metrics:
-        - rows_written
-        - throughput_rows_per_sec
+        - {name: source_id, type: string, description: "ID du tenant"}
+        - {name: target_id, type: string, description: "ID de la salle"}
     paradigm_status:
-      P1: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
-      P2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
-      M1: {status: NATIVE, note: "UNWIND + MERGE TimeseriesChunk (daily chunking)"}
-      M2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
-      O2: {status: NATIVE, note: "INSERT INTO ts.timeseries via Timescale partagé"}
+      P1: {status: NATIVE, note: "INSERT INTO edges avec colonnes start_date, end_date"}
+      P2: {status: NATIVE, note: "INSERT INTO edges avec properties JSONB"}
+      M1: {status: NATIVE, note: "CREATE (Tenant)-[:OCCUPIES {dates}]->(Space)"}
+      M2: {status: NATIVE, note: "CREATE (Tenant)-[:OCCUPIES {dates}]->(Space)"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL INSERT complexe pour relations temporelles"}
 
   QW2:
     name: "Metadata Update"
@@ -1698,43 +1706,48 @@ queries:
   # -------------------------------------------------------------------------
 
   Q35:
-    name: "Validate Timeseries Append"
+    name: "Validate Space Reservation"
     category: write_validation
     validates_write: QW1  # Reads what QW1 wrote
     intention: |
-      Valider que les données timeseries ont été correctement ajoutées par QW1.
-      Vérifie les timestamps et valeurs dans le chunk journalier.
-    use_case: "Validation ingestion IoT, audit qualité données"
+      Valider qui occupe une salle sur une période donnée.
+      Retourne les tenants avec périodes chevauchantes.
+    use_case: "Vérification disponibilité, audit occupation, planning"
     parameters:
-      - name: POINT_ID
+      - name: QW1_SPACE_ID
         type: string
-        description: "ID du point dont on vérifie les timeseries"
+        description: "ID de la salle à vérifier"
         format:
-          sql: "%(point_id)s"
-          cypher: "$point_id"
-        example: "point_temp_101"
-      - name: REFERENCE_DATE
+          sql: "%(qw1_space_id)s"
+          cypher: "$qw1_space_id"
+        example: "space_1_2_5"
+      - name: QW1_START_DATE
         type: date
-        description: "Date de référence pour filtrer le chunk"
+        description: "Date début de la période à vérifier"
         format:
-          sql: "%(reference_date)s"
-          cypher: "$reference_date"
-        example: "2024-06-01"
+          sql: "%(qw1_start_date)s"
+          cypher: "$qw1_start_date"
+        example: "2024-01-20"
+      - name: QW1_END_DATE
+        type: date
+        description: "Date fin de la période à vérifier"
+        format:
+          sql: "%(qw1_end_date)s"
+          cypher: "$qw1_end_date"
+        example: "2024-01-27"
     result_schema:
       columns:
-        - {name: point_id, type: string, description: "ID du point"}
-        - {name: chunk_date, type: date, description: "Date du chunk"}
-        - {name: timestamp_count, type: integer, description: "Nombre de timestamps"}
-        - {name: value_count, type: integer, description: "Nombre de valeurs"}
-        - {name: last_timestamps, type: array, description: "Derniers timestamps ajoutés"}
-        - {name: last_values, type: array, description: "Dernières valeurs ajoutées"}
-      order_by: []
+        - {name: tenant_id, type: string, description: "ID du tenant"}
+        - {name: tenant_name, type: string, description: "Nom du tenant"}
+        - {name: start_date, type: date, description: "Date début occupation"}
+        - {name: end_date, type: date, description: "Date fin occupation"}
+      order_by: [start_date]
     paradigm_status:
-      P1: {status: NATIVE, note: "SELECT sur ts.timeseries avec DATE filter"}
-      P2: {status: NATIVE, note: "SELECT sur ts.timeseries avec DATE filter"}
-      M1: {status: NATIVE, note: "MATCH TimeseriesChunk avec date filter"}
-      M2: {status: NATIVE, note: "SELECT sur ts.timeseries via Timescale"}
-      O2: {status: NATIVE, note: "SELECT sur ts.timeseries via Timescale"}
+      P1: {status: NATIVE, note: "SELECT edges avec colonnes start_date, end_date"}
+      P2: {status: NATIVE, note: "SELECT edges avec JSONB properties dates"}
+      M1: {status: NATIVE, note: "MATCH (Tenant)-[r:OCCUPIES]->(Space) WHERE dates"}
+      M2: {status: NATIVE, note: "MATCH (Tenant)-[r:OCCUPIES]->(Space) WHERE dates"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL pour relations temporelles complexe"}
 
   Q36:
     name: "Validate Metadata Tag Update"
@@ -2102,6 +2115,277 @@ queries:
       M1: {status: NATIVE, note: "count(DISTINCT) avec OPTIONAL MATCH"}
       M2: {status: NATIVE, note: "count(DISTINCT) avec OPTIONAL MATCH"}
       O2: {status: NATIVE, note: "COUNT SPARQL"}
+
+  # -------------------------------------------------------------------------
+  # CLEANUP WORKLOADS (QW13-QW24)
+  # -------------------------------------------------------------------------
+
+  QW13:
+    name: "Cancel Space Reservation"
+    category: cleanup_workload
+    cleans_up: QW1
+    intention: |
+      Annuler une réservation de salle. Supprimer l'edge OCCUPIES
+      créé par QW1 avec les mêmes paramètres temporels.
+    use_case: "Annulation réservation, libération salle"
+    parameters:
+      - name: QW1_TENANT_ID
+        type: string
+        format: {sql: "%(qw1_tenant_id)s", cypher: "$qw1_tenant_id"}
+      - name: QW1_SPACE_ID
+        type: string
+        format: {sql: "%(qw1_space_id)s", cypher: "$qw1_space_id"}
+      - name: QW1_START_DATE
+        type: date
+        format: {sql: "%(qw1_start_date)s", cypher: "$qw1_start_date"}
+      - name: QW1_END_DATE
+        type: date
+        format: {sql: "%(qw1_end_date)s", cypher: "$qw1_end_date"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "DELETE FROM edges avec WHERE dates"}
+      P2: {status: NATIVE, note: "DELETE FROM edges avec JSONB filter"}
+      M1: {status: NATIVE, note: "MATCH-DELETE pattern"}
+      M2: {status: NATIVE, note: "MATCH-DELETE pattern"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL DELETE complexe"}
+
+  QW14:
+    name: "Remove Calibration Tag"
+    category: cleanup_workload
+    cleans_up: QW2
+    intention: |
+      Supprimer le tag calibration_status ajouté par QW2.
+      Rollback d'une mise à jour de métadonnées.
+    use_case: "Rollback configuration, correction erreur tagging"
+    parameters:
+      - name: QW2_NODE_ID
+        type: string
+        format: {sql: "%(qw2_node_id)s", cypher: "$qw2_node_id"}
+      - name: QW2_TAG_KEY
+        type: string
+        format: {sql: "%(qw2_tag_key)s", cypher: "$qw2_tag_key"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "UPDATE SET metadata = metadata - key"}
+      P2: {status: NATIVE, note: "UPDATE SET properties = properties - key"}
+      M1: {status: NATIVE, note: "REMOVE n.calibration_status"}
+      M2: {status: NATIVE, note: "REMOVE n.calibration_status"}
+      O2: {status: IMPOSSIBLE, note: "SPARQL DELETE property complexe"}
+
+  QW15:
+    name: "Remove Created Relation"
+    category: cleanup_workload
+    cleans_up: QW3
+    intention: |
+      Supprimer la relation FEEDS créée par QW3.
+      Annulation d'une mutation de graphe.
+    use_case: "Annulation connexion, correction topologie"
+    parameters:
+      - name: QW3_SOURCE_ID
+        type: string
+        format: {sql: "%(qw3_source_id)s", cypher: "$qw3_source_id"}
+      - name: QW3_TARGET_ID
+        type: string
+        format: {sql: "%(qw3_target_id)s", cypher: "$qw3_target_id"}
+      - name: QW3_REL_TYPE
+        type: string
+        format: {sql: "%(qw3_rel_type)s", cypher: "$qw3_rel_type"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "DELETE FROM edges"}
+      P2: {status: NATIVE, note: "DELETE FROM edges"}
+      M1: {status: NATIVE, note: "MATCH-DELETE"}
+      M2: {status: NATIVE, note: "MATCH-DELETE"}
+      O2: {status: DEGRADED, note: "DELETE DATA triple"}
+
+  QW16:
+    name: "Remove Maintenance Event"
+    category: cleanup_workload
+    cleans_up: QW4
+    intention: |
+      Supprimer l'événement de maintenance ajouté par QW4.
+      Purge de l'historique de maintenance.
+    use_case: "Purge historique, correction erreur saisie"
+    parameters:
+      - name: QW4_EQUIPMENT_ID
+        type: string
+        format: {sql: "%(qw4_equipment_id)s", cypher: "$qw4_equipment_id"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "UPDATE jsonb - key"}
+      P2: {status: NATIVE, note: "UPDATE properties - 'maintenance_history'"}
+      M1: {status: NATIVE, note: "SET n.maintenance_history = null"}
+      M2: {status: NATIVE, note: "SET n.maintenance_history = null"}
+      O2: {status: IMPOSSIBLE}
+
+  QW17:
+    name: "Remove Calibration Info"
+    category: cleanup_workload
+    cleans_up: QW5
+    intention: |
+      Supprimer les informations de calibration ajoutées par QW5.
+    use_case: "Reset calibration, rollback mise à jour"
+    parameters:
+      - name: QW5_POINT_ID
+        type: string
+        format: {sql: "%(qw5_point_id)s", cypher: "$qw5_point_id"}
+    paradigm_status:
+      P1: {status: NATIVE}
+      P2: {status: NATIVE}
+      M1: {status: NATIVE}
+      M2: {status: NATIVE}
+      O2: {status: IMPOSSIBLE}
+
+  QW18:
+    name: "Remove Firmware Info"
+    category: cleanup_workload
+    cleans_up: QW6
+    intention: |
+      Supprimer les informations firmware ajoutées par QW6.
+    use_case: "Rollback firmware, reset métadonnées"
+    parameters:
+      - name: QW6_EQUIPMENT_ID
+        type: string
+        format: {sql: "%(qw6_equipment_id)s", cypher: "$qw6_equipment_id"}
+    paradigm_status:
+      P1: {status: NATIVE}
+      P2: {status: NATIVE}
+      M1: {status: NATIVE}
+      M2: {status: NATIVE}
+      O2: {status: IMPOSSIBLE}
+
+  QW19:
+    name: "Remove Added Capability"
+    category: cleanup_workload
+    cleans_up: QW7
+    intention: |
+      Retirer la capability ajoutée par QW7 de l'array capabilities.
+    use_case: "Retrait fonctionnalité, correction erreur"
+    parameters:
+      - name: QW7_EQUIPMENT_ID
+        type: string
+        format: {sql: "%(qw7_equipment_id)s", cypher: "$qw7_equipment_id"}
+      - name: QW7_NEW_CAPABILITY
+        type: string
+        format: {sql: "%(qw7_new_capability)s", cypher: "$qw7_new_capability"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "array_remove()"}
+      P2: {status: NATIVE, note: "jsonb array manipulation"}
+      M1: {status: NATIVE, note: "list filter"}
+      M2: {status: NATIVE, note: "list filter"}
+      O2: {status: IMPOSSIBLE}
+
+  QW20:
+    name: "Restore Removed Key"
+    category: cleanup_workload
+    cleans_up: QW8
+    intention: |
+      Restaurer la clé legacy_protocol_id supprimée par QW8.
+    use_case: "Restauration données, annulation suppression"
+    parameters:
+      - name: QW8_NODE_ID
+        type: string
+        format: {sql: "%(qw8_node_id)s", cypher: "$qw8_node_id"}
+      - name: QW8_KEY_TO_REMOVE
+        type: string
+        format: {sql: "%(qw8_key_to_remove)s", cypher: "$qw8_key_to_remove"}
+      - name: QW8_ORIGINAL_VALUE
+        type: string
+        format: {sql: "%(qw8_original_value)s", cypher: "$qw8_original_value"}
+    paradigm_status:
+      P1: {status: NATIVE}
+      P2: {status: NATIVE}
+      M1: {status: NATIVE}
+      M2: {status: NATIVE}
+      O2: {status: IMPOSSIBLE}
+
+  QW21:
+    name: "Cancel Tenant Move-In"
+    category: cleanup_workload
+    cleans_up: QW9
+    intention: |
+      Annuler un emménagement. Supprimer les relations OCCUPIES et METERS_TENANT créées par QW9.
+    use_case: "Annulation bail, erreur de saisie"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        format: {sql: "%(tenant_id)s", cypher: "$tenant_id"}
+      - name: QW_SPACE_ID
+        type: string
+        format: {sql: "%(qw_space_id)s", cypher: "$qw_space_id"}
+      - name: SUBMETER_ID
+        type: string
+        optional: true
+        format: {sql: "%(submeter_id)s", cypher: "$submeter_id"}
+    paradigm_status:
+      P1: {status: NATIVE}
+      P2: {status: NATIVE}
+      M1: {status: NATIVE}
+      M2: {status: NATIVE}
+      O2: {status: DEGRADED}
+
+  QW22:
+    name: "Cancel Tenant Move-Out"
+    category: cleanup_workload
+    cleans_up: QW10
+    intention: |
+      Annuler un déménagement. Recréer la relation OCCUPIES supprimée par QW10.
+    use_case: "Annulation départ, prolongation bail"
+    parameters:
+      - name: TENANT_ID
+        type: string
+        format: {sql: "%(tenant_id)s", cypher: "$tenant_id"}
+      - name: QW_SPACE_ID
+        type: string
+        format: {sql: "%(qw_space_id)s", cypher: "$qw_space_id"}
+    paradigm_status:
+      P1: {status: NATIVE}
+      P2: {status: NATIVE}
+      M1: {status: NATIVE}
+      M2: {status: NATIVE}
+      O2: {status: DEGRADED}
+
+  QW23:
+    name: "Revert Space Reassignment"
+    category: cleanup_workload
+    cleans_up: QW11
+    intention: |
+      Annuler une réaffectation d'espace. Rétablir OCCUPIES vers l'ancien tenant.
+    use_case: "Annulation réaffectation, correction erreur"
+    parameters:
+      - name: QW_SPACE_ID
+        type: string
+        format: {sql: "%(qw_space_id)s", cypher: "$qw_space_id"}
+      - name: OLD_TENANT_ID
+        type: string
+        format: {sql: "%(old_tenant_id)s", cypher: "$old_tenant_id"}
+      - name: NEW_TENANT_ID
+        type: string
+        format: {sql: "%(new_tenant_id)s", cypher: "$new_tenant_id"}
+    paradigm_status:
+      P1: {status: NATIVE}
+      P2: {status: NATIVE}
+      M1: {status: NATIVE}
+      M2: {status: NATIVE}
+      O2: {status: DEGRADED}
+
+  QW24:
+    name: "Revert Tenant Merge"
+    category: cleanup_workload
+    cleans_up: QW12
+    intention: |
+      Annuler une fusion de tenants. Retransférer OCCUPIES et METERS_TENANT
+      du target vers le source.
+    use_case: "Annulation fusion, scission entreprise"
+    parameters:
+      - name: SOURCE_TENANT_ID
+        type: string
+        format: {sql: "%(source_tenant_id)s", cypher: "$source_tenant_id"}
+      - name: TARGET_TENANT_ID
+        type: string
+        format: {sql: "%(target_tenant_id)s", cypher: "$target_tenant_id"}
+    paradigm_status:
+      P1: {status: NATIVE, note: "UPDATE edges complexe"}
+      P2: {status: NATIVE, note: "UPDATE edges complexe"}
+      M1: {status: NATIVE, note: "MATCH + DELETE + MERGE pattern"}
+      M2: {status: NATIVE, note: "MATCH + DELETE + MERGE pattern"}
+      O2: {status: IMPOSSIBLE, note: "Trop complexe pour SPARQL"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

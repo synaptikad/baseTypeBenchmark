@@ -1,17 +1,16 @@
 -- Q37: Validate Relation Mutation (QW3)
--- Status: NATIVE pour P1 (edges table)
+-- P1 version: uses equipment table instead of generic nodes
 -- Paramètres: %(source_id)s, %(target_id)s
--- Semantic: Vérifie que la relation FEEDS existe entre source et target
 
 SELECT
     e.source_id,
-    s.name AS source_name,
+    src.name AS source_name,
     e.rel_type,
     e.target_id,
-    t.name AS target_name
+    tgt.name AS target_name
 FROM p1.edges e
-JOIN p1.nodes s ON e.source_id = s.id
-JOIN p1.nodes t ON e.target_id = t.id
+JOIN p1.equipment src ON e.source_id = src.id
+JOIN p1.equipment tgt ON e.target_id = tgt.id
 WHERE e.source_id = %(source_id)s
   AND e.target_id = %(target_id)s
   AND e.rel_type = 'FEEDS';

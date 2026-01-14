@@ -1,22 +1,16 @@
--- Q35: Validate Timeseries Append (QW1)
--- Status: NATIVE pour P2 (timeseries in shared ts schema)
--- Paramètres: %(point_id)s, %(reference_date)s
--- Semantic: Vérifie que les nouvelles valeurs timeseries ont été ajoutées
+-- Q35: Validate Space Reservation (QW1)
+-- Returns tenants occupying a space during a given period
+-- Paramètres: %(qw1_space_id)s, %(qw1_start_date)s, %(qw1_end_date)s
 
 SELECT
-    point_id,
-    DATE(time) AS date,
-    COUNT(*) AS record_count,
-    ARRAY_AGG(time ORDER BY time DESC) FILTER (WHERE row_num <= 3) AS last_timestamps,
-    ARRAY_AGG(value ORDER BY time DESC) FILTER (WHERE row_num <= 3) AS last_values
-FROM (
-    SELECT
-        point_id,
-        time,
-        value,
-        ROW_NUMBER() OVER (PARTITION BY point_id ORDER BY time DESC) AS row_num
-    FROM ts.timeseries
-    WHERE point_id = %(point_id)s
-      AND DATE(time) = DATE(%(reference_date)s::timestamptz)
-) sub
-GROUP BY point_id, DATE(time);
+    n.id AS tenant_id,
+    n.name AS tenant_name,
+    (e.properties->>'start_date')::date AS start_date,
+    (e.properties->>'end_date')::date AS end_date
+FROM p2.edges e
+JOIN p2.nodes n ON e.source_id = n.id
+WHERE e.target_id = %(qw1_space_id)s
+  AND e.rel_type = 'OCCUPIES'
+  AND (e.properties->>'start_date')::date <= %(qw1_end_date)s::date
+  AND (e.properties->>'end_date')::date >= %(qw1_start_date)s::date
+ORDER BY (e.properties->>'start_date')::date;

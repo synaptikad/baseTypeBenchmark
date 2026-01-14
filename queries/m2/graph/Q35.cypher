@@ -1,4 +1,4 @@
-// Q35: Validate Space Reservation (QW1)
+// Q35: Validate Space Reservation (QW1) - M2 graph query
 // Retourne les tenants qui occupent une salle sur une période donnée
 // Paramètres: $qw1_space_id, $qw1_start_date, $qw1_end_date
 
