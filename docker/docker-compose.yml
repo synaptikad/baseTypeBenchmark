@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-benchmark}
     volumes:
-      - timescaledb_data:/var/lib/postgresql/data
+      - timescaledb_data:/home/postgres/pgdata  # timescaledb-ha uses this path
       - ${BTB_DATA_DIR:-.}:/data:ro  # Mount data directory for fast server-side COPY
     mem_limit: ${MEMORY_LIMIT:-8g}
     memswap_limit: ${MEMORY_LIMIT:-8g}

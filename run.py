@@ -1248,13 +1248,38 @@ def ensure_containers_running(paradigms: list[str]) -> bool:
                 break
 
         if all_healthy:
-            console.print("[green]All containers ready![/green]")
-            return True
+            # Containers healthy, but also verify actual database connection
+            if _verify_db_connections(paradigms):
+                console.print("[green]All containers ready![/green]")
+                return True
+            # DB not ready yet, keep waiting
 
         time.sleep(2)
 
     console.print("[red]Timeout waiting for containers to be healthy[/red]")
     return False
+
+
+def _verify_db_connections(paradigms: list[str]) -> bool:
+    """Verify actual database connections work (not just container health).
+
+    Uses docker exec to test connection without requiring psycopg in system Python.
+    """
+    needs_postgres = any(p in paradigms for p in ["P1", "P2", "M2", "O2"])
+
+    if needs_postgres:
+        try:
+            result = subprocess.run(
+                ["docker", "exec", "benchmark-timescale",
+                 "psql", "-U", "postgres", "-d", "benchmark", "-c", "SELECT 1"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                return False
+        except Exception:
+            return False
+
+    return True
 
 
 def stop_containers(services: list[str]) -> None:
@@ -1272,6 +1297,14 @@ def stop_containers(services: list[str]) -> None:
         )
     except Exception as e:
         console.print(f"[yellow]Warning: Could not stop containers: {e}[/yellow]")
+
+
+def is_benchmark_volume(vol_name: str) -> bool:
+    """Check if a volume name belongs to the benchmark stack."""
+    vol_lower = vol_name.lower()
+    return ("benchmark" in vol_lower or "basetype" in vol_lower
+            or ("docker_" in vol_lower and
+                ("timescale" in vol_lower or "memgraph" in vol_lower or "oxigraph" in vol_lower)))
 
 
 def docker_prune_all() -> bool:
@@ -1298,7 +1331,7 @@ def docker_prune_all() -> bool:
             capture_output=True, text=True
         )
         for vol in vol_result.stdout.strip().split("\n"):
-            if vol and ("benchmark" in vol.lower() or "basetype" in vol.lower()):
+            if vol and is_benchmark_volume(vol):
                 subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
 
         console.print("[green]Docker state cleaned![/green]")
@@ -1335,7 +1368,7 @@ def get_docker_status_summary() -> tuple[int, int, list[str]]:
             capture_output=True, text=True
         )
         for vol in vol_result.stdout.strip().split("\n"):
-            if vol and ("benchmark" in vol.lower() or "basetype" in vol.lower()):
+            if vol and is_benchmark_volume(vol):
                 volumes += 1
 
     except Exception:
@@ -1354,7 +1387,7 @@ def get_volume_info() -> dict[str, str]:
         )
         if result.returncode == 0:
             for vol_name in result.stdout.strip().split("\n"):
-                if "benchmark" in vol_name.lower() or "basetype" in vol_name.lower():
+                if is_benchmark_volume(vol_name):
                     # Get volume size
                     inspect = subprocess.run(
                         ["docker", "system", "df", "-v", "--format", "{{.Name}}\t{{.Size}}"],
