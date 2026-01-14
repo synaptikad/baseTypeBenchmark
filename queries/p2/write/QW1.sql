@@ -8,7 +8,7 @@ VALUES (
     %(qw1_space_id)s,
     'OCCUPIES',
     jsonb_build_object(
-        'start_date', %(qw1_start_date)s,
-        'end_date', %(qw1_end_date)s
+        'start_date', %(qw1_start_date)s::text,
+        'end_date', %(qw1_end_date)s::text
     )
 );

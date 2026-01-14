@@ -2164,7 +2164,7 @@ queries:
         type: string
         format: {sql: "%(qw2_tag_key)s", cypher: "$qw2_tag_key"}
     paradigm_status:
-      P1: {status: NATIVE, note: "UPDATE SET metadata = metadata - key"}
+      P1: {status: IMPOSSIBLE, note: "P1 uses typed tables, no generic nodes table"}
       P2: {status: NATIVE, note: "UPDATE SET properties = properties - key"}
       M1: {status: NATIVE, note: "REMOVE n.calibration_status"}
       M2: {status: NATIVE, note: "REMOVE n.calibration_status"}
@@ -2208,7 +2208,7 @@ queries:
         type: string
         format: {sql: "%(qw4_equipment_id)s", cypher: "$qw4_equipment_id"}
     paradigm_status:
-      P1: {status: NATIVE, note: "UPDATE jsonb - key"}
+      P1: {status: IMPOSSIBLE, note: "P1 uses typed tables, no generic nodes table"}
       P2: {status: NATIVE, note: "UPDATE properties - 'maintenance_history'"}
       M1: {status: NATIVE, note: "SET n.maintenance_history = null"}
       M2: {status: NATIVE, note: "SET n.maintenance_history = null"}
@@ -2226,7 +2226,7 @@ queries:
         type: string
         format: {sql: "%(qw5_point_id)s", cypher: "$qw5_point_id"}
     paradigm_status:
-      P1: {status: NATIVE}
+      P1: {status: IMPOSSIBLE, note: "P1 uses typed tables, no generic nodes table"}
       P2: {status: NATIVE}
       M1: {status: NATIVE}
       M2: {status: NATIVE}
@@ -2244,7 +2244,7 @@ queries:
         type: string
         format: {sql: "%(qw6_equipment_id)s", cypher: "$qw6_equipment_id"}
     paradigm_status:
-      P1: {status: NATIVE}
+      P1: {status: IMPOSSIBLE, note: "P1 uses typed tables, no generic nodes table"}
       P2: {status: NATIVE}
       M1: {status: NATIVE}
       M2: {status: NATIVE}
@@ -2265,7 +2265,7 @@ queries:
         type: string
         format: {sql: "%(qw7_new_capability)s", cypher: "$qw7_new_capability"}
     paradigm_status:
-      P1: {status: NATIVE, note: "array_remove()"}
+      P1: {status: IMPOSSIBLE, note: "P1 uses typed tables, no generic nodes table"}
       P2: {status: NATIVE, note: "jsonb array manipulation"}
       M1: {status: NATIVE, note: "list filter"}
       M2: {status: NATIVE, note: "list filter"}
@@ -2289,7 +2289,7 @@ queries:
         type: string
         format: {sql: "%(qw8_original_value)s", cypher: "$qw8_original_value"}
     paradigm_status:
-      P1: {status: NATIVE}
+      P1: {status: IMPOSSIBLE, note: "Pas de colonne JSONB - cleanup de QW8 impossible"}
       P2: {status: NATIVE}
       M1: {status: NATIVE}
       M2: {status: NATIVE}

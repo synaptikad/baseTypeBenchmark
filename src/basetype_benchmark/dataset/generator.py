@@ -2097,6 +2097,24 @@ class DatasetGenerator:
                     params["qw_space_id"] = edge.target_id
                     break
 
+        # QW24: Collect space_ids and meter_ids for tenant merge revert
+        # These are the spaces occupied by source_tenant and meters linked to source_tenant
+        if params.get("source_tenant_id"):
+            source_tenant = params["source_tenant_id"]
+            # Spaces occupied by source tenant (OCCUPIES edges)
+            space_ids = [
+                edge.target_id for edge in self.edges
+                if edge.rel_type == "OCCUPIES" and edge.source_id == source_tenant
+            ]
+            params["space_ids"] = space_ids[:5] if space_ids else []  # Limit to 5 for test
+
+            # Meters linked to source tenant (METERS_TENANT edges)
+            meter_ids = [
+                edge.source_id for edge in self.edges
+                if edge.rel_type == "METERS_TENANT" and edge.target_id == source_tenant
+            ]
+            params["meter_ids"] = meter_ids[:5] if meter_ids else []  # Limit to 5 for test
+
         return params
 
     def _write_query_params(self, output_dir: Path):

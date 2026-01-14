@@ -618,6 +618,7 @@ class RAMGradientExecutor:
                     QueryCategory.WRITE_VALIDATION,
                     QueryCategory.TENANT_WRITE,
                     QueryCategory.TENANT_VALIDATION,
+                    QueryCategory.CLEANUP_WORKLOAD,
                 ):
                     from ..core.query_utils import get_ordered_params
                     params = get_ordered_params(params, query_def.parameter_order)
@@ -841,7 +842,7 @@ class RAMGradientExecutor:
             ext = ext_map[self.paradigm]
 
             # Check for write categories - look in write/ subdirectory
-            if category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE):
+            if category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE, QueryCategory.CLEANUP_WORKLOAD):
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "write",
                     query_id,
@@ -931,7 +932,7 @@ class RAMGradientExecutor:
                 }
 
             elif category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE,
-                              QueryCategory.TENANT_WRITE):
+                              QueryCategory.TENANT_WRITE, QueryCategory.CLEANUP_WORKLOAD):
                 # Write workloads: look in write/ subdirectory first, then graph/
                 # For hybrid paradigms, write queries may be either graph (cypher/sparql) or SQL
                 write_dir = queries_dir / self.paradigm.lower() / "write"

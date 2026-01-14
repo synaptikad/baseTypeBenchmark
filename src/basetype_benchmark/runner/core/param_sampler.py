@@ -446,10 +446,8 @@ def get_params_for_query(
             "DATE_END": sampled.date_end,
         },
         # Q35-Q38: Write validation queries (QW1-QW3, QW8)
-        "Q35": {
-            "POINT_ID": sampled.point_id,
-            "REFERENCE_DATE": sampled.reference_date,
-        },
+        # Q35 is handled specially below based on paradigm
+        "Q35": {},
         "Q36": {"NODE_ID": sampled.equipment_id},
         "Q37": {
             "SOURCE_ID": sampled.meter_id,
@@ -464,6 +462,23 @@ def get_params_for_query(
         "Q40": {"TENANT_ID": sampled.tenant_id},
         "Q41": {"TENANT_ID": sampled.tenant_id},
     }
+
+    # Special handling for Q35 based on paradigm
+    # M2 uses timeseries validation (ts/Q35.sql), others use space reservation validation
+    if query_id == "Q35":
+        if paradigm == "M2":
+            # M2 Q35: Timeseries validation - uses point_id and reference_date
+            return {
+                "POINT_ID": sampled.point_id,
+                "REFERENCE_DATE": sampled.reference_date,
+            }
+        else:
+            # P1, P2, M1 Q35: Space Reservation validation
+            return {
+                "QW1_SPACE_ID": file_params.get("qw1_space_id", sampled.space_id),
+                "QW1_START_DATE": file_params.get("qw1_start_date", sampled.reference_date),
+                "QW1_END_DATE": file_params.get("qw1_end_date", sampled.reference_date),
+            }
 
     return query_params.get(query_id, {})
 
@@ -480,18 +495,14 @@ def _get_qw_params(
     Le générateur produit des données riches (qw1_chunks, qw6_metadata_patch, etc.)
     Cette fonction les extrait dans le format attendu par chaque moteur.
     """
-    # QW1: Timeseries Append
+    # QW1: Space Reservation - creates OCCUPIES edge with dates
     if query_id == "QW1":
-        if paradigm == "M1":
-            # Cypher UNWIND $chunks - format SpinalCom (M1 only)
-            return {"CHUNKS": file_params.get("qw1_chunks", [])}
-        else:
-            # SQL UNNEST arrays séparés
-            return {
-                "POINT_IDS": file_params.get("qw1_point_ids", []),
-                "TIMESTAMPS": file_params.get("qw1_timestamps", []),
-                "VALUES": file_params.get("qw1_values", []),
-            }
+        return {
+            "QW1_TENANT_ID": file_params.get("qw1_tenant_id", sampled.tenant_id),
+            "QW1_SPACE_ID": file_params.get("qw1_space_id", sampled.space_id),
+            "QW1_START_DATE": file_params.get("qw1_start_date", sampled.reference_date),
+            "QW1_END_DATE": file_params.get("qw1_end_date", sampled.reference_date),
+        }
 
     # QW2: Metadata Update (tag)
     if query_id == "QW2":
@@ -589,6 +600,99 @@ def _get_qw_params(
         return {
             "SOURCE_TENANT_ID": file_params.get("source_tenant_id", sampled.tenant_id),
             "TARGET_TENANT_ID": file_params.get("target_tenant_id", sampled.tenant_id_alt),
+        }
+
+    # =========================================================================
+    # CLEANUP QUERIES (QW13-QW24) - Undo corresponding QW1-QW12 operations
+    # =========================================================================
+
+    # QW13: Cancel Space Reservation (cleanup for QW1/QW9 style reservations)
+    if query_id == "QW13":
+        return {
+            "TENANT_ID": file_params.get("qw1_tenant_id", sampled.tenant_id),
+            "SPACE_ID": file_params.get("qw1_space_id", sampled.space_id),
+            "START_DATE": file_params.get("qw1_start_date", sampled.reference_date),
+            "END_DATE": file_params.get("qw1_end_date", sampled.reference_date),
+        }
+
+    # QW14: Remove Calibration Tag (cleanup QW2)
+    if query_id == "QW14":
+        return {
+            "NODE_ID": file_params.get("qw2_node_id", sampled.equipment_id),
+            "KEY_TO_REMOVE": file_params.get("qw2_tag_key", "calibration_status"),
+        }
+
+    # QW15: Remove Relation (cleanup QW3)
+    if query_id == "QW15":
+        return {
+            "SOURCE_ID": file_params.get("qw3_source_id", sampled.meter_id),
+            "TARGET_ID": file_params.get("qw3_target_id", sampled.equipment_id),
+            "REL_TYPE": file_params.get("qw3_rel_type", "FEEDS"),
+        }
+
+    # QW16: Remove Maintenance Event (cleanup QW4)
+    if query_id == "QW16":
+        return {
+            "EQUIPMENT_ID": file_params.get("qw4_equipment_id", sampled.equipment_id),
+        }
+
+    # QW17: Remove Calibration Info (cleanup QW5)
+    if query_id == "QW17":
+        return {
+            "POINT_ID": file_params.get("qw5_point_id", sampled.point_id),
+        }
+
+    # QW18: Remove Firmware Info (cleanup QW6)
+    if query_id == "QW18":
+        return {
+            "EQUIPMENT_ID": file_params.get("qw6_equipment_id", sampled.equipment_id),
+        }
+
+    # QW19: Remove Capability (cleanup QW7)
+    if query_id == "QW19":
+        return {
+            "EQUIPMENT_ID": file_params.get("qw7_equipment_id", sampled.equipment_id),
+            "CAPABILITY_TO_REMOVE": file_params.get("qw7_new_capability", "demand_control_ventilation"),
+        }
+
+    # QW20: Restore Removed Key (cleanup QW8)
+    if query_id == "QW20":
+        return {
+            "QW8_NODE_ID": file_params.get("qw8_node_id", sampled.equipment_id),
+            "QW8_KEY_TO_REMOVE": file_params.get("qw8_key_to_remove", "legacy_protocol_id"),
+            "QW8_ORIGINAL_VALUE": file_params.get("qw8_original_value", "MODBUS_RTU_v1"),
+        }
+
+    # QW21: Cancel Move-In (cleanup QW9)
+    if query_id == "QW21":
+        return {
+            "TENANT_ID": file_params.get("tenant_id", sampled.tenant_id),
+            "SPACE_ID": file_params.get("qw_space_id", sampled.space_id),
+            "METER_ID": file_params.get("submeter_id", sampled.meter_id),
+        }
+
+    # QW22: Cancel Move-Out (cleanup QW10)
+    if query_id == "QW22":
+        return {
+            "TENANT_ID": file_params.get("tenant_id", sampled.tenant_id),
+            "SPACE_ID": file_params.get("qw_space_id", sampled.space_id),
+        }
+
+    # QW23: Revert Space Reassignment (cleanup QW11)
+    if query_id == "QW23":
+        return {
+            "SPACE_ID": file_params.get("qw_space_id", sampled.space_id),
+            "OLD_TENANT_ID": file_params.get("old_tenant_id", sampled.tenant_id),
+            "NEW_TENANT_ID": file_params.get("new_tenant_id", sampled.tenant_id_alt),
+        }
+
+    # QW24: Revert Tenant Merge (cleanup QW12)
+    if query_id == "QW24":
+        return {
+            "SOURCE_TENANT_ID": file_params.get("source_tenant_id", sampled.tenant_id),
+            "TARGET_TENANT_ID": file_params.get("target_tenant_id", sampled.tenant_id_alt),
+            "SPACE_IDS": file_params.get("space_ids", []),
+            "METER_IDS": file_params.get("meter_ids", []),
         }
 
     # Fallback: pas de params
