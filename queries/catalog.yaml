@@ -1378,7 +1378,7 @@ queries:
       P2: {status: NATIVE, note: "Multi-JOIN + JSONB aggregation"}
       M1: {status: DEGRADED, note: "Orchestration applicative"}
       M2: {status: DEGRADED, note: "Orchestration applicative"}
-      O2: {status: IMPOSSIBLE, note: "Structure trop complexe"}
+      O2: {status: DEGRADED, note: "Pas de points_calibration_status array"}
 
   Q26:
     name: "Capability Evolution"
