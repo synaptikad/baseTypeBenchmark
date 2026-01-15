@@ -62,6 +62,7 @@ class ProfileConfig:
     targets: Dict[str, int]
     space_distribution: Dict[str, Dict[str, int]]
     durations: List[Dict[str, Any]]
+    generation: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, filepath: Path) -> 'ProfileConfig':
@@ -76,7 +77,8 @@ class ProfileConfig:
             meters=data.get('meters', {}),
             targets=data.get('targets', {}),
             space_distribution=data.get('space_distribution', {}),
-            durations=data.get('durations', [])
+            durations=data.get('durations', []),
+            generation=data.get('generation', {})
         )
 
 
@@ -1195,9 +1197,16 @@ class DatasetGenerator:
         # Utiliser les points définis dans la config, ou un sous-ensemble
         points_config = config.points
 
-        # Limiter le nombre de points pour les gros équipements
-        max_points = min(len(points_config), 10) if points_config else 3
-        selected_points = points_config[:max_points] if points_config else []
+        # Get configurable limit from profile (None = unlimited)
+        max_points_limit = self.profile.generation.get('max_points_per_equipment')
+
+        if max_points_limit is None:
+            # No limit - use all defined points
+            selected_points = points_config if points_config else []
+        else:
+            # Apply configurable limit
+            max_points = min(len(points_config), max_points_limit) if points_config else 3
+            selected_points = points_config[:max_points] if points_config else []
 
         # Points par défaut si aucun défini
         if not selected_points:

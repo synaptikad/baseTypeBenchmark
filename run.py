@@ -19,12 +19,16 @@ try:
     from rich.panel import Panel
     from rich.prompt import Prompt, Confirm, IntPrompt
     from rich.table import Table
+    from rich.tree import Tree
 except ImportError:
     subprocess.run([sys.executable, "-m", "pip", "install", "rich", "-q"])
     from rich.console import Console
     from rich.panel import Panel
     from rich.prompt import Prompt, Confirm, IntPrompt
     from rich.table import Table
+    from rich.tree import Tree
+
+import yaml
 
 console = Console()
 
@@ -272,7 +276,25 @@ def menu_dataset():
 
 
 def generate_dataset():
+    """Menu for dataset generation with simple or wizard mode."""
     header("Generate Dataset")
+
+    console.print("[bold]Generation mode:[/bold]")
+    console.print("  [cyan]1[/cyan]. Simple     [dim]Choose an existing profile[/dim]")
+    console.print("  [cyan]2[/cyan]. Wizard     [dim]Configure and preview[/dim]")
+    console.print()
+
+    mode = Prompt.ask("Mode", choices=["1", "2"], default="1")
+
+    if mode == "1":
+        generate_dataset_simple()
+    else:
+        generate_dataset_wizard()
+
+
+def generate_dataset_simple():
+    """Simple mode: select an existing profile (original behavior)."""
+    header("Generate Dataset - Simple")
 
     console.print("[bold]Profile:[/bold]")
     for i, p in enumerate(PROFILES, 1):
@@ -290,13 +312,18 @@ def generate_dataset():
 
     seed = IntPrompt.ask("\nSeed", default=42)
 
-    target_rows_str = Prompt.ask("\nTarget rows timeseries [dim](vide=auto)[/dim]", default="")
+    target_rows_str = Prompt.ask("\nTarget rows timeseries [dim](empty=auto)[/dim]", default="")
     target_rows = int(target_rows_str) if target_rows_str.strip() else None
 
     console.print(f"\n[yellow]Generate {profile}-{duration} (seed={seed}, target_rows={target_rows or 'auto'})?[/yellow]")
     if not Confirm.ask("", default=True):
         return
 
+    _run_generator(profile, duration, seed, target_rows)
+
+
+def _run_generator(profile: str, duration: str, seed: int, target_rows: int | None = None):
+    """Execute the dataset generator."""
     output_dir = GENERATED_DIR / f"{profile}-{duration}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -317,6 +344,638 @@ def generate_dataset():
 
     console.print(f"\n[green]Done: {output_dir}[/green]")
     wait()
+
+
+# ===========================================================================
+# WIZARD MODE FOR DATASET GENERATION
+# ===========================================================================
+
+def generate_dataset_wizard():
+    """Wizard mode: interactive configuration with preview."""
+    header("Generate Dataset - Wizard")
+
+    # Wizard state (will be modified at each step)
+    wizard_config = {
+        'profile_name': 'custom',
+        'seed': 42,
+        'buildings': 1,
+        'floors': {
+            'basement': 1,
+            'ground': 1,
+            'standard': 6,
+            'rooftop': 1
+        },
+        'tenants': 3,
+        'meters': {
+            'electrical': {'per_building': 4},
+            'thermal': {'per_building': 2}
+        },
+        'space_distribution': {
+            'basement': {
+                'parking': 1,
+                'technical_elec': 1,
+                'technical_hvac': 1,
+                'storage': 2
+            },
+            'ground': {
+                'lobby': 1,
+                'corridor': 2,
+                'restroom': 2,
+                'meeting_small': 2,
+                'office_open': 1,
+                'kitchen': 1
+            },
+            'standard': {
+                'corridor': 1,
+                'restroom': 2,
+                'office_open': 3,
+                'office_closed': 4,
+                'meeting_small': 2,
+                'meeting_large': 1
+            },
+            'rooftop': {
+                'technical_hvac': 1,
+                'technical_it': 1
+            }
+        },
+        'generation': {
+            'max_points_per_equipment': None  # Unlimited by default
+        },
+        'duration': '2d'
+    }
+
+    # === STEP 1: Base Profile ===
+    wizard_step_base_profile(wizard_config)
+
+    # === STEP 2: Buildings ===
+    wizard_step_buildings(wizard_config)
+
+    # === STEP 3: Floors ===
+    wizard_step_floors(wizard_config)
+
+    # === STEP 4: Space Distribution ===
+    wizard_step_spaces(wizard_config)
+
+    # === STEP 5: Generation Options ===
+    wizard_step_options(wizard_config)
+
+    # === STEP 6: Preview ===
+    if not wizard_step_preview(wizard_config):
+        return  # User cancelled
+
+    # === STEP 7: Timeseries Duration ===
+    wizard_step_duration(wizard_config)
+
+    # === STEP 8: Generate ===
+    wizard_step_generate(wizard_config)
+
+
+def wizard_step_base_profile(config: dict):
+    """Step 1: Choose a base profile or start from scratch."""
+    console.print("\n[bold]=== STEP 1/7: Base Profile ===[/bold]\n")
+
+    console.print("Start from an existing profile or configure from scratch?")
+    console.print()
+    console.print("  [cyan]1[/cyan]. small      [dim]1 building, 9 floors[/dim]")
+    console.print("  [cyan]2[/cyan]. medium     [dim]3 buildings, 13 floors/bldg[/dim]")
+    console.print("  [cyan]3[/cyan]. large      [dim]5 buildings, 16 floors/bldg[/dim]")
+    console.print("  [cyan]4[/cyan]. xlarge     [dim]9 buildings, 30 floors/bldg[/dim]")
+    console.print("  [cyan]5[/cyan]. custom     [dim]Start from scratch[/dim]")
+    console.print()
+
+    choice = Prompt.ask("Profile", choices=["1", "2", "3", "4", "5"], default="1")
+
+    if choice != "5":
+        # Load existing profile
+        profile_names = ["small", "medium", "large", "xlarge"]
+        profile_name = profile_names[int(choice) - 1]
+
+        profile_path = CONFIG_DIR / "profiles" / f"{profile_name}.yaml"
+        if profile_path.exists():
+            with open(profile_path, 'r', encoding='utf-8') as f:
+                loaded = yaml.safe_load(f)
+
+            config['profile_name'] = loaded.get('profile', profile_name)
+            config['seed'] = loaded.get('seed', 42)
+            config['buildings'] = loaded.get('buildings', 1)
+            config['tenants'] = loaded.get('tenants', 3)
+            config['meters'] = loaded.get('meters', config['meters'])
+
+            # Convert floors list to dict
+            floors_dict = {'basement': 0, 'ground': 0, 'standard': 0, 'rooftop': 0}
+            for f in loaded.get('floors', []):
+                floors_dict[f['type']] = f.get('count', 1)
+            config['floors'] = floors_dict
+
+            config['space_distribution'] = loaded.get('space_distribution', config['space_distribution'])
+            config['generation'] = loaded.get('generation', {'max_points_per_equipment': None})
+
+            console.print(f"\n[green]Profile '{profile_name}' loaded.[/green]")
+        else:
+            console.print(f"\n[yellow]Profile '{profile_name}' not found, using defaults.[/yellow]")
+    else:
+        config['profile_name'] = 'custom'
+        console.print("\n[green]Custom configuration.[/green]")
+
+
+def wizard_step_buildings(config: dict):
+    """Step 2: Configure the number of buildings."""
+    console.print("\n[bold]=== STEP 2/7: Buildings ===[/bold]\n")
+
+    console.print(f"Current count: [cyan]{config['buildings']}[/cyan] building(s)")
+    console.print()
+    console.print("[dim]Examples:[/dim]")
+    console.print("  1 building   -> SME office, clinic")
+    console.print("  3-5 buildings -> Corporate campus")
+    console.print("  10+ buildings -> University, hospital, airport")
+    console.print()
+
+    config['buildings'] = IntPrompt.ask("Number of buildings", default=config['buildings'])
+
+    # Suggest proportional tenants
+    suggested_tenants = max(3, config['buildings'] * 3)
+    console.print(f"\n[dim]Suggestion: {suggested_tenants} tenants for {config['buildings']} building(s)[/dim]")
+    config['tenants'] = IntPrompt.ask("Number of tenants", default=suggested_tenants)
+
+
+def wizard_step_floors(config: dict):
+    """Step 3: Configure floors by type."""
+    console.print("\n[bold]=== STEP 3/7: Vertical Structure ===[/bold]\n")
+
+    console.print("Floor configuration per building:")
+    console.print()
+
+    # Display current config
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Floor Type", style="cyan")
+    table.add_column("Current", justify="right")
+    table.add_column("Description")
+
+    table.add_row("basement", str(config['floors']['basement']), "Basements (parking, technical)")
+    table.add_row("ground", str(config['floors']['ground']), "Ground floor (lobby)")
+    table.add_row("standard", str(config['floors']['standard']), "Standard floors (offices)")
+    table.add_row("rooftop", str(config['floors']['rooftop']), "Rooftop technical")
+
+    console.print(table)
+    console.print()
+
+    total_current = sum(config['floors'].values())
+    console.print(f"[dim]Current total: {total_current} levels per building[/dim]")
+    console.print()
+
+    if Confirm.ask("Modify structure?", default=False):
+        console.print()
+        config['floors']['basement'] = IntPrompt.ask("  Basements", default=config['floors']['basement'])
+        config['floors']['ground'] = IntPrompt.ask("  Ground floors", default=config['floors']['ground'])
+        config['floors']['standard'] = IntPrompt.ask("  Standard floors", default=config['floors']['standard'])
+        config['floors']['rooftop'] = IntPrompt.ask("  Rooftop technical", default=config['floors']['rooftop'])
+
+    total_new = sum(config['floors'].values())
+    console.print(f"\n[green]Structure: {total_new} levels x {config['buildings']} building(s) = {total_new * config['buildings']} floors total[/green]")
+
+
+def wizard_step_spaces(config: dict):
+    """Step 4: Configure space distribution per floor type."""
+    console.print("\n[bold]=== STEP 4/7: Space Distribution ===[/bold]\n")
+
+    console.print("Spaces per floor type (per level):")
+    console.print()
+
+    for floor_type, spaces in config['space_distribution'].items():
+        if config['floors'].get(floor_type, 0) > 0:
+            total_spaces = sum(spaces.values())
+            console.print(f"[bold]{floor_type.upper()}[/bold] ({config['floors'][floor_type]} level(s), {total_spaces} spaces/level):")
+            for space_type, count in spaces.items():
+                console.print(f"    {space_type}: {count}")
+            console.print()
+
+    if Confirm.ask("Modify space distribution?", default=False):
+        console.print()
+        console.print("[yellow]Modifying distribution...[/yellow]")
+        console.print("[dim]For each floor type, enter the number of spaces per type.[/dim]")
+        console.print()
+
+        for floor_type in ['basement', 'ground', 'standard', 'rooftop']:
+            if config['floors'].get(floor_type, 0) > 0:
+                console.print(f"\n[bold]{floor_type.upper()}:[/bold]")
+                for space_type in config['space_distribution'].get(floor_type, {}).keys():
+                    current = config['space_distribution'][floor_type].get(space_type, 0)
+                    new_val = IntPrompt.ask(f"  {space_type}", default=current)
+                    config['space_distribution'][floor_type][space_type] = new_val
+
+    # Calculate total spaces
+    total_spaces = 0
+    for floor_type, spaces in config['space_distribution'].items():
+        floor_count = config['floors'].get(floor_type, 0)
+        spaces_per_floor = sum(spaces.values())
+        total_spaces += floor_count * spaces_per_floor * config['buildings']
+
+    console.print(f"\n[green]Estimated total: ~{total_spaces} spaces[/green]")
+
+
+def wizard_step_options(config: dict):
+    """Step 5: Generation options (points, seed)."""
+    console.print("\n[bold]=== STEP 5/7: Generation Options ===[/bold]\n")
+
+    # Seed
+    config['seed'] = IntPrompt.ask("Seed (reproducibility)", default=config['seed'])
+
+    # Max points per equipment
+    console.print()
+    console.print("[bold]Points per equipment limit:[/bold]")
+    console.print("  [cyan]1[/cyan]. Unlimited   [dim]All defined points (realistic)[/dim]")
+    console.print("  [cyan]2[/cyan]. Limited     [dim]Reduce for faster tests[/dim]")
+    console.print()
+
+    limit_choice = Prompt.ask("Option", choices=["1", "2"], default="1")
+
+    if limit_choice == "1":
+        config['generation']['max_points_per_equipment'] = None
+        console.print("[green]Unlimited points (all equipment points will be generated)[/green]")
+    else:
+        limit = IntPrompt.ask("Point limit per equipment", default=10)
+        config['generation']['max_points_per_equipment'] = limit
+        console.print(f"[yellow]Limit: {limit} points per equipment[/yellow]")
+
+
+def wizard_step_preview(config: dict) -> bool:
+    """Step 6: Preview structure and estimates.
+
+    Returns:
+        True if user confirms, False otherwise
+    """
+    console.print("\n[bold]=== STEP 6/7: Preview ===[/bold]\n")
+
+    # === STRUCTURE TREE ===
+    console.print("[bold]Spatial structure:[/bold]")
+    console.print()
+
+    tree = Tree("[bold]Site: Main Campus[/bold]")
+
+    for b in range(1, min(config['buildings'] + 1, 4)):  # Show max 3 buildings
+        building_label = f"Building {chr(64 + b)}"
+        building_node = tree.add(building_label)
+
+        # Basement
+        if config['floors']['basement'] > 0:
+            for i in range(config['floors']['basement']):
+                floor_node = building_node.add(f"[dim]Basement {i+1}[/dim]")
+                spaces = config['space_distribution'].get('basement', {})
+                space_list = ", ".join(f"{k}({v})" for k, v in spaces.items())
+                floor_node.add(f"[dim]{space_list}[/dim]")
+
+        # Ground
+        if config['floors']['ground'] > 0:
+            floor_node = building_node.add("Ground Floor")
+            spaces = config['space_distribution'].get('ground', {})
+            space_list = ", ".join(f"{k}({v})" for k, v in spaces.items())
+            floor_node.add(f"[dim]{space_list}[/dim]")
+
+        # Standard (group if many)
+        if config['floors']['standard'] > 0:
+            n_std = config['floors']['standard']
+            if n_std <= 3:
+                for i in range(n_std):
+                    floor_node = building_node.add(f"Floor {i+1}")
+                    spaces = config['space_distribution'].get('standard', {})
+                    space_list = ", ".join(f"{k}({v})" for k, v in spaces.items())
+                    floor_node.add(f"[dim]{space_list}[/dim]")
+            else:
+                floor_node = building_node.add(f"Floors 1-{n_std} [dim](x{n_std})[/dim]")
+                spaces = config['space_distribution'].get('standard', {})
+                space_list = ", ".join(f"{k}({v})" for k, v in spaces.items())
+                floor_node.add(f"[dim]{space_list}[/dim]")
+
+        # Rooftop
+        if config['floors']['rooftop'] > 0:
+            floor_node = building_node.add("[dim]Rooftop Technical[/dim]")
+            spaces = config['space_distribution'].get('rooftop', {})
+            space_list = ", ".join(f"{k}({v})" for k, v in spaces.items())
+            floor_node.add(f"[dim]{space_list}[/dim]")
+
+    if config['buildings'] > 3:
+        tree.add(f"[dim]... and {config['buildings'] - 3} more buildings[/dim]")
+
+    console.print(tree)
+    console.print()
+
+    # === VOLUME ESTIMATES ===
+    console.print("[bold]Volume estimates:[/bold]")
+    console.print("[dim]Based on generator business rules...[/dim]")
+    console.print()
+
+    estimates = _calculate_estimates(config)
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Quantity", justify="right")
+    table.add_column("Detail")
+
+    table.add_row("Buildings", str(estimates['buildings']), "")
+    table.add_row("Floors", str(estimates['floors']), f"{estimates['floors_per_building']} per building")
+    table.add_row("Spaces", str(estimates['spaces']), f"~{estimates['spaces_per_floor']} per floor")
+    table.add_row("Equipment", f"~{estimates['equipments']:,}", f"~{estimates['equipments_per_space']:.1f} per space")
+    table.add_row("Points", f"~{estimates['points']:,}", f"~{estimates['points_per_equipment']:.1f} per equipment")
+    table.add_row("", "", "")
+    table.add_row("[bold]Total Nodes[/bold]", f"[bold]~{estimates['total_nodes']:,}[/bold]", "")
+    table.add_row("[bold]Total Edges[/bold]", f"[bold]~{estimates['total_edges']:,}[/bold]", "")
+
+    console.print(table)
+    console.print()
+
+    # Warning for large datasets
+    if estimates['points'] > 500000:
+        console.print("[yellow]Warning: Large dataset (>500k points)[/yellow]")
+        console.print("[dim]Generation may take several minutes.[/dim]")
+        console.print()
+
+    # === CONFIG SUMMARY ===
+    console.print("[bold]Configuration:[/bold]")
+    console.print(f"  Seed: {config['seed']}")
+    console.print(f"  Points/equipment: {'Unlimited' if config['generation'].get('max_points_per_equipment') is None else config['generation']['max_points_per_equipment']}")
+    console.print(f"  Tenants: {config['tenants']}")
+    console.print()
+
+    # Actions
+    console.print("[bold]Actions:[/bold]")
+    console.print("  [cyan]c[/cyan]. Continue to duration selection")
+    console.print("  [cyan]e[/cyan]. Export config to YAML")
+    console.print("  [cyan]r[/cyan]. Restart wizard")
+    console.print("  [cyan]q[/cyan]. Cancel")
+    console.print()
+
+    choice = Prompt.ask("Action", choices=["c", "e", "r", "q"], default="c")
+
+    if choice == "q":
+        console.print("[dim]Cancelled.[/dim]")
+        return False
+    elif choice == "r":
+        console.print("[dim]Returning to start...[/dim]")
+        return False
+    elif choice == "e":
+        _export_wizard_config(config)
+        return wizard_step_preview(config)  # Re-display after export
+
+    return True
+
+
+def _calculate_estimates(config: dict) -> dict:
+    """Calculate volume estimates based on config.
+
+    These estimates are approximate based on the generator's business rules
+    (equipment per space type, points per equipment).
+    """
+    # Floor count
+    floors_per_building = sum(config['floors'].values())
+    total_floors = floors_per_building * config['buildings']
+
+    # Space count
+    total_spaces = 0
+    for floor_type, floor_count in config['floors'].items():
+        spaces_in_floor_type = sum(config['space_distribution'].get(floor_type, {}).values())
+        total_spaces += floor_count * spaces_in_floor_type * config['buildings']
+
+    spaces_per_floor = total_spaces / total_floors if total_floors > 0 else 0
+
+    # Equipment per space type estimates (from generator rules)
+    EQUIPMENT_PER_SPACE_TYPE = {
+        'parking': 8,           # Parking sensors, chargers, cameras
+        'technical_elec': 5,    # TGBT, transformer
+        'technical_hvac': 12,   # AHU, Chiller, Boiler, pumps
+        'technical_it': 8,      # UPS, PDU, switches, CRAC
+        'storage': 2,           # Minimal
+        'lobby': 6,             # Access control, cameras, sensors
+        'corridor': 4,          # Lighting, detectors
+        'restroom': 2,          # Minimal
+        'meeting_small': 7,     # VAV/FCU, sensors, lighting
+        'meeting_large': 8,     # Same + more sensors
+        'office_open': 10,      # Multiple VAV/FCU, zone sensors
+        'office_closed': 7,     # VAV/FCU, sensors, lighting
+        'kitchen': 4,           # Ventilation, detectors
+        'conference': 10,       # Full equipment
+        'vertical': 1,          # Technical shaft
+    }
+
+    # Average points per equipment (with or without limit)
+    max_points = config['generation'].get('max_points_per_equipment')
+    if max_points is None:
+        # No limit: real average from equipment/*.yaml definitions
+        AVG_POINTS_PER_EQUIPMENT = 18
+    else:
+        AVG_POINTS_PER_EQUIPMENT = min(max_points, 18)
+
+    # Equipment count
+    total_equipments = 0
+    for floor_type, floor_count in config['floors'].items():
+        for space_type, space_count in config['space_distribution'].get(floor_type, {}).items():
+            equip_per_space = EQUIPMENT_PER_SPACE_TYPE.get(space_type, 5)
+            total_equipments += floor_count * space_count * equip_per_space * config['buildings']
+
+    # Add building-level equipment (MainMeter, transformer, etc.)
+    building_equipments = 15 * config['buildings']  # ~15 building-level equipment
+    total_equipments += building_equipments
+
+    # Point count
+    total_points = total_equipments * AVG_POINTS_PER_EQUIPMENT
+
+    # Nodes and edges
+    # Nodes = Site + Buildings + Floors + Spaces + Equipment + Points + Tenants + Meters
+    total_nodes = (
+        1 +                          # Site
+        config['buildings'] +        # Buildings
+        total_floors +               # Floors
+        total_spaces +               # Spaces
+        total_equipments +           # Equipment
+        total_points +               # Points
+        config['tenants'] +          # Tenants
+        config['buildings'] * 6      # Meters (~6 per building)
+    )
+
+    # Edges (CONTAINS, HAS_POINT, LOCATED_IN, FEEDS, SERVES, ADJACENT_TO, etc.)
+    # Approximation: ~1.2 edges per node on average
+    total_edges = int(total_nodes * 1.2)
+
+    return {
+        'buildings': config['buildings'],
+        'floors': total_floors,
+        'floors_per_building': floors_per_building,
+        'spaces': total_spaces,
+        'spaces_per_floor': round(spaces_per_floor, 1),
+        'equipments': total_equipments,
+        'equipments_per_space': round(total_equipments / total_spaces, 1) if total_spaces > 0 else 0,
+        'points': total_points,
+        'points_per_equipment': AVG_POINTS_PER_EQUIPMENT,
+        'total_nodes': total_nodes,
+        'total_edges': total_edges,
+    }
+
+
+def _export_wizard_config(config: dict):
+    """Export wizard configuration to a YAML file."""
+    console.print("\n[bold]Export Configuration[/bold]")
+
+    filename = Prompt.ask("Filename", default="custom_profile")
+    if not filename.endswith('.yaml'):
+        filename += '.yaml'
+
+    output_path = CONFIG_DIR / "profiles" / filename
+
+    # Convert internal format to expected YAML format
+    yaml_config = {
+        'profile': config['profile_name'],
+        'seed': config['seed'],
+        'buildings': config['buildings'],
+        'floors': [
+            {'type': 'basement', 'count': config['floors']['basement']},
+            {'type': 'ground', 'count': config['floors']['ground']},
+            {'type': 'standard', 'count': config['floors']['standard']},
+            {'type': 'rooftop', 'count': config['floors']['rooftop']},
+        ],
+        'tenants': config['tenants'],
+        'meters': config['meters'],
+        'space_distribution': config['space_distribution'],
+        'generation': config['generation'],
+        'durations': [
+            {'name': '2d', 'days': 2},
+            {'name': '1w', 'days': 7},
+            {'name': '1m', 'days': 30},
+            {'name': '6m', 'days': 180},
+            {'name': '1y', 'days': 365},
+        ]
+    }
+
+    # Remove floors with count=0
+    yaml_config['floors'] = [f for f in yaml_config['floors'] if f['count'] > 0]
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    console.print(f"[green]Configuration exported: {output_path}[/green]")
+
+    # Note about adding to PROFILES
+    profile_name = filename.replace('.yaml', '')
+    if profile_name not in PROFILES:
+        console.print(f"[dim]Note: Add '{profile_name}' to PROFILES list in run.py to use in simple mode.[/dim]")
+
+
+def wizard_step_duration(config: dict):
+    """Step 7: Choose timeseries duration."""
+    console.print("\n[bold]=== STEP 7/7: Timeseries Duration ===[/bold]\n")
+
+    estimates = _calculate_estimates(config)
+    points = estimates['points']
+
+    console.print("Choose timeseries history duration:")
+    console.print()
+
+    # Calculate row estimates for each duration
+    # Approximation: 50% points generate timeseries at normal freq (288/day)
+    # + 30% at slow freq (96/day) + 20% events (~10/day)
+    rows_per_day = points * (0.5 * 288 + 0.3 * 96 + 0.2 * 10)
+
+    durations_info = [
+        ('2d', 2, rows_per_day * 2),
+        ('1w', 7, rows_per_day * 7),
+        ('1m', 30, rows_per_day * 30),
+        ('6m', 180, rows_per_day * 180),
+        ('1y', 365, rows_per_day * 365),
+    ]
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", style="cyan", width=3)
+    table.add_column("Duration")
+    table.add_column("Days", justify="right")
+    table.add_column("Est. Rows", justify="right")
+    table.add_column("Est. Size", justify="right")
+
+    for i, (name, days, rows) in enumerate(durations_info, 1):
+        # Size approximation: ~50 bytes per row in compressed parquet
+        size_mb = rows * 50 / (1024 * 1024)
+        if size_mb < 1024:
+            size_str = f"{size_mb:.0f} MB"
+        else:
+            size_str = f"{size_mb/1024:.1f} GB"
+
+        table.add_row(str(i), name, str(days), f"{rows:,.0f}", size_str)
+
+    console.print(table)
+    console.print()
+
+    idx = IntPrompt.ask("Duration", default=1)
+    if 1 <= idx <= len(durations_info):
+        config['duration'] = durations_info[idx - 1][0]
+    else:
+        config['duration'] = '2d'
+
+    console.print(f"\n[green]Selected duration: {config['duration']}[/green]")
+
+
+def wizard_step_generate(config: dict):
+    """Step 8: Launch generation."""
+    console.print("\n[bold]=== GENERATION ===[/bold]\n")
+
+    estimates = _calculate_estimates(config)
+
+    console.print(Panel.fit(
+        f"[bold]Final Summary[/bold]\n\n"
+        f"Buildings: {config['buildings']}\n"
+        f"Spaces: ~{estimates['spaces']:,}\n"
+        f"Equipment: ~{estimates['equipments']:,}\n"
+        f"Points: ~{estimates['points']:,}\n"
+        f"Duration: {config['duration']}\n"
+        f"Seed: {config['seed']}",
+        border_style="blue"
+    ))
+
+    if not Confirm.ask("\n[yellow]Start generation?[/yellow]", default=True):
+        console.print("[dim]Cancelled.[/dim]")
+        return
+
+    # Create temporary profile if custom config
+    if config['profile_name'] == 'custom':
+        # Save temporarily
+        temp_profile = CONFIG_DIR / "profiles" / "_wizard_temp.yaml"
+        _export_wizard_config_to_file(config, temp_profile)
+        profile_name = "_wizard_temp"
+    else:
+        profile_name = config['profile_name']
+
+    # Run generator
+    _run_generator(profile_name, config['duration'], config['seed'])
+
+    # Clean up temporary profile
+    if config['profile_name'] == 'custom':
+        temp_profile = CONFIG_DIR / "profiles" / "_wizard_temp.yaml"
+        if temp_profile.exists():
+            temp_profile.unlink()
+
+
+def _export_wizard_config_to_file(config: dict, output_path: Path):
+    """Export wizard config to a YAML file."""
+    yaml_config = {
+        'profile': config['profile_name'],
+        'seed': config['seed'],
+        'buildings': config['buildings'],
+        'floors': [
+            {'type': ftype, 'count': count}
+            for ftype, count in config['floors'].items()
+            if count > 0
+        ],
+        'tenants': config['tenants'],
+        'meters': config['meters'],
+        'space_distribution': config['space_distribution'],
+        'generation': config['generation'],
+        'durations': [
+            {'name': '2d', 'days': 2},
+            {'name': '1w', 'days': 7},
+            {'name': '1m', 'days': 30},
+            {'name': '6m', 'days': 180},
+            {'name': '1y', 'days': 365},
+        ]
+    }
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        yaml.dump(yaml_config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def delete_dataset():
