@@ -1,6 +1,12 @@
 -- QW1: Space Reservation
 -- Creates OCCUPIES edge between tenant and space with period
 -- Parameters: %(qw1_tenant_id)s, %(qw1_space_id)s, %(qw1_start_date)s, %(qw1_end_date)s
+-- Note: Idempotent - first deletes any existing OCCUPIES, then inserts
+
+DELETE FROM p1.edges
+WHERE source_id = %(qw1_tenant_id)s
+  AND target_id = %(qw1_space_id)s
+  AND rel_type = 'OCCUPIES';
 
 INSERT INTO p1.edges (source_id, target_id, rel_type, start_date, end_date)
 VALUES (

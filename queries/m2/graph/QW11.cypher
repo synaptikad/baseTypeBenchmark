@@ -1,6 +1,8 @@
 // QW11 - Space Reassignment
 // Réaffecter un espace d'un tenant à un autre (atomique)
-MATCH (old:Tenant {id: $old_tenant_id})-[r:OCCUPIES]->(s:Space {id: $space_id})
+// Note: Idempotent - uses OPTIONAL MATCH to handle already-reassigned case
+MATCH (s:Space {id: $space_id})
+OPTIONAL MATCH (old:Tenant {id: $old_tenant_id})-[r:OCCUPIES]->(s)
 DELETE r
 WITH s
 MATCH (new:Tenant {id: $new_tenant_id})
