@@ -1044,8 +1044,7 @@ class RAMGradientExecutor:
             ext = "cypher"  # M2 uses Cypher for graph queries
 
             if category in (QueryCategory.GRAPH_ONLY, QueryCategory.GRAPH_NATIVE,
-                           QueryCategory.JSONB_SPECIFIC, QueryCategory.JSONB_VALIDATION,
-                           QueryCategory.SQL_NATIVE):
+                           QueryCategory.JSONB_SPECIFIC, QueryCategory.JSONB_VALIDATION):
                 # Graph-based queries load from graph/ subdirectory
                 query_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "graph",
@@ -1079,8 +1078,8 @@ class RAMGradientExecutor:
                 cleaned = strip_query_comments(text, "sql")
                 return {"query": cleaned}
 
-            elif category == QueryCategory.HYBRID:
-                # Q7-Q9, Q12-Q13: Load BOTH graph and ts files
+            elif category in (QueryCategory.HYBRID, QueryCategory.SQL_NATIVE):
+                # Q7-Q9, Q12-Q13 (HYBRID), Q31, Q33, Q34 (SQL_NATIVE): Load BOTH graph and ts files
                 graph_file = self._find_query_file(
                     queries_dir / self.paradigm.lower() / "graph",
                     query_id,

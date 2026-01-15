@@ -32,8 +32,8 @@ impossible:
     QW11: "Space reassignment metadata requires JSONB"
 
   M1:
-    Q33: "LATERAL JOIN pattern impossible in Cypher without correlated subqueries"
-    Q34: "Materialized views not supported in Memgraph"
+    # Q33 and Q34 are now DEGRADED (applicative calculation via UNWIND)
+    # Previously marked IMPOSSIBLE but can be computed via TimeseriesChunk
 
 # Queries DEGRADED par paradigme
 # Ces queries fonctionnent mais avec des résultats partiellement différents
@@ -46,6 +46,8 @@ degraded:
     Q12: "Multi-aggregates on TimeseriesChunk arrays"
     Q13: "Business hours filter approximation on chunks"
     Q19: "No live stats without TimescaleDB"
+    Q33: "Latest value via UNWIND TimeseriesChunk - no LATERAL JOIN support"
+    Q34: "Energy summary calculated on-the-fly - no materialized views"
 
   M2:
     Q13: "Hybrid architecture returns per-point aggregates; space context lost in graph→SQL handoff"
