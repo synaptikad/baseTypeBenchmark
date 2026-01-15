@@ -807,8 +807,9 @@ class RAMGradientExecutor:
                             tracker.reset()
 
                         # Execute based on query category
-                        if query_def.category == "hybrid" and self.paradigm == "M2":
+                        if query_def.category in ("hybrid", "sql_native") and self.paradigm == "M2":
                             # Hybrid execution: two-phase (graph + timeseries)
+                            # For M2: both hybrid and sql_native use graph→SQL orchestration
                             result = runner.execute_hybrid(
                                 query_files["graph_query"],
                                 query_files["ts_query"],
