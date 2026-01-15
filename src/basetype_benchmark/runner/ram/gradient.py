@@ -324,7 +324,7 @@ class RAMGradientExecutor:
     DEFAULT_LEVELS_MB = [131072, 65536, 32768, 16384, 8192]  # 128, 64, 32, 16, 8 GB
 
     # Default calibration range (MB) - user can override with min/max
-    DEFAULT_CALIBRATION_MAX_MB = 16384  # 16GB
+    DEFAULT_CALIBRATION_MAX_MB = 65536  # 64GB
     DEFAULT_CALIBRATION_MIN_MB = 512    # 512MB
 
     # Execution parameters

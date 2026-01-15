@@ -1136,7 +1136,7 @@ def run_calibration(source_dir: Path, paradigms: list[str], max_mb: int, min_mb:
                         "--calibration-min", str(min_mb),
                         "--cleanup",
                     ],
-                    timeout=600,  # 10 minutes max per paradigm
+                    timeout=3600,  # 60 minutes max per paradigm (large datasets need time to load)
                 )
 
                 if returncode != 0:

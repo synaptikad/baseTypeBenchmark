@@ -558,8 +558,8 @@ def benchmark(
     ] = False,
     calibration_max: Annotated[
         int,
-        typer.Option("--calibration-max", help="Calibration max RAM in MB (default: 16384)")
-    ] = 16384,
+        typer.Option("--calibration-max", help="Calibration max RAM in MB (default: 65536)")
+    ] = 65536,
     calibration_min: Annotated[
         int,
         typer.Option("--calibration-min", help="Calibration min RAM in MB (default: 512)")

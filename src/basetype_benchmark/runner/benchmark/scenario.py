@@ -68,7 +68,7 @@ class ScenarioConfig:
     # RAM calibration options (2-phase protocol)
     force_calibration: bool = False  # Re-run calibration even if cached
     skip_calibration: bool = False  # Skip calibration entirely (use full ram_levels_mb)
-    calibration_max_mb: int = 16384  # Calibration max RAM in MB
+    calibration_max_mb: int = 65536  # Calibration max RAM in MB
     calibration_min_mb: int = 512    # Calibration min RAM in MB
 
     def to_benchmark_config(self, actual_queries: list[str] | None = None) -> BenchmarkConfig:
@@ -727,7 +727,7 @@ class BenchmarkOrchestrator:
         paradigm: str,
         source_dir: Path,
         force: bool = False,
-        max_mb: int = 16384,
+        max_mb: int = 65536,
         min_mb: int = 512,
     ) -> int | None:
         """Get cached or run new RAM calibration for a paradigm.
