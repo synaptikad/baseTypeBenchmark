@@ -2184,6 +2184,20 @@ class DatasetGenerator:
             else:
                 params["meter_ids"] = []
 
+        # Q40: Use a DIFFERENT tenant than QW10's tenant_id to ensure Q40 has data
+        # after QW10 runs (QW10 deletes all METERS_TENANT for tenant_id)
+        qw10_tenant = params.get("tenant_id")
+        q40_tenant = None
+        for edge in self.edges:
+            if edge.rel_type == "METERS_TENANT" and edge.target_id != qw10_tenant:
+                q40_tenant = edge.target_id
+                break
+        if q40_tenant:
+            params["q40_tenant_id"] = q40_tenant
+        else:
+            # Fallback: use tenant_id (Q40 will show 0 rows after QW10)
+            params["q40_tenant_id"] = qw10_tenant
+
         return params
 
     def _write_query_params(self, output_dir: Path, params: Dict[str, Any]):

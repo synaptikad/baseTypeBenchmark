@@ -2008,16 +2008,16 @@ queries:
     validates_write: QW9
     intention: |
       Lister tous les compteurs associés à un locataire (via METERS_TENANT).
-      Utilisé pour valider QW9 avec meter_id optionnel.
+      Uses q40_tenant_id (different from QW10's tenant) to persist across gradient runs.
     use_case: "Validation compteurs, audit facturation"
     parameters:
-      - name: TENANT_ID
+      - name: Q40_TENANT_ID
         type: string
-        description: "ID du locataire"
+        description: "ID du locataire (différent de QW10 pour idempotence)"
         format:
-          sql: "%(tenant_id)s"
-          cypher: "$tenant_id"
-        example: "tenant_3"
+          sql: "%(q40_tenant_id)s"
+          cypher: "$q40_tenant_id"
+        example: "tenant_2"
     relations: [METERS_TENANT]
     result_schema:
       columns:

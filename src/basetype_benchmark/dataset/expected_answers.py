@@ -2292,17 +2292,19 @@ class ExpectedAnswerGenerator:
         )
 
     def _gen_q40(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q40: Verify Tenant Meters - lists meters before QW10 (Move-Out).
+        """Q40: Verify Tenant Meters - lists meters for a tenant.
 
         Lists all meters associated with a tenant via METERS_TENANT relationship.
-        Q40 runs BEFORE QW10 in the benchmark, so meters should exist.
+        Uses q40_tenant_id (different from QW10's tenant_id) to ensure data
+        persists across repeated runs where QW10 deletes meters.
         Note: METERS_TENANT goes (meter)-[:METERS_TENANT]->(tenant)
         """
-        tenant_id = params.get("tenant_id")
+        # Use q40_tenant_id (different from QW10's tenant) to avoid 0-row after QW10
+        tenant_id = params.get("q40_tenant_id") or params.get("tenant_id")
         if not tenant_id:
             return None
 
-        # Q40 runs BEFORE QW10 - find all meters associated with tenant
+        # Find all meters associated with tenant
         # METERS_TENANT: (meter)-[:METERS_TENANT]->(tenant), so tenant is target
         associated_meters = set()
         full_rows = []
@@ -2323,7 +2325,7 @@ class ExpectedAnswerGenerator:
 
         return ExpectedAnswer(
             query_id="Q40",
-            parameters={"tenant_id": tenant_id},
+            parameters={"q40_tenant_id": tenant_id},
             answer_type="set",
             semantic_content=associated_meters,
             row_count=len(associated_meters),
