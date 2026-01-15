@@ -79,7 +79,7 @@ class TimeseriesDependencyResult(BaseModel):
 
 class LoadResult(BaseModel):
     """Resultat d'un chargement bulk."""
-    engine: str = Field(description="P1, P2, M1, M2, O2")
+    engine: str = Field(description="P1, P2, M1, M2")
     success: bool = Field(default=True)
     nodes_loaded: int = Field(default=0, ge=0)
     edges_loaded: int = Field(default=0, ge=0)
@@ -107,7 +107,7 @@ class LoadResult(BaseModel):
 class BulkLoader(Protocol):
     """Protocol pour tous les loaders.
 
-    Chaque loader (PostgresLoader, MemgraphLoader, OxigraphLoader)
+    Chaque loader (PostgresLoader, MemgraphLoader)
     doit implementer cette interface.
     """
 

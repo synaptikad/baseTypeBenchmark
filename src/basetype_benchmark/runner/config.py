@@ -20,12 +20,15 @@ import yaml
 # =============================================================================
 
 class EngineType(str, Enum):
-    """Les 5 paradigmes du benchmark."""
+    """Les 4 paradigmes du benchmark."""
     P1 = "P1"  # PostgreSQL Relational
     P2 = "P2"  # PostgreSQL JSONB
     M1 = "M1"  # Memgraph Standalone
     M2 = "M2"  # Memgraph + TimescaleDB
-    O2 = "O2"  # Oxigraph + TimescaleDB
+
+
+# Paradigms using PostgreSQL/TimescaleDB (require container restart for RAM changes)
+TIMESCALE_PARADIGMS = frozenset({"P1", "P2", "M2"})
 
 
 class QueryCategory(str, Enum):
@@ -103,12 +106,6 @@ ENGINE_PROFILES: dict[EngineType, EngineProfile] = {
         base_overhead_mb=512,
         timeseries_in_memory=False,
         can_oom=True,
-    ),
-    EngineType.O2: EngineProfile(
-        engine=EngineType.O2,
-        is_in_memory=False,
-        base_overhead_mb=128,
-        can_oom=False,
     ),
 }
 
@@ -235,30 +232,16 @@ class MemgraphConfig(BaseModel):
     timeout_seconds: int = Field(default=300, ge=1)
 
 
-class OxigraphConfig(BaseModel):
-    """Oxigraph connection configuration."""
-    query_endpoint: str = Field(
-        default="http://localhost:7878/query",
-        description="SPARQL query endpoint"
-    )
-    update_endpoint: str = Field(
-        default="http://localhost:7878/update",
-        description="SPARQL update endpoint"
-    )
-    db_path: Optional[Path] = Field(default=None, description="Path to Oxigraph database")
-    timeout_seconds: int = Field(default=300, ge=1)
-
-
 class HybridConfig(BaseModel):
-    """Hybrid paradigm configuration (M2, O2)."""
-    graph: MemgraphConfig | OxigraphConfig
+    """Hybrid paradigm configuration (M2)."""
+    graph: MemgraphConfig
     timeseries: PostgresConfig
 
 
 class ParadigmConfig(BaseModel):
     """Configuration for a specific paradigm."""
-    type: str = Field(description="Paradigm type: postgresql, memgraph, oxigraph, hybrid")
-    config: PostgresConfig | MemgraphConfig | OxigraphConfig | HybridConfig
+    type: str = Field(description="Paradigm type: postgresql, memgraph, hybrid")
+    config: PostgresConfig | MemgraphConfig | HybridConfig
 
 
 # =============================================================================
@@ -326,7 +309,7 @@ def get_measured_ram(paradigm: str, results_file: Optional[Path] = None) -> Opti
     previously measured values.
 
     Args:
-        paradigm: Paradigm ID (P1, P2, M1, M2, O2)
+        paradigm: Paradigm ID (P1, P2, M1, M2)
         results_file: Path to results.json from benchmark run
 
     Returns:

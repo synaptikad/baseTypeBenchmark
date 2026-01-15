@@ -59,10 +59,6 @@ EQUIVALENCE_RULES = {
             "Q12": "No TimescaleDB - uses TimeseriesChunk with UNWIND",
             "Q13": "No TimescaleDB - uses TimeseriesChunk with UNWIND",
         },
-        "O2": {
-            "Q6": "SPARQL lacks time_bucket aggregation",
-            "Q15": "Date arithmetic approximation (365/30 days)",
-        },
     },
 
     # Queries impossible per paradigm
@@ -77,11 +73,6 @@ EQUIVALENCE_RULES = {
             "Q19": "No JSONB for digital twin data",
             "Q33": "No LATERAL JOIN or TimescaleDB for latest values",
             "Q34": "No LATERAL JOIN or TimescaleDB for latest values",
-        },
-        "O2": {
-            "Q20": "SPARQL lacks shortestPath algorithm",
-            "Q21": "SPARQL lacks allShortestPaths algorithm",
-            "Q23": "SPARQL path enumeration causes combinatorial explosion (5322 rows vs 30)",
         },
     },
 }

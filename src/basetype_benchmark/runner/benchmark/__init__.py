@@ -16,7 +16,7 @@ Example:
     )
 
     orchestrator = BenchmarkOrchestrator(
-        paradigms=["P1", "P2", "M1", "M2", "O2"],
+        paradigms=["P1", "P2", "M1", "M2"],
         configs=configs,
     )
 

@@ -1,9 +1,9 @@
-"""Hybrid query runner for two-phase execution (M2, O2).
+"""Hybrid query runner for two-phase execution (M2).
 
 Sprint 3 - Benchmark BaseType V3
 
 Orchestrates hybrid queries that require:
-1. Graph phase: Execute Cypher/SPARQL to get point_ids
+1. Graph phase: Execute Cypher to get point_ids
 2. Timeseries phase: Execute SQL with collected point_ids
 
 This is the core of the federated architecture described in papier.md
@@ -12,9 +12,9 @@ Section 3.6 "Architecture hybride federee".
 from __future__ import annotations
 
 import time
-from typing import Any, Union
+from typing import Any
 
-from ..config import PostgresConfig, MemgraphConfig, OxigraphConfig
+from ..config import PostgresConfig, MemgraphConfig
 from .base import (
     BaseRunner,
     RunResult,
@@ -24,14 +24,13 @@ from .base import (
 )
 from .postgres import PostgresRunner
 from .memgraph import MemgraphRunner
-from .oxigraph import OxigraphRunner
 
 
 class HybridRunner:
-    """Two-phase query runner for hybrid paradigms (M2, O2).
+    """Two-phase query runner for hybrid paradigm (M2).
 
     Implements the federated execution pattern:
-    1. Execute graph query (Cypher or SPARQL) to identify point_ids
+    1. Execute graph query (Cypher) to identify point_ids
     2. Inject point_ids into timeseries query (SQL)
     3. Execute timeseries query and return combined results
 
@@ -63,16 +62,16 @@ class HybridRunner:
 
     def __init__(
         self,
-        graph_runner: Union[MemgraphRunner, OxigraphRunner],
+        graph_runner: MemgraphRunner,
         ts_runner: PostgresRunner,
         paradigm: str = "M2",
     ):
         """Initialize hybrid runner.
 
         Args:
-            graph_runner: Runner for graph queries (Memgraph or Oxigraph)
+            graph_runner: Runner for graph queries (Memgraph)
             ts_runner: Runner for timeseries queries (PostgreSQL/TimescaleDB)
-            paradigm: M2 or O2
+            paradigm: M2
         """
         self.graph = graph_runner
         self.ts = ts_runner
@@ -88,12 +87,12 @@ class HybridRunner:
 
         This method is required for compatibility with the benchmark framework.
         It automatically detects whether the query is:
-        - Graph-only (Cypher/SPARQL) → routes to graph runner
-        - Timeseries-only (SQL) → routes to timeseries runner
+        - Graph-only (Cypher) -> routes to graph runner
+        - Timeseries-only (SQL) -> routes to timeseries runner
         - Hybrid queries are not supported via this method; use execute_hybrid()
 
         Args:
-            query: Query string (Cypher, SPARQL, or SQL)
+            query: Query string (Cypher or SQL)
             params: Query parameters
             timeout_seconds: Timeout
 
@@ -107,14 +106,7 @@ class HybridRunner:
         if any(keyword in query_lower[:100] for keyword in ['match ', 'create ', 'merge ', 'return ']):
             return self.graph.execute(query, params, timeout_seconds)
 
-        # Detect SPARQL (O2)
-        if any(keyword in query_lower[:100] for keyword in ['select ', 'construct ', 'describe ', 'ask ', 'prefix ']):
-            # Check if it's SPARQL or SQL
-            if 'where' in query_lower and '{' in query:
-                # SPARQL has WHERE { ... } patterns
-                return self.graph.execute(query, params, timeout_seconds)
-
-        # Default: SQL query → timeseries
+        # Default: SQL query -> timeseries
         # Convert camelCase params to snake_case for SQL
         if params:
             import re
@@ -144,7 +136,7 @@ class HybridRunner:
             Execute and return results
 
         Args:
-            graph_query: Cypher or SPARQL query
+            graph_query: Cypher query
             ts_query: SQL query with $point_ids or %(point_ids)s placeholder
             params: Shared parameters for both queries
             timeout_seconds: Total timeout for both phases
@@ -225,7 +217,7 @@ class HybridRunner:
         Useful for pure graph traversals (Q1-Q5).
 
         Args:
-            query: Cypher or SPARQL query
+            query: Cypher query
             params: Query parameters
             timeout_seconds: Timeout
 
@@ -263,7 +255,7 @@ class HybridRunner:
         """Execute graph phase.
 
         Args:
-            query: Graph query (Cypher or SPARQL)
+            query: Cypher graph query
             params: Query parameters
             timeout_seconds: Timeout
 
@@ -304,7 +296,7 @@ class HybridRunner:
 
         # Build params dict for named placeholders %(name)s
         # SQL uses lowercase_snake param names
-        # Handle both UPPER_CASE (from sampler) and camelCase (from O2 normalization)
+        # Handle both UPPER_CASE (from sampler) and camelCase
         ts_params = {}
         for k, v in params.items():
             # Convert camelCase to snake_case, then lowercase
@@ -395,19 +387,6 @@ class HybridRunner:
                 return [str(id) for id in ids]
             return [str(ids)] if ids else []
 
-        # Case 4: O2 Q13 format - rows with (point_id, quantity) at row level
-        # This handles SPARQL queries that return individual (point_id, quantity) pairs
-        if "point_id" in sample_row and "quantity" in sample_row:
-            result = {}
-            for row in rows:
-                pid = row.get("point_id")
-                qty = row.get("quantity")
-                if pid and qty:
-                    if qty not in result:
-                        result[qty] = []
-                    result[qty].append(str(pid))
-            return result if result else []
-
         # Fallback: auto-detect column
         if column is None:
             for col in self.POINT_ID_COLUMNS:
@@ -471,11 +450,6 @@ class HybridRunner:
         if any(keyword in query_lower[:100] for keyword in ['match ', 'create ', 'merge ', 'return ']):
             return self.graph.get_query_plan(query, params)
 
-        # SPARQL query
-        if any(keyword in query_lower[:100] for keyword in ['select ', 'construct ', 'describe ', 'ask ', 'prefix ']):
-            if 'where' in query_lower and '{' in query:
-                return self.graph.get_query_plan(query, params)
-
         # SQL query
         return self.ts.get_query_plan(query, params)
 
@@ -506,25 +480,4 @@ class M2HybridRunner(HybridRunner):
             graph_runner=MemgraphRunner(memgraph_config, paradigm="M2"),
             ts_runner=PostgresRunner(postgres_config, paradigm="M2"),
             paradigm="M2",
-        )
-
-
-class O2HybridRunner(HybridRunner):
-    """Hybrid runner for O2 (Oxigraph + TimescaleDB)."""
-
-    def __init__(
-        self,
-        oxigraph_config: OxigraphConfig,
-        postgres_config: PostgresConfig,
-    ):
-        """Initialize O2 hybrid runner.
-
-        Args:
-            oxigraph_config: Oxigraph connection config
-            postgres_config: TimescaleDB connection config
-        """
-        super().__init__(
-            graph_runner=OxigraphRunner(oxigraph_config, paradigm="O2"),
-            ts_runner=PostgresRunner(postgres_config, paradigm="O2"),
-            paradigm="O2",
         )

@@ -33,7 +33,7 @@ SCENARIOS: dict[str, ScenarioConfig] = {
         timeout_seconds=60.0,
     ),
     "standard": ScenarioConfig(
-        paradigms=["P1", "P2", "M1", "M2", "O2"],
+        paradigms=["P1", "P2", "M1", "M2"],
         queries=None,  # All queries
         data_profile="small",
         ram_levels_mb=[131072, 65536, 32768, 16384, 8192],  # 128, 64, 32, 16, 8 GB
@@ -53,7 +53,7 @@ SCENARIOS: dict[str, ScenarioConfig] = {
         timeout_seconds=300.0,
     ),
     "publication": ScenarioConfig(
-        paradigms=["P1", "P2", "M1", "M2", "O2"],
+        paradigms=["P1", "P2", "M1", "M2"],
         queries=None,  # All queries
         data_profile="medium",
         ram_levels_mb=[131072, 98304, 65536, 49152, 32768, 24576, 16384, 12288, 8192, 4096],
@@ -88,7 +88,7 @@ SCENARIO_INFO: dict[str, dict[str, Any]] = {
         "name": "Standard Benchmark",
         "description": "Full comparison, all paradigms",
         "estimated_duration": "~2 hours",
-        "paradigms_count": 5,
+        "paradigms_count": 4,
         "ram_levels_count": 5,
     },
     "ram_gradient": {
@@ -102,7 +102,7 @@ SCENARIO_INFO: dict[str, dict[str, Any]] = {
         "name": "Publication Ready",
         "description": "High precision for academic papers",
         "estimated_duration": "~8 hours",
-        "paradigms_count": 5,
+        "paradigms_count": 4,
         "ram_levels_count": 10,
     },
     "ci": {
@@ -207,7 +207,7 @@ def load_scenario_from_yaml(path: Path) -> ScenarioConfig:
         raise ValueError(f"Invalid scenario file: expected dict, got {type(data)}")
 
     # Parse paradigms
-    paradigms = data.get("paradigms", ["P1", "P2", "M1", "M2", "O2"])
+    paradigms = data.get("paradigms", ["P1", "P2", "M1", "M2"])
     if isinstance(paradigms, str):
         paradigms = [p.strip() for p in paradigms.split(",")]
 
@@ -298,7 +298,7 @@ class ScenarioBuilder:
         builder.set_ram_levels_gb([32, 16, 8])
         config = builder.build()
     """
-    paradigms: list[str] = field(default_factory=lambda: ["P1", "P2", "M1", "M2", "O2"])
+    paradigms: list[str] = field(default_factory=lambda: ["P1", "P2", "M1", "M2"])
     queries: list[str] | None = None
     data_profile: str = "small"
     ram_levels_gb: list[int] = field(default_factory=lambda: [128, 64, 32, 16, 8])

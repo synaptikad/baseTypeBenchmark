@@ -2,7 +2,7 @@
 Extractors module - Benchmark BaseType V3
 Extracteurs pour les différents paradigmes de stockage.
 
-Note: Les extracteurs (P1Extractor, P2Extractor, M1M2Extractor, O2Extractor)
+Note: Les extracteurs (P1Extractor, P2Extractor, M1M2Extractor)
 sont conçus pour être exécutés via `python -m` et ne sont pas importés ici
 pour éviter les RuntimeWarning lors de l'exécution en module.
 """

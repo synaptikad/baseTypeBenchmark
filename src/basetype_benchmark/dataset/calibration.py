@@ -69,7 +69,7 @@ class RAMCalibration:
         """Get minimum viable RAM for a paradigm.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
 
         Returns:
             RAM in MB, or None if not calibrated

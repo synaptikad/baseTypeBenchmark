@@ -434,10 +434,10 @@ def run_query(
     paradigm = paradigm.upper()
     query_id = query.upper()
 
-    # Validate paradigm (O2 is exploratory only)
+    # Validate paradigm
     if paradigm not in ("P1", "P2", "M1", "M2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
-        console.print("[dim]Note: O2 (Oxigraph) is exploratory only[/dim]")
+        console.print("Valid paradigms: P1, P2, M1, M2")
         raise typer.Exit(1)
 
     # Parse params
@@ -461,7 +461,7 @@ def run_query(
     try:
         primary_config, ts_config = _get_loader_configs(paradigm)
 
-        if paradigm in ("M2", "O2") and ts_config:
+        if paradigm == "M2" and ts_config:
             runner = get_hybrid_runner(paradigm, primary_config, ts_config)
         else:
             runner = get_runner(paradigm, primary_config)
@@ -642,7 +642,7 @@ def benchmark(
             ram_levels_mb = [int(float(r.strip()) * 1024) for r in ram_levels.split(",")]
     else:
         # Parse from CLI options
-        paradigm_list = ["P1", "P2", "M1", "M2"]  # O2 is exploratory only
+        paradigm_list = ["P1", "P2", "M1", "M2"]
         if paradigms:
             paradigm_list = [p.strip().upper() for p in paradigms.split(",")]
 
@@ -745,8 +745,11 @@ def benchmark(
 
                 console.print(f"  [green]{paradigm}: minimum viable = {minimum_viable}MB[/green]")
 
-                # Stop containers
-                orchestrator.isolation.stop_paradigm(paradigm)
+                # Stop containers (force remove for Memgraph after potential OOM)
+                # M1 and M2 share benchmark-memgraph, so we force remove after calibration
+                # to ensure clean state for next paradigm
+                force_remove = paradigm in ("M1", "M2")
+                orchestrator.isolation.stop_paradigm(paradigm, force_remove=force_remove)
 
                 # Cleanup exports
                 if cleanup and paradigm_export_dir.exists():
@@ -813,21 +816,22 @@ def gradient(
         typer.Option("--ram", help="Comma-separated RAM levels in GB")
     ] = "32,16,8",
 ) -> None:
-    """Test RAM gradient for a single paradigm.
+    """(DEPRECATED) Test RAM gradient for a single paradigm.
 
     Quick test to find RAM_viable for a paradigm.
 
     Examples:
         btb-runner gradient M1 -d data/export --ram "32,16,8"
     """
+    console.print("[yellow]⚠ DEPRECATED: Use 'btb-runner benchmark' instead[/yellow]")
     from .ram import IsolationManager, RAMGradientExecutor
 
     paradigm = paradigm.upper()
 
-    # Validate (O2 is exploratory only)
+    # Validate paradigm
     if paradigm not in ("P1", "P2", "M1", "M2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
-        console.print("[dim]Note: O2 (Oxigraph) is exploratory only[/dim]")
+        console.print("Valid paradigms: P1, P2, M1, M2")
         raise typer.Exit(1)
 
     if not data_dir.exists():
@@ -925,7 +929,7 @@ def load(
         typer.Option("--verbose", "-v", help="Verbose output with detailed logs")
     ] = False,
 ) -> None:
-    """Load exported data into database.
+    """(DEPRECATED) Load exported data into database.
 
     Optimized for massive datasets (1M+ rows).
     Supports parallel loading for timeseries.
@@ -934,10 +938,10 @@ def load(
         btb-runner load P1 -d data/export/p1
         btb-runner load M2 -d data/export/m1m2 -w 16 --clear
     """
+    console.print("[yellow]⚠ DEPRECATED: Use 'btb-runner benchmark' which handles loading automatically[/yellow]")
     from .config import (
         PostgresConfig,
         MemgraphConfig,
-        OxigraphConfig,
     )
     from .loaders import (
         get_loader,
@@ -949,14 +953,11 @@ def load(
 
     paradigm = paradigm.upper()
 
-    # Validate paradigm (O2 is exploratory only but supported for load)
-    if paradigm not in ("P1", "P2", "M1", "M2", "O2"):
+    # Validate paradigm
+    if paradigm not in ("P1", "P2", "M1", "M2"):
         console.print(f"[red]Unknown paradigm: {paradigm}[/red]")
-        console.print("Valid paradigms: P1, P2, M1, M2, O2")
+        console.print("Valid paradigms: P1, P2, M1, M2")
         raise typer.Exit(1)
-
-    if paradigm == "O2":
-        console.print("[yellow]Note: O2 (Oxigraph) is exploratory only, not part of official benchmark[/yellow]")
 
     # Validate data directory
     if not data_dir.exists():
@@ -987,7 +988,7 @@ def load(
         console.print(f"[red]Cannot connect to {paradigm} database[/red]")
         raise typer.Exit(1)
 
-    # Check timeseries dependency (for P2, M2, O2)
+    # Check timeseries dependency (for P2, M2)
     if not _check_timeseries_dependency(loader, paradigm, data_dir):
         raise typer.Exit(1)
 
@@ -1078,12 +1079,6 @@ def _get_expected_files(paradigm: str) -> list[tuple[str, str]]:
             ("Edges", "edges.csv"),
             ("Timeseries", "timeseries.csv"),
         ]
-    elif paradigm == "O2":
-        return [
-            ("Ontology", "ontology.ttl"),
-            ("RDF Data", "data.nt"),
-            ("Timeseries", "timeseries.csv"),
-        ]
     return []
 
 
@@ -1101,14 +1096,14 @@ def _count_file_rows(filepath: Path) -> int:
 def _check_timeseries_dependency(loader, paradigm: str, data_dir: Path) -> bool:
     """Check timeseries dependency and prompt user if missing.
 
-    For engines that share TimescaleDB (P2, M2, O2), checks if timeseries
+    For engines that share TimescaleDB (P2, M2), checks if timeseries
     data is available. If not, prompts the user to either:
     1. Load timeseries now
     2. Cancel the operation
 
     Args:
         loader: The loader instance with check_timeseries_dependency method
-        paradigm: The target paradigm (P1, P2, M1, M2, O2)
+        paradigm: The target paradigm (P1, P2, M1, M2)
         data_dir: Path to the data directory (for loading timeseries if needed)
 
     Returns:
@@ -1161,7 +1156,7 @@ def _check_timeseries_dependency(loader, paradigm: str, data_dir: Path) -> bool:
             console.print("[dim]Les timeseries seront chargées pendant le load P1.[/dim]")
             return True
 
-        # For P2, M2, O2 - ask user
+        # For P2, M2 - ask user
         load_ts = typer.confirm(
             f"Voulez-vous charger les timeseries maintenant pour {paradigm}?",
             default=True,
@@ -1185,10 +1180,9 @@ def _get_loader_configs(paradigm: str):
     Port defaults match docker-compose.yml port mappings:
     - TimescaleDB: 5432:5432
     - Memgraph: 7688:7687 (host:container)
-    - Oxigraph: 7878:7878
     """
     import os
-    from .config import PostgresConfig, MemgraphConfig, OxigraphConfig
+    from .config import PostgresConfig, MemgraphConfig
 
     timescale_config = None
 
@@ -1225,20 +1219,6 @@ def _get_loader_configs(paradigm: str):
             timescale_config = PostgresConfig(
                 dsn=build_pg_dsn(ts_host, ts_port, ts_database, ts_user, ts_password)
             )
-    elif paradigm == "O2":
-        base_url = os.getenv("OXIGRAPH_URL", "http://localhost:7878")
-        primary_config = OxigraphConfig(
-            query_endpoint=f"{base_url}/query",
-            update_endpoint=f"{base_url}/update",
-        )
-        ts_host = os.getenv("TIMESCALE_HOST", "localhost")
-        ts_port = int(os.getenv("TIMESCALE_PORT", "5432"))
-        ts_database = os.getenv("TIMESCALE_DB", "benchmark")
-        ts_user = os.getenv("TIMESCALE_USER", "postgres")
-        ts_password = os.getenv("TIMESCALE_PASSWORD", "postgres")
-        timescale_config = PostgresConfig(
-            dsn=build_pg_dsn(ts_host, ts_port, ts_database, ts_user, ts_password)
-        )
     else:
         raise ValueError(f"Unknown paradigm: {paradigm}")
 
@@ -1257,21 +1237,17 @@ def _setup_progress_phases(display, paradigm: str, data_dir: Path) -> None:
 
     # Nodes
     nodes_file = data_dir / "nodes.csv"
-    if paradigm == "O2":
-        nodes_file = data_dir / "data.nt"
-
     if nodes_file.exists():
         count = _count_file_rows(nodes_file)
         display.add_phase(LoadPhase.NODES, count, phase_num)
         phase_num += 1
 
-    # Edges (not for O2 - combined in data.nt)
-    if paradigm != "O2":
-        edges_file = data_dir / "edges.csv"
-        if edges_file.exists():
-            count = _count_file_rows(edges_file)
-            display.add_phase(LoadPhase.EDGES, count, phase_num)
-            phase_num += 1
+    # Edges
+    edges_file = data_dir / "edges.csv"
+    if edges_file.exists():
+        count = _count_file_rows(edges_file)
+        display.add_phase(LoadPhase.EDGES, count, phase_num)
+        phase_num += 1
 
     # Timeseries
     ts_file = data_dir / "timeseries.csv"
@@ -1335,7 +1311,7 @@ def status() -> None:
     # Exports
     console.print("\n[cyan]Exports:[/cyan]")
     export_dir = data_dir / "exports"
-    paradigms = ["p1", "p2", "m1", "m2"]  # O2 is exploratory only
+    paradigms = ["p1", "p2", "m1", "m2"]
     for p in paradigms:
         p_dir = export_dir / p
         if p_dir.exists() and list(p_dir.glob("*")):
@@ -1383,7 +1359,7 @@ def generate(
         typer.Option("--output", "-o", help="Output directory")
     ] = None,
 ) -> None:
-    """Generate synthetic dataset.
+    """(DEPRECATED) Generate synthetic dataset.
 
     Creates Parquet files (nodes, edges, timeseries) for benchmarking.
 
@@ -1391,6 +1367,7 @@ def generate(
         btb-runner generate --profile small --duration 1w
         btb-runner generate --profile medium --seed 123
     """
+    console.print("[yellow]⚠ DEPRECATED: Use the wizard (python run.py) for data generation[/yellow]")
     import subprocess
     import os
 
@@ -1444,7 +1421,7 @@ def export_cmd(
         typer.Option("--output", "-o", help="Output directory")
     ] = None,
 ) -> None:
-    """Export Parquet data to paradigm format.
+    """(DEPRECATED) Export Parquet data to paradigm format.
 
     Converts generated Parquet files to the format required by each paradigm.
 
@@ -1452,6 +1429,7 @@ def export_cmd(
         btb-runner export P1 -s data/generated/small-1w
         btb-runner export M1 -s data/generated/small-1w -o data/exports/m1
     """
+    console.print("[yellow]⚠ DEPRECATED: Use 'btb-runner benchmark' which handles export automatically[/yellow]")
     import subprocess
     import os
 
@@ -1463,7 +1441,6 @@ def export_cmd(
         "P2": "src.basetype_benchmark.exporters.p2_extractor",
         "M1": "src.basetype_benchmark.exporters.m1m2_extractor",
         "M2": "src.basetype_benchmark.exporters.m1m2_extractor",
-        "O2": "src.basetype_benchmark.exporters.o2_extractor",
     }
 
     if paradigm not in exporter_modules:
@@ -1559,7 +1536,7 @@ def validate_cmd(
 
     With --semantic (default), uses semantic rules to compare the INFORMATION
     returned by queries, not just row counts. This catches bugs like Q1 where
-    P1 includes the source meter but M1/O2 don't.
+    P1 includes the source meter but M1 doesn't.
 
     Examples:
         btb-runner validate results.json
@@ -2567,21 +2544,18 @@ def _build_paradigm_configs() -> dict:
     from .config import (
         PostgresConfig,
         MemgraphConfig,
-        OxigraphConfig,
         HybridConfig,
     )
 
     # Default configs (can be overridden via environment)
     pg_config = PostgresConfig()
     mg_config = MemgraphConfig()
-    ox_config = OxigraphConfig()
 
     return {
         "P1": pg_config,
         "P2": pg_config,
         "M1": mg_config,
         "M2": HybridConfig(graph=mg_config, timeseries=pg_config),
-        "O2": HybridConfig(graph=ox_config, timeseries=pg_config),
     }
 
 

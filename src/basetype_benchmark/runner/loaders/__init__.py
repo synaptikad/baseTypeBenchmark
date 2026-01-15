@@ -5,7 +5,6 @@ Sprint 2 - Benchmark BaseType V3
 Loaders disponibles:
 - PostgresLoader: P1 (relationnel) et P2 (JSONB)
 - MemgraphLoader: M1 (standalone) et M2 (+ TimescaleDB)
-- OxigraphLoader: O2 (+ TimescaleDB)
 
 Exemple d'utilisation:
     ```python
@@ -36,7 +35,6 @@ from .base import (
     TimeseriesDependencyStatus,
 )
 from .memgraph import MemgraphLoader
-from .oxigraph import OxigraphLoader
 from .postgres import PostgresLoader
 from .progress import (
     LoadProgressDisplay,
@@ -47,7 +45,6 @@ from .progress import (
 if TYPE_CHECKING:
     from ..config import (
         MemgraphConfig,
-        OxigraphConfig,
         PostgresConfig,
     )
 
@@ -64,7 +61,6 @@ __all__ = [
     # Loaders
     "PostgresLoader",
     "MemgraphLoader",
-    "OxigraphLoader",
     # Progress display
     "LoadProgressDisplay",
     "print_simple_result",
@@ -74,20 +70,20 @@ __all__ = [
 ]
 
 # Paradigm type
-Paradigm = Literal["P1", "P2", "M1", "M2", "O2"]
+Paradigm = Literal["P1", "P2", "M1", "M2"]
 
 
 def get_loader(
     paradigm: Paradigm,
-    primary_config: "PostgresConfig | MemgraphConfig | OxigraphConfig",
+    primary_config: "PostgresConfig | MemgraphConfig",
     timescale_config: "PostgresConfig | None" = None,
 ) -> BulkLoader:
     """Factory pour obtenir le loader adapte au paradigme.
 
     Args:
-        paradigm: P1, P2, M1, M2, ou O2
+        paradigm: P1, P2, M1, ou M2
         primary_config: Configuration de la base principale
-        timescale_config: Configuration TimescaleDB pour M2/O2
+        timescale_config: Configuration TimescaleDB pour M2
 
     Returns:
         BulkLoader configure
@@ -126,16 +122,8 @@ def get_loader(
             timescale_config=timescale_config,
         )
 
-    elif paradigm == "O2":
-        if not hasattr(primary_config, "query_endpoint"):
-            raise TypeError("OxigraphConfig required for O2")
-        return OxigraphLoader(
-            config=primary_config,  # type: ignore
-            timescale_config=timescale_config,
-        )
-
     else:
         raise ValueError(
             f"Unknown paradigm: {paradigm}. "
-            f"Valid options: P1, P2, M1, M2, O2"
+            f"Valid options: P1, P2, M1, M2"
         )

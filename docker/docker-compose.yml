@@ -17,8 +17,8 @@ services:
     volumes:
       - timescaledb_data:/home/postgres/pgdata  # timescaledb-ha uses this path
       - ${BTB_DATA_DIR:-.}:/data:ro  # Mount data directory for fast server-side COPY
-    mem_limit: ${MEMORY_LIMIT:-8g}
-    memswap_limit: ${MEMORY_LIMIT:-8g}
+    # No mem_limit here - containers start without RAM limit for data loading
+    # RAM limits are applied dynamically by the benchmark code during calibration/run
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-benchmark}"]
       interval: 10s
@@ -33,34 +33,14 @@ services:
       - "127.0.0.1:7688:7687"  # Only localhost
     volumes:
       - memgraph_data:/var/lib/memgraph
-    mem_limit: ${MEMORY_LIMIT:-8g}
-    memswap_limit: ${MEMORY_LIMIT:-8g}
+    # No mem_limit here - containers start without RAM limit for data loading
+    # RAM limits are applied dynamically by the benchmark code during calibration/run
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/7687'" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  oxigraph:
-    image: oxigraph/oxigraph:latest
-    container_name: benchmark-oxigraph
-    ports:
-      - "127.0.0.1:7878:7878"  # Only localhost
-    command: ["serve", "--location", "/data", "--bind", "0.0.0.0:7878"]
-    volumes:
-      - oxigraph_data:/data
-    mem_limit: ${MEMORY_LIMIT:-8g}
-    memswap_limit: ${MEMORY_LIMIT:-8g}
-    healthcheck:
-      # Note: Oxigraph uses distroless image (no wget/curl)
-      # Use oxigraph CLI to verify store is accessible
-      test: ["CMD", "/usr/local/bin/oxigraph", "query", "--location", "/data", "--query", "ASK {}", "--results-format", "json"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
 volumes:
   timescaledb_data:
   memgraph_data:
-  oxigraph_data:

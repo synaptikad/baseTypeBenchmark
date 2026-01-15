@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from ..monitoring import DockerClient, is_docker_available
+from ..config import TIMESCALE_PARADIGMS
 
 # Project root: isolation.py is in src/basetype_benchmark/runner/ram/
 # So we go up 5 levels to reach project root
@@ -63,11 +64,6 @@ PARADIGM_CONTAINERS: dict[str, ContainerSet] = {
         containers=["benchmark-memgraph", "benchmark-timescale"],
         compose_services=["memgraph", "timescale"],
     ),
-    "O2": ContainerSet(
-        paradigm="O2",
-        containers=["benchmark-oxigraph", "benchmark-timescale"],
-        compose_services=["oxigraph", "timescale"],
-    ),
 }
 
 
@@ -113,18 +109,24 @@ class IsolationManager:
         self.docker = docker_client or DockerClient()
         self._current_paradigm: str | None = None
 
+    # Default RAM for data loading (before calibration limits are applied)
+    DEFAULT_LOAD_RAM_MB = 8192  # 8GB - enough to load large datasets
+
     def start_paradigm(
         self,
         paradigm: str,
         clean_volumes: bool = True,
         wait_healthy: bool = True,
+        reset_ram: bool = True,
     ) -> list[str]:
         """Start containers for a paradigm.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
             clean_volumes: Remove volumes before starting
             wait_healthy: Wait for containers to be healthy
+            reset_ram: Reset RAM to default (8GB) for data loading.
+                      Set to False if you want to keep current RAM limit.
 
         Returns:
             List of started container names
@@ -143,9 +145,8 @@ class IsolationManager:
         if self._current_paradigm:
             # Check if both paradigms use TimescaleDB (Option A shared state)
             # WITH schema isolation: all paradigms can share ts.timeseries
-            timescale_paradigms = {"P1", "P2", "M2", "O2"}
-            current_uses_ts = self._current_paradigm in timescale_paradigms
-            next_uses_ts = paradigm in timescale_paradigms
+            current_uses_ts = self._current_paradigm in TIMESCALE_PARADIGMS
+            next_uses_ts = paradigm in TIMESCALE_PARADIGMS
 
             # Only stop if they don't share TimescaleDB
             if not (current_uses_ts and next_uses_ts):
@@ -156,7 +157,10 @@ class IsolationManager:
             self._clean_volumes(container_set)
 
         # Start containers via docker-compose
-        self._compose_up(container_set.compose_services)
+        # Use force_recreate when reset_ram=True to reset memory limits
+        # to docker-compose.yml defaults (8GB). This is critical after
+        # calibration which may have left containers with very low RAM.
+        self._compose_up(container_set.compose_services, force_recreate=reset_ram)
 
         # Wait for health
         if wait_healthy:
@@ -173,14 +177,16 @@ class IsolationManager:
         self._current_paradigm = paradigm
         return container_set.containers
 
-    def stop_paradigm(self, paradigm: str) -> None:
+    def stop_paradigm(self, paradigm: str, force_remove: bool = False) -> None:
         """Stop and remove containers for a paradigm.
 
         Note: Volumes are preserved to support Option A (shared TimescaleDB).
         Use docker volume prune manually if cleanup is needed.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
+            force_remove: If True, also remove containers (not just stop).
+                         Use after OOM crash to ensure clean restart.
         """
         paradigm = paradigm.upper()
 
@@ -192,6 +198,15 @@ class IsolationManager:
         # Stop via docker-compose
         self._compose_down(container_set.compose_services)
 
+        # Force remove containers if requested (after OOM crash)
+        if force_remove:
+            for container in container_set.containers:
+                self._force_remove_container(container)
+            # Clean Memgraph volume if this paradigm uses Memgraph
+            # (M1/M2 cannot share Memgraph data - different timeseries storage)
+            if paradigm in ("M1", "M2"):
+                self._clean_memgraph_volume()
+
         # Wait for cleanup
         time.sleep(self.CLEANUP_DELAY)
 
@@ -202,7 +217,7 @@ class IsolationManager:
         """Restart containers for a paradigm (stop + start).
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
 
         Returns:
             List of container names
@@ -240,7 +255,7 @@ class IsolationManager:
         Uses docker update --memory which applies without restart.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
             limit_mb: Total memory limit in MB
 
         Returns:
@@ -271,7 +286,7 @@ class IsolationManager:
         """Get container IDs for a paradigm.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
 
         Returns:
             Dict mapping container name to full container ID
@@ -296,7 +311,7 @@ class IsolationManager:
         """Check if all containers for a paradigm are running.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
 
         Returns:
             True if all containers running
@@ -314,13 +329,22 @@ class IsolationManager:
 
         return True
 
-    def _compose_up(self, services: list[str]) -> None:
-        """Start services via docker compose."""
+    def _compose_up(self, services: list[str], force_recreate: bool = False) -> None:
+        """Start services via docker compose.
+
+        Args:
+            services: List of service names to start
+            force_recreate: If True, recreate containers even if they exist.
+                           This resets RAM limits to docker-compose.yml defaults.
+        """
         cmd = [
             "docker", "compose",
             "-f", str(self.compose_file),
             "up", "-d",
-        ] + services
+        ]
+        if force_recreate:
+            cmd.append("--force-recreate")
+        cmd.extend(services)
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -350,12 +374,43 @@ class IsolationManager:
             import sys
             print(f"Warning: docker compose stop failed: {result.stderr}", file=sys.stderr)
 
+    def _force_remove_container(self, container: str) -> None:
+        """Force remove a container (after OOM crash).
+
+        Args:
+            container: Container name to remove
+        """
+        cmd = ["docker", "rm", "-f", container]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            # Log error but don't raise - removal is best-effort
+            import sys
+            print(f"Warning: docker rm failed for {container}: {result.stderr}", file=sys.stderr)
+
+    def _clean_memgraph_volume(self) -> None:
+        """Clean Memgraph data volume.
+
+        Unlike TimescaleDB (shared between P1/P2/M2), Memgraph data cannot be
+        shared between M1 and M2 because:
+        - M1 stores timeseries IN Memgraph (TimeseriesChunk nodes)
+        - M2 stores timeseries in TimescaleDB
+
+        After M1 OOM crash, the Memgraph volume may be corrupted and must be
+        cleaned before M2 can start.
+        """
+        volume_name = "docker_memgraph_data"
+        cmd = ["docker", "volume", "rm", "-f", volume_name]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            import sys
+            print(f"Warning: docker volume rm failed for {volume_name}: {result.stderr}", file=sys.stderr)
+
     def _clean_volumes(self, container_set: ContainerSet) -> None:
         """Remove volumes for containers.
 
         Note: For Option A (shared TimescaleDB), we don't actually clean volumes
         to preserve timeseries data across paradigms. The timeseries is loaded
-        once and shared between P1, P2, M2, and O2.
+        once and shared between P1, P2, and M2.
         """
         # Option A: don't clean volumes to preserve shared timeseries
         pass
@@ -405,7 +460,7 @@ def get_paradigm_containers(paradigm: str) -> list[str]:
     """Get container names for a paradigm.
 
     Args:
-        paradigm: P1, P2, M1, M2, or O2
+        paradigm: P1, P2, M1, or M2
 
     Returns:
         List of container names

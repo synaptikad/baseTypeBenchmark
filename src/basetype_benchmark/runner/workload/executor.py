@@ -73,7 +73,7 @@ class WorkloadExecutor:
         """Initialize workload executor.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
             isolation: Container isolation manager
             configs: Dict with connection configs by paradigm
             timeout_seconds: Query timeout
@@ -316,7 +316,7 @@ class WorkloadExecutor:
 
     def _get_runner(self):
         """Get appropriate runner for paradigm."""
-        if self.paradigm in ("M2", "O2"):
+        if self.paradigm == "M2":
             return get_hybrid_runner(self.paradigm, self.configs)
         else:
             return get_runner(self.paradigm, self.configs)

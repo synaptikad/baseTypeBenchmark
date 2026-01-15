@@ -66,7 +66,7 @@ class ParamSampler:
     def __init__(self, paradigm: str, runner, seed: int = 42):
         """
         Args:
-            paradigm: P1, P2, M1, M2, O2
+            paradigm: P1, P2, M1, M2
             runner: Runner instance avec connexion DB active
             seed: Seed pour reproductibilité
         """
@@ -160,8 +160,6 @@ class ParamSampler:
                 return self._fetch_ids_postgres(node_type)
             elif self.paradigm in ("M1", "M2"):
                 return self._fetch_ids_memgraph(node_type)
-            elif self.paradigm == "O2":
-                return self._fetch_ids_oxigraph(node_type)
             else:
                 return []
         except Exception:
@@ -235,34 +233,6 @@ class ParamSampler:
         except Exception:
             return []
 
-    def _fetch_ids_oxigraph(self, node_type: str) -> List[str]:
-        """Récupère les IDs depuis Oxigraph (SPARQL)."""
-        type_map = {
-            "building": "Building",
-            "floor": "Floor",
-            "space": "Space",
-            "equipment": "Equipment",
-            "tenant": "Tenant",
-            "point": "Point",
-        }
-
-        rdf_type = type_map.get(node_type.lower())
-        if not rdf_type:
-            return []
-
-        # SPARQL query to fetch IDs by type
-        query = f"""PREFIX btb: <http://basetype.benchmark/ontology#>
-SELECT ?id WHERE {{
-    ?node a btb:{rdf_type} .
-    ?node btb:id ?id .
-}} LIMIT 100"""
-
-        try:
-            result = self.runner.execute(query, {}, timeout_seconds=5.0)
-            return [row.get("id") for row in result.rows if row and row.get("id")]
-        except Exception:
-            return []
-
     def _fetch_equipment_by_type(self, types: tuple) -> List[str]:
         """Récupère les IDs d'équipement par type."""
         try:
@@ -270,8 +240,6 @@ SELECT ?id WHERE {{
                 return self._fetch_equipment_by_type_postgres(types)
             elif self.paradigm in ("M1", "M2"):
                 return self._fetch_equipment_by_type_memgraph(types)
-            elif self.paradigm == "O2":
-                return self._fetch_equipment_by_type_oxigraph(types)
             else:
                 return []
         except Exception:
@@ -314,25 +282,6 @@ SELECT ?id WHERE {{
         except Exception:
             return []
 
-    def _fetch_equipment_by_type_oxigraph(self, types: tuple) -> List[str]:
-        """Récupère les IDs d'équipement par type depuis Oxigraph (SPARQL)."""
-        # Build VALUES clause for types filter
-        types_values = " ".join(f'"{t}"' for t in types)
-
-        query = f"""PREFIX btb: <http://basetype.benchmark/ontology#>
-SELECT ?id WHERE {{
-    VALUES ?equipType {{ {types_values} }}
-    ?eq a btb:Equipment .
-    ?eq btb:equipmentType ?equipType .
-    ?eq btb:id ?id .
-}} LIMIT 50"""
-
-        try:
-            result = self.runner.execute(query, {}, timeout_seconds=5.0)
-            return [row.get("id") for row in result.rows if row and row.get("id")]
-        except Exception:
-            return []
-
 
 def get_params_for_query(
     query_id: str,
@@ -347,7 +296,7 @@ def get_params_for_query(
         query_id: ID de la query (Q1, Q2, QW1, etc.)
         sampled: Paramètres échantillonnés (pour Q1-Q34)
         file_params: Paramètres bruts du YAML (pour QW queries avec données riches)
-        paradigm: P1, P2, M1, M2, O2 (pour adaptation paradigme-spécifique)
+        paradigm: P1, P2, M1, M2 (pour adaptation paradigme-spécifique)
 
     Returns:
         Dict des paramètres pour cette query

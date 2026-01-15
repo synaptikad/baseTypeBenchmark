@@ -29,13 +29,12 @@ class QueryDialect(str, Enum):
     """Query language dialect."""
     SQL = "sql"
     CYPHER = "cypher"
-    SPARQL = "sparql"
 
 
 class QueryPhase(str, Enum):
     """Phase of query execution for hybrid paradigms."""
     SINGLE = "single"      # Single-phase query (P1, P2, M1)
-    GRAPH = "graph"        # Graph phase of hybrid query (M2, O2)
+    GRAPH = "graph"        # Graph phase of hybrid query (M2)
     TIMESERIES = "ts"      # Timeseries phase of hybrid query
 
 

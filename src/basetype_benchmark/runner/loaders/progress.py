@@ -89,7 +89,7 @@ class LoadProgressDisplay:
         """Initialise le display.
 
         Args:
-            paradigm: Nom du paradigme (P1, P2, M1, M2, O2)
+            paradigm: Nom du paradigme (P1, P2, M1, M2)
             total_phases: Nombre total de phases (default: 4)
         """
         self.paradigm = paradigm
@@ -341,7 +341,7 @@ class ExportProgressDisplay:
         """Initialise le display.
 
         Args:
-            paradigm: Nom du paradigme (P1, P2, M1, M2, O2)
+            paradigm: Nom du paradigme (P1, P2, M1, M2)
             total_phases: Nombre total de phases (default: 4)
         """
         self.paradigm = paradigm

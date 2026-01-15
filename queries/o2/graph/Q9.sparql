@@ -1,9 +1,0 @@
-# Q9: Tenant Carbon - Point_ids énergie
-PREFIX btb: <http://basetype.benchmark/ontology#>
-
-SELECT ?point_id
-WHERE {
-    ?tenant a btb:Tenant ; btb:id ?tenantId .
-    ?meter btb:metersTenant ?tenant ; btb:hasPoint ?point .
-    ?point btb:id ?point_id ; btb:quantity "energy" .
-}

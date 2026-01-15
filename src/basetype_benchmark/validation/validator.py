@@ -115,7 +115,7 @@ class AnswerValidator:
 
         Args:
             query_id: Query ID (Q1, Q2, etc.)
-            paradigm: Paradigm name (P1, M1, O2)
+            paradigm: Paradigm name (P1, P2, M1, M2)
             rows: ALL result rows from paradigm (not sample!)
             parameters: Query parameters used
 

@@ -86,7 +86,6 @@ queries:
       P2: {status: NATIVE, note: "CTE récursif"}
       M1: {status: NATIVE, note: "Pattern FEEDS*1..10"}
       M2: {status: NATIVE, note: "Pattern FEEDS*1..10"}
-      O2: {status: NATIVE, note: "Property path btb:feeds+"}
 
   Q2:
     name: "Functional Impact"
@@ -120,7 +119,6 @@ queries:
       P2: {status: NATIVE, note: "CTE récursif avec UNION sur relations"}
       M1: {status: NATIVE, note: "Pattern [:FEEDS|SERVES|CONTAINS*]"}
       M2: {status: NATIVE, note: "Pattern [:FEEDS|SERVES|CONTAINS*]"}
-      O2: {status: NATIVE, note: "Property path avec alternatives"}
 
   Q3:
     name: "Space Services"
@@ -152,7 +150,6 @@ queries:
       P2: {status: NATIVE, note: "JOIN sur edges avec filtre rel_type"}
       M1: {status: NATIVE, note: "Pattern multi-relations"}
       M2: {status: NATIVE, note: "Pattern multi-relations"}
-      O2: {status: NATIVE, note: "UNION de patterns SPARQL"}
 
   Q4:
     name: "Floor Temperature Inventory"
@@ -187,7 +184,6 @@ queries:
       P2: {status: NATIVE, note: "Multi-JOIN avec filtre quantity"}
       M1: {status: NATIVE, note: "Pattern traversée + WHERE"}
       M2: {status: NATIVE, note: "Pattern traversée + WHERE"}
-      O2: {status: NATIVE, note: "Property path + FILTER"}
 
   Q5:
     name: "Orphans"
@@ -209,7 +205,6 @@ queries:
       P2: {status: NATIVE, note: "LEFT JOIN edges IS NULL"}
       M1: {status: NATIVE, note: "MATCH (e:Equipment) WHERE NOT (e)--()"}
       M2: {status: NATIVE, note: "MATCH (e:Equipment) WHERE NOT (e)--()"}
-      O2: {status: NATIVE, note: "FILTER NOT EXISTS"}
 
   # -------------------------------------------------------------------------
   # TIMESERIES PURE (Q6)
@@ -260,7 +255,6 @@ queries:
       P2: {status: NATIVE, note: "time_bucket + agrégats TimescaleDB"}
       M1: {status: DEGRADED, note: "UNWIND sur TimeseriesChunk (daily chunks)"}
       M2: {status: NATIVE, note: "TimescaleDB via extension"}
-      O2: {status: DEGRADED, note: "Agrégation SPARQL limitée"}
 
   # -------------------------------------------------------------------------
   # HYBRID (Q7-Q13)
@@ -311,7 +305,6 @@ queries:
       P2: {status: NATIVE, note: "JOIN nodes + TimescaleDB variance"}
       M1: {status: DEGRADED, note: "UNWIND + stDev sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB"}
-      O2: {status: DEGRADED, note: "SPARQL agrégation limitée"}
 
   Q8:
     name: "Tenant Energy"
@@ -360,7 +353,6 @@ queries:
       P2: {status: NATIVE, note: "Graph JOIN + SUM timeseries"}
       M1: {status: DEGRADED, note: "UNWIND + SUM sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher traversée + TimescaleDB"}
-      O2: {status: DEGRADED, note: "SPARQL + agrégation externe"}
 
   Q9:
     name: "Tenant Carbon Footprint"
@@ -417,7 +409,6 @@ queries:
       P2: {status: NATIVE, note: "Extension Q8 avec multiplication"}
       M1: {status: DEGRADED, note: "UNWIND + SUM × CO2 factor sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB + calcul"}
-      O2: {status: DEGRADED, note: "SPARQL + calcul externe"}
 
   Q10:
     name: "Security Access Analysis"
@@ -451,7 +442,6 @@ queries:
       P2: {status: NATIVE, note: "JOIN + GROUP BY"}
       M1: {status: NATIVE, note: "Pattern + count()"}
       M2: {status: NATIVE, note: "Pattern + count()"}
-      O2: {status: NATIVE, note: "SPARQL GROUP BY + COUNT"}
 
   Q11:
     name: "IT Infrastructure Impact"
@@ -486,7 +476,6 @@ queries:
       P2: {status: NATIVE, note: "CTE récursif + filtre type"}
       M1: {status: NATIVE, note: "Pattern FEEDS* + WHERE"}
       M2: {status: NATIVE, note: "Pattern FEEDS* + WHERE"}
-      O2: {status: NATIVE, note: "Property path + FILTER"}
 
   Q12:
     name: "Full Building Analytics"
@@ -536,7 +525,6 @@ queries:
       P2: {status: NATIVE, note: "Multi-JOIN + agrégats par quantity"}
       M1: {status: DEGRADED, note: "UNWIND multi-agrégats sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB multi-agrégats"}
-      O2: {status: DEGRADED, note: "SPARQL + agrégation externe"}
 
   Q13:
     name: "Office Hours Comfort"
@@ -592,7 +580,6 @@ queries:
       P2: {status: NATIVE, note: "JOIN + EXTRACT(hour/dow) + agrégats"}
       M1: {status: DEGRADED, note: "UNWIND + filtres temporels sur TimeseriesChunk"}
       M2: {status: NATIVE, note: "Cypher + TimescaleDB filtres temporels"}
-      O2: {status: DEGRADED, note: "SPARQL filtres temporels limités"}
 
   # -------------------------------------------------------------------------
   # JSONB-SPECIFIC (Q14-Q19)
@@ -630,7 +617,6 @@ queries:
       P2: {status: NATIVE, note: "Index GIN sur data->'protocol'"}
       M1: {status: DEGRADED, note: "Si exporté comme propriété"}
       M2: {status: DEGRADED, note: "Si exporté comme propriété"}
-      O2: {status: DEGRADED, note: "Triples multiples requis"}
 
   Q15:
     name: "Warranty Expiry"
@@ -671,7 +657,6 @@ queries:
       P2: {status: NATIVE, note: "Opérateur ? + cast date"}
       M1: {status: DEGRADED, note: "Si exporté comme propriété"}
       M2: {status: DEGRADED, note: "Si exporté comme propriété"}
-      O2: {status: DEGRADED, note: "Triple warranty_end requis"}
 
   Q16:
     name: "Semantic Tag Search"
@@ -700,7 +685,6 @@ queries:
       P2: {status: NATIVE, note: "jsonb_array_elements_text + regex"}
       M1: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
       M2: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
-      O2: {status: NATIVE, note: "Triples RDF naturels pour tags"}
 
   Q17:
     name: "Capability Filter"
@@ -731,7 +715,6 @@ queries:
       P2: {status: NATIVE, note: "Opérateur @> containment + GIN index"}
       M1: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
       M2: {status: NATIVE, note: "MAGE json_util.from_json_list()"}
-      O2: {status: DEGRADED, note: "Triples multiples requis"}
 
   Q18:
     name: "Calibration Chain"
@@ -775,7 +758,6 @@ queries:
       P2: {status: NATIVE, note: "CTE récursive + filtre calibration JSON"}
       M1: {status: DEGRADED, note: "Pattern + WHERE si exporté"}
       M2: {status: DEGRADED, note: "Pattern + WHERE si exporté"}
-      O2: {status: DEGRADED, note: "Property path + FILTER"}
 
   Q19:
     name: "Equipment Digital Twin"
@@ -820,7 +802,6 @@ queries:
       P2: {status: NATIVE, note: "jsonb_build_object + jsonb_agg + LATERAL"}
       M1: {status: IMPOSSIBLE, note: "Pas de TimescaleDB pour stats live"}
       M2: {status: DEGRADED, note: "Orchestration applicative requise"}
-      O2: {status: DEGRADED, note: "CONSTRUCT SPARQL + orchestration"}
 
   # -------------------------------------------------------------------------
   # GRAPH-NATIVE (Q20-Q23)
@@ -863,7 +844,6 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif explore tout avant filtrage"}
       M1: {status: NATIVE, note: "shortestPath() natif Cypher"}
       M2: {status: NATIVE, note: "shortestPath() natif Cypher"}
-      O2: {status: IMPOSSIBLE, note: "Pas de shortestPath SPARQL, BFS applicatif trop lent"}
 
   Q21:
     name: "Electrical Resilience"
@@ -905,7 +885,6 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif exhaustif - explosion combinatoire"}
       M1: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
       M2: {status: NATIVE, note: "allShortestPaths() + collecte chemins"}
-      O2: {status: IMPOSSIBLE, note: "Énumération chemins applicative trop lente"}
 
   Q22:
     name: "Equipment Siblings"
@@ -937,7 +916,6 @@ queries:
       P2: {status: NATIVE, note: "Self-JOIN sur edges fonctionnel"}
       M1: {status: NATIVE, note: "Pattern (a)<-[:FEEDS]-(p)-[:FEEDS]->(b)"}
       M2: {status: NATIVE, note: "Pattern (a)<-[:FEEDS]-(p)-[:FEEDS]->(b)"}
-      O2: {status: NATIVE, note: "Double pattern SPARQL"}
 
   Q23:
     name: "Failure Impact Analysis"
@@ -979,7 +957,6 @@ queries:
       P2: {status: NATIVE, note: "CTE récursif avec depth <= N fonctionnel"}
       M1: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
       M2: {status: NATIVE, note: "Variable-length path [:REL*1..N]"}
-      O2: {status: DEGRADED, note: "Property path avec limite fixe à 3 hops"}
 
   # -------------------------------------------------------------------------
   # WRITE WORKLOADS (QW1-QW3)
@@ -1032,7 +1009,6 @@ queries:
       P2: {status: NATIVE, note: "INSERT INTO edges avec properties JSONB"}
       M1: {status: NATIVE, note: "CREATE (Tenant)-[:OCCUPIES {dates}]->(Space)"}
       M2: {status: NATIVE, note: "CREATE (Tenant)-[:OCCUPIES {dates}]->(Space)"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL INSERT complexe pour relations temporelles"}
 
   QW2:
     name: "Metadata Update"
@@ -1078,7 +1054,6 @@ queries:
       P2: {status: NATIVE, note: "UPDATE nodes SET data = jsonb_set(...)"}
       M1: {status: NATIVE, note: "SET node.tag_key = tag_value"}
       M2: {status: NATIVE, note: "SET node.tag_key = tag_value"}
-      O2: {status: DEGRADED, note: "DELETE/INSERT triple (pas de vrai UPDATE)"}
 
   QW3:
     name: "Relation Mutation"
@@ -1124,7 +1099,6 @@ queries:
       P2: {status: NATIVE, note: "INSERT INTO edges (source_id, target_id, rel_type)"}
       M1: {status: NATIVE, note: "MERGE (a)-[r:REL_TYPE]->(b)"}
       M2: {status: NATIVE, note: "MERGE (a)-[r:REL_TYPE]->(b)"}
-      O2: {status: DEGRADED, note: "INSERT DATA triple (nécessite URI construction)"}
 
   # -------------------------------------------------------------------------
   # JSONB WRITE WORKLOADS (QW4-QW8) - P2 NATIVE
@@ -1162,7 +1136,6 @@ queries:
       P2: {status: NATIVE, note: "jsonb_set + array append avec ||"}
       M1: {status: DEGRADED, note: "Nécessite MAGE pour manipulation liste"}
       M2: {status: DEGRADED, note: "Nécessite MAGE pour manipulation liste"}
-      O2: {status: DEGRADED, note: "Multiple triples maintenanceEvent + orchestration applicative"}
 
   QW5:
     name: "Deep Calibration Update"
@@ -1208,7 +1181,6 @@ queries:
       P2: {status: NATIVE, note: "jsonb_set multi-niveau"}
       M1: {status: NATIVE, note: "SET direct sur propriétés"}
       M2: {status: NATIVE, note: "SET direct sur propriétés"}
-      O2: {status: DEGRADED, note: "UPDATE = DELETE + INSERT triple"}
 
   QW6:
     name: "Metadata Merge"
@@ -1242,7 +1214,6 @@ queries:
       P2: {status: NATIVE, note: "Opérateur || pour merge"}
       M1: {status: DEGRADED, note: "SET multiple propriétés"}
       M2: {status: DEGRADED, note: "SET multiple propriétés"}
-      O2: {status: DEGRADED, note: "DELETE+INSERT orchestration applicative"}
 
   QW7:
     name: "Add Capability"
@@ -1276,7 +1247,6 @@ queries:
       P2: {status: NATIVE, note: "Conditional UPDATE avec NOT @>"}
       M1: {status: DEGRADED, note: "Nécessite MAGE ou WHERE NOT IN"}
       M2: {status: DEGRADED, note: "Nécessite MAGE ou WHERE NOT IN"}
-      O2: {status: DEGRADED, note: "INSERT IF NOT EXISTS pattern"}
 
   QW8:
     name: "Remove Metadata Key"
@@ -1310,7 +1280,6 @@ queries:
       P2: {status: NATIVE, note: "Opérateur #- avec path"}
       M1: {status: NATIVE, note: "REMOVE node.property"}
       M2: {status: NATIVE, note: "REMOVE node.property"}
-      O2: {status: NATIVE, note: "DELETE DATA triple"}
 
   # -------------------------------------------------------------------------
   # JSONB VALIDATION QUERIES (Q24-Q26) - Post-Write Enriched Reads
@@ -1348,7 +1317,6 @@ queries:
       P2: {status: NATIVE, note: "Full JSONB array processing"}
       M1: {status: DEGRADED, note: "Si exporté comme liste propriété"}
       M2: {status: DEGRADED, note: "Si exporté comme liste propriété"}
-      O2: {status: DEGRADED, note: "Multiple triples maintenanceEvent + agrégation applicative"}
 
   Q25:
     name: "Equipment Audit Trail"
@@ -1383,7 +1351,6 @@ queries:
       P2: {status: NATIVE, note: "Multi-JOIN + JSONB aggregation"}
       M1: {status: DEGRADED, note: "Orchestration applicative"}
       M2: {status: DEGRADED, note: "Orchestration applicative"}
-      O2: {status: DEGRADED, note: "Pas de points_calibration_status array"}
 
   Q26:
     name: "Capability Evolution"
@@ -1414,7 +1381,6 @@ queries:
       P2: {status: NATIVE, note: "jsonb_object_agg + array stats"}
       M1: {status: DEGRADED, note: "MAGE pour manipulation listes"}
       M2: {status: DEGRADED, note: "MAGE pour manipulation listes"}
-      O2: {status: DEGRADED, note: "Agrégation SPARQL limitée"}
 
   # -------------------------------------------------------------------------
   # GRAPH-NATIVE EXTENDED (Q27-Q30) - Équilibre benchmark
@@ -1449,7 +1415,6 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif avec accumulation poids, non optimal"}
       M1: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
       M2: {status: NATIVE, note: "shortestPath() avec reduce() sur distance"}
-      O2: {status: IMPOSSIBLE, note: "Dijkstra applicatif trop lent"}
 
   Q28:
     name: "Tenant Impact Chain"
@@ -1480,7 +1445,6 @@ queries:
       P2: {status: DEGRADED, note: "5 JOINs avec DISTINCT, verbose mais fonctionnel"}
       M1: {status: NATIVE, note: "Traversée chaîne 5-hop naturelle en Cypher"}
       M2: {status: NATIVE, note: "Traversée chaîne 5-hop naturelle en Cypher"}
-      O2: {status: DEGRADED, note: "Property path multi-prédicats complexe"}
 
   Q29:
     name: "All Power Paths"
@@ -1515,7 +1479,6 @@ queries:
       P2: {status: DEGRADED, note: "CTE avec ARRAY accumulation, risque mémoire"}
       M1: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
       M2: {status: NATIVE, note: "allPaths() ou pattern variable-length"}
-      O2: {status: IMPOSSIBLE, note: "DFS applicatif trop lent"}
 
   Q30:
     name: "Failure Impact Analysis"
@@ -1548,7 +1511,6 @@ queries:
       P2: {status: DEGRADED, note: "CTE récursif avec ARRAY pour éviter cycles"}
       M1: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
       M2: {status: NATIVE, note: "Pattern (eq)-[:FEEDS*1..10]->(impacted) naturel"}
-      O2: {status: DEGRADED, note: "UNION pattern pour simuler profondeur variable (5 hops max)"}
 
   # -------------------------------------------------------------------------
   # SQL-NATIVE (Q31-Q34) - Avantage SQL
@@ -1595,7 +1557,6 @@ queries:
       P2: {status: NATIVE, note: "Window functions PostgreSQL optimisées"}
       M1: {status: DEGRADED, note: "Pas de window functions, UNWIND + collect"}
       M2: {status: NATIVE, note: "Via TimescaleDB"}
-      O2: {status: NATIVE, note: "Via TimescaleDB (O2 = Oxigraph + TimescaleDB)"}
 
   Q32:
     name: "JSON Schema Validation"
@@ -1625,7 +1586,6 @@ queries:
       P2: {status: NATIVE, note: "Opérateurs JSONB: ?, @>, jsonb_typeof"}
       M1: {status: DEGRADED, note: "Pas d'opérateurs JSON natifs en Cypher"}
       M2: {status: DEGRADED, note: "Pas d'opérateurs JSON natifs en Cypher"}
-      O2: {status: DEGRADED, note: "SHACL ou validation applicative Python"}
 
   Q33:
     name: "Latest Value per Space"
@@ -1656,7 +1616,6 @@ queries:
       P2: {status: NATIVE, note: "LATERAL JOIN optimisé"}
       M1: {status: IMPOSSIBLE, note: "Cypher n'a pas de LATERAL, pas de TS"}
       M2: {status: DEGRADED, note: "Orchestration Cypher → SQL requise"}
-      O2: {status: DEGRADED, note: "Orchestration SPARQL → TimescaleDB"}
 
   Q34:
     name: "Materialized Energy Summary"
@@ -1696,7 +1655,6 @@ queries:
       P2: {status: NATIVE, note: "Vues matérialisées PostgreSQL"}
       M1: {status: IMPOSSIBLE, note: "Memgraph n'a pas de vues matérialisées"}
       M2: {status: DEGRADED, note: "Via TimescaleDB continuous aggregates"}
-      O2: {status: DEGRADED, note: "Via TimescaleDB continuous aggregates"}
 
   # -------------------------------------------------------------------------
   # WRITE VALIDATION QUERIES (Q35-Q38) - Post-Write Checks
@@ -1744,7 +1702,6 @@ queries:
       P2: {status: NATIVE, note: "SELECT edges avec JSONB properties dates"}
       M1: {status: NATIVE, note: "MATCH (Tenant)-[r:OCCUPIES]->(Space) WHERE dates"}
       M2: {status: NATIVE, note: "MATCH (Tenant)-[r:OCCUPIES]->(Space) WHERE dates"}
-      O2: {status: IMPOSSIBLE, note: "SPARQL pour relations temporelles complexe"}
 
   Q36:
     name: "Validate Metadata Tag Update"
@@ -1774,7 +1731,6 @@ queries:
       P2: {status: NATIVE, note: "SELECT data->>'calibration_status'"}
       M1: {status: NATIVE, note: "MATCH + RETURN n.custom_tag"}
       M2: {status: NATIVE, note: "MATCH + RETURN n.custom_tag"}
-      O2: {status: DEGRADED, note: "Query triple custom_tag"}
 
   Q37:
     name: "Validate Relation Mutation"
@@ -1812,7 +1768,6 @@ queries:
       P2: {status: NATIVE, note: "SELECT FROM edges avec JOIN nodes"}
       M1: {status: NATIVE, note: "MATCH (a)-[r:FEEDS]->(b)"}
       M2: {status: NATIVE, note: "MATCH (a)-[r:FEEDS]->(b)"}
-      O2: {status: NATIVE, note: "SELECT pattern SPARQL"}
 
   Q38:
     name: "Validate Property Removal"
@@ -1849,7 +1804,6 @@ queries:
       P2: {status: NATIVE, note: "NOT (data->'metadata' ? key)"}
       M1: {status: NATIVE, note: "n.custom_tag IS NULL"}
       M2: {status: NATIVE, note: "n.custom_tag IS NULL"}
-      O2: {status: NATIVE, note: "NOT EXISTS triple check"}
 
   # -------------------------------------------------------------------------
   # TENANT WRITE WORKLOADS (QW9-QW12) - Graph-Native
@@ -1897,7 +1851,6 @@ queries:
       P2: {status: NATIVE, note: "INSERT INTO edges avec ON CONFLICT DO NOTHING"}
       M1: {status: NATIVE, note: "MERGE (t)-[:OCCUPIES]->(s)"}
       M2: {status: NATIVE, note: "MERGE (t)-[:OCCUPIES]->(s)"}
-      O2: {status: DEGRADED, note: "INSERT DATA triples"}
 
   QW10:
     name: "Tenant Move-Out"
@@ -1934,7 +1887,6 @@ queries:
       P2: {status: NATIVE, note: "DELETE FROM edges WHERE ..."}
       M1: {status: NATIVE, note: "MATCH ... DELETE r"}
       M2: {status: NATIVE, note: "MATCH ... DELETE r"}
-      O2: {status: DEGRADED, note: "DELETE DATA triple"}
 
   QW11:
     name: "Space Reassignment"
@@ -1979,7 +1931,6 @@ queries:
       P2: {status: NATIVE, note: "DELETE + INSERT atomique via CTE"}
       M1: {status: NATIVE, note: "DELETE r WITH MERGE pattern"}
       M2: {status: NATIVE, note: "DELETE r WITH MERGE pattern"}
-      O2: {status: DEGRADED, note: "DELETE + INSERT DATA (non atomique)"}
 
   QW12:
     name: "Tenant Merge"
@@ -2017,7 +1968,6 @@ queries:
       P2: {status: NATIVE, note: "UPDATE edges SET source_id/target_id"}
       M1: {status: NATIVE, note: "MATCH + DELETE + MERGE pattern"}
       M2: {status: NATIVE, note: "MATCH + DELETE + MERGE pattern"}
-      O2: {status: DEGRADED, note: "Multiple DELETE + INSERT DATA"}
 
   # -------------------------------------------------------------------------
   # TENANT VALIDATION QUERIES (Q39-Q41) - Post-Write Checks
@@ -2051,7 +2001,6 @@ queries:
       P2: {status: NATIVE, note: "SELECT edges JOIN nodes"}
       M1: {status: NATIVE, note: "MATCH (t)-[:OCCUPIES]->(s)"}
       M2: {status: NATIVE, note: "MATCH (t)-[:OCCUPIES]->(s)"}
-      O2: {status: NATIVE, note: "SELECT pattern SPARQL"}
 
   Q40:
     name: "Verify Tenant Meters"
@@ -2081,7 +2030,6 @@ queries:
       P2: {status: NATIVE, note: "SELECT edges JOIN nodes"}
       M1: {status: NATIVE, note: "MATCH (m)-[:METERS_TENANT]->(t)"}
       M2: {status: NATIVE, note: "MATCH (m)-[:METERS_TENANT]->(t)"}
-      O2: {status: NATIVE, note: "SELECT pattern SPARQL"}
 
   Q41:
     name: "Verify Tenant Consolidation"
@@ -2111,7 +2059,6 @@ queries:
       P2: {status: NATIVE, note: "COUNT FILTER sur edges"}
       M1: {status: NATIVE, note: "count(DISTINCT) avec OPTIONAL MATCH"}
       M2: {status: NATIVE, note: "count(DISTINCT) avec OPTIONAL MATCH"}
-      O2: {status: NATIVE, note: "COUNT SPARQL"}
 
 # ===========================================================================
 # PARAMETER FORMATS PAR PARADIGME

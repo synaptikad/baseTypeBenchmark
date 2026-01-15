@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 from rich.console import Console
 
-from ..config import EngineType, QueryCategory
+from ..config import EngineType, QueryCategory, TIMESCALE_PARADIGMS
 from ..core.catalog import QueryCatalog
 from ..monitoring import (
     MetricsSampler,
@@ -351,7 +351,7 @@ class RAMGradientExecutor:
         """Initialize gradient executor.
 
         Args:
-            paradigm: P1, P2, M1, M2, or O2
+            paradigm: P1, P2, M1, or M2
             isolation: Container isolation manager
             configs: Dict with connection configs by paradigm
             n_warmup: Warmup runs per query (not counted)
@@ -415,7 +415,7 @@ class RAMGradientExecutor:
         # PostgreSQL needs container restart for RAM changes (shared_buffers)
         # Memgraph (M1 only) can use docker update at runtime
         # M2 is hybrid (Memgraph + TimescaleDB) so needs restart for TS part
-        needs_restart = self.paradigm in ("P1", "P2", "M2", "O2")
+        needs_restart = self.paradigm in TIMESCALE_PARADIGMS
 
         # Ensure containers are running
         if not self.isolation.is_paradigm_running(self.paradigm):
@@ -624,7 +624,7 @@ class RAMGradientExecutor:
 
         # PostgreSQL needs restart to reconfigure shared_buffers with new RAM limit
         # This is important for gradient (ascending) to properly measure RAM impact
-        needs_restart = self.paradigm in ("P1", "P2", "M2", "O2")
+        needs_restart = self.paradigm in TIMESCALE_PARADIGMS
 
         try:
             if needs_restart:
@@ -720,7 +720,7 @@ class RAMGradientExecutor:
                 try:
                     # Execute with simple params
                     runner.execute(
-                        self._get_query_text(query_id),
+                        self._load_query_files(query_id).get("query", ""),
                         self._get_default_params(query_id),
                         self.timeout,
                     )
@@ -807,7 +807,7 @@ class RAMGradientExecutor:
                             tracker.reset()
 
                         # Execute based on query category
-                        if query_def.category == "hybrid" and self.paradigm in ("M2", "O2"):
+                        if query_def.category == "hybrid" and self.paradigm == "M2":
                             # Hybrid execution: two-phase (graph + timeseries)
                             result = runner.execute_hybrid(
                                 query_files["graph_query"],
@@ -931,7 +931,7 @@ class RAMGradientExecutor:
                 if query_files:
                     params = self._get_variant_params(query_id, 0)
                     try:
-                        if self.paradigm in ("M2", "O2") and "ts" in query_files:
+                        if self.paradigm == "M2" and "ts" in query_files:
                             runner.execute_hybrid(
                                 query_files["graph"],
                                 query_files["ts"],
@@ -958,7 +958,7 @@ class RAMGradientExecutor:
             raise GradientError(f"No config for paradigm {self.paradigm}")
 
         # For hybrid, need to get both configs
-        if self.paradigm in ("M2", "O2"):
+        if self.paradigm == "M2":
             ts_config = self.configs.get("timescale")
             if ts_config is None:
                 raise GradientError("TimescaleDB config required for hybrid paradigm")
@@ -972,7 +972,7 @@ class RAMGradientExecutor:
         Args:
             base_dir: Directory to search in
             query_id: Query ID (e.g., "Q6" or "Q06")
-            ext: File extension (e.g., "sql", "cypher", "sparql")
+            ext: File extension (e.g., "sql", "cypher")
 
         Returns:
             Path to query file, or None if not found
@@ -1039,9 +1039,9 @@ class RAMGradientExecutor:
             cleaned = strip_query_comments(text, ext)
             return {"query": cleaned}
 
-        # Hybrid paradigms: M2, O2 - route by category
-        elif self.paradigm in ("M2", "O2"):
-            ext = "cypher" if self.paradigm == "M2" else "sparql"
+        # Hybrid paradigm: M2 - route by category
+        elif self.paradigm == "M2":
+            ext = "cypher"  # M2 uses Cypher for graph queries
 
             if category in (QueryCategory.GRAPH_ONLY, QueryCategory.GRAPH_NATIVE,
                            QueryCategory.JSONB_SPECIFIC, QueryCategory.JSONB_VALIDATION,
@@ -1111,11 +1111,11 @@ class RAMGradientExecutor:
             elif category in (QueryCategory.WRITE_WORKLOAD, QueryCategory.JSONB_WRITE,
                               QueryCategory.TENANT_WRITE):
                 # Write workloads: look in write/ subdirectory first, then graph/
-                # For hybrid paradigms, write queries may be either graph (cypher/sparql) or SQL
+                # For hybrid paradigms, write queries may be either graph (cypher) or SQL
                 write_dir = queries_dir / self.paradigm.lower() / "write"
                 graph_dir = queries_dir / self.paradigm.lower() / "graph"
 
-                # Try write/ with graph extension first (cypher/sparql)
+                # Try write/ with graph extension first (cypher)
                 query_file = self._find_query_file(write_dir, query_id, ext)
                 actual_ext = ext
 
@@ -1163,14 +1163,6 @@ class RAMGradientExecutor:
         else:
             raise GradientError(f"Unknown paradigm: {self.paradigm}")
 
-    def _get_query_text(self, query_id: str) -> str:
-        """Get query text for execution (backward compatibility).
-
-        DEPRECATED: Use _load_query_files() instead.
-        """
-        files = self._load_query_files(query_id)
-        return files.get("query", "")
-
     def _get_default_params(self, query_id: str) -> dict[str, Any]:
         """Get default parameters for a query.
 
@@ -1193,11 +1185,7 @@ class RAMGradientExecutor:
                 # Normalize parameter keys based on paradigm
                 # P1/P2: lowercase for named %(name)s placeholders
                 # M1/M2: lowercase for $name Cypher params
-                # O2: camelCase for SPARQL ?var bindings
-                if self.paradigm in ("P1", "P2", "M1", "M2"):
-                    params = normalize_param_keys(params, target_case="lower")
-                elif self.paradigm == "O2":
-                    params = normalize_param_keys(params, target_case="camel")
+                params = normalize_param_keys(params, target_case="lower")
                 return params
 
         # No sampled params available - return empty dict

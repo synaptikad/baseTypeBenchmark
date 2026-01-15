@@ -73,8 +73,7 @@ class HybridRunResult:
 class QueryRunner(Protocol):
     """Protocol for query execution on a specific paradigm.
 
-    All runners (PostgresRunner, MemgraphRunner, OxigraphRunner)
-    must implement this interface.
+    All runners (PostgresRunner, MemgraphRunner) must implement this interface.
 
     Example:
         ```python
@@ -98,7 +97,7 @@ class QueryRunner(Protocol):
         """Execute a query and return results.
 
         Args:
-            query: Query string (SQL, Cypher, or SPARQL)
+            query: Query string (SQL or Cypher)
             params: Query parameters (optional)
             timeout_seconds: Maximum execution time
 
@@ -134,10 +133,10 @@ class QueryRunner(Protocol):
 
 @runtime_checkable
 class HybridQueryRunner(Protocol):
-    """Protocol for hybrid query execution (M2, O2).
+    """Protocol for hybrid query execution (M2).
 
     Hybrid runners orchestrate two-phase execution:
-    1. Graph phase: Execute Cypher/SPARQL to get point_ids
+    1. Graph phase: Execute Cypher to get point_ids
     2. Timeseries phase: Execute SQL with collected point_ids
     """
 
@@ -151,7 +150,7 @@ class HybridQueryRunner(Protocol):
         """Execute a hybrid query in two phases.
 
         Args:
-            graph_query: Cypher or SPARQL query (phase 1)
+            graph_query: Cypher query (phase 1)
             ts_query: SQL query with $point_ids placeholder (phase 2)
             params: Shared parameters for both queries
             timeout_seconds: Maximum total execution time
@@ -173,7 +172,7 @@ class BaseRunner(ABC):
         """Initialize runner.
 
         Args:
-            paradigm: Paradigm identifier (P1, P2, M1, M2, O2)
+            paradigm: Paradigm identifier (P1, P2, M1, M2)
         """
         self.paradigm = paradigm
         self._connected = False

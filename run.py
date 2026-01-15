@@ -66,8 +66,6 @@ ARCHIVE_DIR = RESULTS_DIR / "runs"  # Raw results archive for replay
 
 PROFILES = ["small", "medium", "large", "xlarge"]
 DURATIONS = ["2d", "1w", "1m", "6m", "1y"]
-# Note: O2 (Oxigraph) is exploratory only - not included in benchmark runs
-# O2 code remains for research purposes but is excluded from standard benchmarks
 PARADIGMS = ["P1", "P2", "M1", "M2"]
 SCENARIOS_DIR = CONFIG_DIR / "scenarios"
 
@@ -195,7 +193,6 @@ def show_help():
     console.print("  P2 = PostgreSQL JSON/EAV")
     console.print("  M1 = Memgraph graph-only")
     console.print("  M2 = Memgraph + TimescaleDB hybrid")
-    console.print("  [dim](O2 = Oxigraph - exploratory, not in benchmarks)[/dim]")
     console.print()
 
     console.print("[dim]For full CLI documentation: btb-runner --help[/dim]")
@@ -1470,8 +1467,6 @@ def get_required_services(paradigms: list[str]) -> set[str]:
         "P2": ["timescale"],
         "M1": ["memgraph"],
         "M2": ["memgraph", "timescale"],  # Hybrid: graph + timeseries
-        # O2 is exploratory only - not included in standard benchmarks
-        # "O2": ["oxigraph", "timescale"],  # Hybrid: RDF + timeseries
     }
     required = set()
     for p in paradigms:
@@ -1574,7 +1569,7 @@ def _verify_db_connections(paradigms: list[str]) -> bool:
 
     Uses docker exec to test connection without requiring psycopg in system Python.
     """
-    needs_postgres = any(p in paradigms for p in ["P1", "P2", "M2", "O2"])
+    needs_postgres = any(p in paradigms for p in ["P1", "P2", "M2"])
 
     if needs_postgres:
         try:

@@ -17,7 +17,6 @@ class ParameterFormat(BaseModel):
     """Parameter format per dialect."""
     sql: str = Field(description="SQL format (e.g., $1)")
     cypher: str = Field(description="Cypher format (e.g., $meter_id)")
-    sparql: str = Field(description="SPARQL format (e.g., ?meterId)")
 
 
 class QueryParameter(BaseModel):
@@ -159,8 +158,7 @@ class QueryCatalog:
                 description=p.get("description", ""),
                 format=ParameterFormat(
                     sql=format_data.get("sql", ""),
-                    cypher=format_data.get("cypher", ""),
-                    sparql=format_data.get("sparql", "")
+                    cypher=format_data.get("cypher", "")
                 ),
                 example=p.get("example")
             ))

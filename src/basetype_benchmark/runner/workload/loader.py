@@ -51,7 +51,7 @@ WORKLOADS: dict[str, WorkloadScenario] = {
         name="Mixed Middleware",
         description="Realistic middleware with reads and writes",
         profile=WorkloadProfile.MIXED,
-        paradigms=["P1", "P2", "M1", "M2", "O2"],
+        paradigms=["P1", "P2", "M1", "M2"],
         sequence=[
             QueryStep(query_id="QW1", repeat=50, batch_size=10),
             QueryStep(query_id="Q1", repeat=5),  # Energy chain
@@ -84,7 +84,7 @@ WORKLOADS: dict[str, WorkloadScenario] = {
         name="Graph Stress",
         description="Graph-intensive workload with deep traversals",
         profile=WorkloadProfile.GRAPH_STRESS,
-        paradigms=["P1", "M1", "M2", "O2"],
+        paradigms=["P1", "M1", "M2"],
         sequence=[
             QueryStep(query_id="Q1", repeat=20),  # Energy chain
             QueryStep(query_id="Q2", repeat=20),  # Tenant meters

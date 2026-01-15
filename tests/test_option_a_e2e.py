@@ -3,7 +3,7 @@
 End-to-end validation test for Option A (Shared TimescaleDB) implementation.
 
 Tests the complete workflow: Generate dataset → Export → Load → Benchmark
-Validates that timeseries is loaded once and reused across P1, P2, M2, O2.
+Validates that timeseries is loaded once and reused across P1, P2, M2.
 """
 import subprocess
 import sys
@@ -23,13 +23,12 @@ RESULTS_DIR = PROJECT_ROOT / "data" / "results"
 REPORT_FILE = PROJECT_ROOT / "refactor" / "option_a_validation_report.md"
 
 DSN = "postgresql://postgres:postgres@localhost:5432/benchmark"
-PARADIGMS = ["P1", "P2", "M2", "O2"]
+PARADIGMS = ["P1", "P2", "M2"]
 
 # Expected skip messages for each paradigm
 SKIP_MESSAGES = {
     "P2": "⏭️  Timeseries already loaded, skipping (Option A)",
     "M2": "⏭️  Timeseries already loaded for M2, skipping",
-    "O2": "⏭️  Timeseries already loaded for O2, skipping",
 }
 
 
@@ -63,7 +62,7 @@ class ValidationReport:
             "# Option A End-to-End Validation Report",
             f"\n**Timestamp:** {self.timestamp}\n",
             "## Test Configuration",
-            "- **Paradigms tested:** P1 → P2 → M2 → O2",
+            "- **Paradigms tested:** P1 → P2 → M2",
             "- **Dataset:** small-2d (freshly generated)",
             "- **Objective:** Validate timeseries is loaded once and reused\n",
             "## Results Summary\n",
@@ -98,7 +97,7 @@ class ValidationReport:
         lines.append("## Skip Messages Detection\n")
         lines.append("| Paradigm | Expected Message | Found? |")
         lines.append("|----------|------------------|--------|")
-        for paradigm in ["P2", "M2", "O2"]:
+        for paradigm in ["P2", "M2"]:
             expected = SKIP_MESSAGES[paradigm]
             found = "✅ YES" if self.skip_messages_found.get(paradigm, False) else "❌ NO"
             lines.append(f"| {paradigm} | `{expected}` | {found} |")
@@ -140,7 +139,7 @@ class ValidationReport:
         if not self.errors:
             lines.append("✅ Option A implementation is **VALIDATED**.")
             lines.append("- Timeseries loaded exactly once by P1")
-            lines.append("- P2, M2, O2 correctly skip timeseries loading")
+            lines.append("- P2, M2 correctly skip timeseries loading")
             lines.append("- No data duplication observed")
             lines.append("\n**Recommendation:** Mark G2 as completed in TODO tracker.")
         else:
@@ -177,7 +176,7 @@ def setup_docker():
 
     # Start containers
     cmd = ["docker", "compose", "-f", str(DOCKER_COMPOSE), "up", "-d",
-           "timescale", "memgraph", "oxigraph"]
+           "timescale", "memgraph"]
     run_command(cmd, capture=False)
 
     # Wait for healthy
@@ -308,7 +307,7 @@ def run_benchmark(report):
                 break
 
         # Check for skip messages
-        for p in ["P2", "M2", "O2"]:
+        for p in ["P2", "M2"]:
             if SKIP_MESSAGES[p] in line:
                 report.skip_messages_found[p] = True
                 report.add_success(f"Skip message detected for {p}")
@@ -359,11 +358,11 @@ def validate_timeseries_counts(report):
 
 
 def validate_skip_messages(report):
-    """Validate that skip messages were found for P2, M2, O2."""
+    """Validate that skip messages were found for P2, M2."""
     print("\n=== Phase 5: Validate Skip Messages ===")
 
     all_found = True
-    for paradigm in ["P2", "M2", "O2"]:
+    for paradigm in ["P2", "M2"]:
         if report.skip_messages_found.get(paradigm, False):
             print(f"✅ {paradigm}: Skip message found")
         else:

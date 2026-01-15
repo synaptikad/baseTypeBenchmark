@@ -54,24 +54,6 @@ class ParameterValue(BaseModel):
                 return ts.isoformat()
         return self.as_sql()
 
-    def as_sparql(self) -> str:
-        """Convert to SPARQL literal."""
-        if self.value is None:
-            return "UNDEF"
-        if self.param_type == "timestamp":
-            ts = self._parse_timestamp()
-            if ts:
-                return f'"{ts.isoformat()}"^^xsd:dateTime'
-        if self.param_type == "integer":
-            return f'"{self.value}"^^xsd:integer'
-        if self.param_type == "float":
-            return f'"{self.value}"^^xsd:decimal'
-        if self.param_type == "boolean":
-            return "true" if self.value else "false"
-        # Default: string literal
-        escaped = str(self.value).replace('"', '\\"')
-        return f'"{escaped}"'
-
     def _parse_timestamp(self) -> Optional[datetime]:
         """Parse timestamp from various formats."""
         if self.value is None:
@@ -137,18 +119,12 @@ class ParameterSet(BaseModel):
         """Convert to Cypher parameter dict."""
         return {name: p.as_cypher() for name, p in self.parameters.items()}
 
-    def to_sparql_bindings(self) -> dict[str, str]:
-        """Convert to SPARQL BIND values."""
-        return {name: p.as_sparql() for name, p in self.parameters.items()}
-
     def to_dialect(self, dialect: QueryDialect) -> dict[str, Any]:
         """Convert to dialect-specific parameters."""
         if dialect == QueryDialect.SQL:
             return self.to_sql_params()
         elif dialect == QueryDialect.CYPHER:
             return self.to_cypher_params()
-        elif dialect == QueryDialect.SPARQL:
-            return self.to_sparql_bindings()
         return self.to_sql_params()
 
 
@@ -229,69 +205,10 @@ class CypherParameterBinder(ParameterBinder):
         return f"${name}"
 
 
-class SPARQLParameterBinder(ParameterBinder):
-    """Parameter binder for SPARQL.
-
-    Uses ?name variables with BIND or VALUES clauses.
-    """
-
-    def __init__(self, use_values: bool = False):
-        """Initialize SPARQL binder.
-
-        Args:
-            use_values: If True, use VALUES clause. Otherwise, use BIND.
-        """
-        self.use_values = use_values
-
-    def bind(self, query: str, params: ParameterSet) -> tuple[str, dict[str, str]]:
-        """Bind parameters to SPARQL query.
-
-        For SPARQL, we inject BIND statements or VALUES clause.
-        """
-        sparql_bindings = params.to_sparql_bindings()
-
-        if not sparql_bindings:
-            return query, {}
-
-        if self.use_values:
-            # VALUES (?var1 ?var2) { (val1 val2) }
-            vars_str = " ".join(f"?{name}" for name in sparql_bindings)
-            vals_str = " ".join(sparql_bindings.values())
-            values_clause = f"VALUES ({vars_str}) {{ ({vals_str}) }}"
-
-            # Insert after WHERE {
-            bound_query = re.sub(
-                r"(WHERE\s*\{)",
-                rf"\1\n  {values_clause}",
-                query,
-                flags=re.IGNORECASE
-            )
-        else:
-            # BIND statements
-            bind_statements = "\n  ".join(
-                f"BIND({value} AS ?{name})"
-                for name, value in sparql_bindings.items()
-            )
-            bound_query = re.sub(
-                r"(WHERE\s*\{)",
-                rf"\1\n  {bind_statements}",
-                query,
-                flags=re.IGNORECASE
-            )
-
-        return bound_query, sparql_bindings
-
-    def get_placeholder(self, name: str, index: int) -> str:
-        """Get SPARQL variable."""
-        return f"?{name}"
-
-
 def get_binder(dialect: QueryDialect) -> ParameterBinder:
     """Get the appropriate parameter binder for a dialect."""
     if dialect == QueryDialect.SQL:
         return SQLParameterBinder(style="named")
     elif dialect == QueryDialect.CYPHER:
         return CypherParameterBinder()
-    elif dialect == QueryDialect.SPARQL:
-        return SPARQLParameterBinder(use_values=False)
     raise ValueError(f"Unknown dialect: {dialect}")

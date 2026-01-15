@@ -233,7 +233,7 @@ class MetricsSampler:
 class MultiContainerSampler:
     """Sample multiple containers simultaneously.
 
-    Useful for hybrid paradigms (M2, O2) that use multiple containers.
+    Useful for hybrid paradigm (M2) that uses multiple containers.
 
     Example:
         ```python

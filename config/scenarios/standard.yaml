@@ -10,7 +10,6 @@ paradigms:
   - P2   # PostgreSQL JSONB
   - M1   # Memgraph Standalone
   - M2   # Memgraph + TimescaleDB
-  - O2   # Oxigraph + TimescaleDB
 
 queries: all  # All 23 queries
 

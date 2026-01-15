@@ -34,7 +34,7 @@ queries:
     info_columns: [depth, type, name]
     notes: |
       P1 bug: inclut le source car base case depth=1 et WHERE depth > 0.
-      M1/O2 corrects: excluent le source (*1..10 et feeds+).
+      M1 correct: exclut le source (*1..10).
 
   Q2:
     question: "Quels équipements parents sont affectés si celui-ci tombe en panne?"
@@ -193,9 +193,6 @@ queries:
       P1:
         status: IMPOSSIBLE
         reason: "No JSONB metadata column"
-      O2:
-        status: DEGRADED
-        reason: "Date arithmetic approximation (365/30 days)"
 
   Q16:
     question: "Quels équipements ont ces tags sémantiques?"
@@ -264,9 +261,6 @@ queries:
       P1:
         status: DEGRADED
         reason: "CTE exploration, not guaranteed shortest"
-      O2:
-        status: DEGRADED
-        reason: "Manual enumeration (1-2 hops only)"
 
   Q21:
     question: "Tous les chemins électriques + points de défaillance unique (SPOF)?"
@@ -278,9 +272,6 @@ queries:
       P1:
         status: DEGRADED
         reason: "Combinatorial explosion possible"
-      O2:
-        status: IMPOSSIBLE
-        reason: "No allShortestPaths in SPARQL"
 
   Q22:
     question: "Quels équipements partagent le même parent (siblings)?"
@@ -297,10 +288,6 @@ queries:
     exclude_parameter: true
     parameter_name: space_id
     info_columns: [node_type, node_name, hop_distance, via_relation]
-    paradigm_status:
-      O2:
-        status: IMPOSSIBLE
-        reason: "Combinatorial explosion (5322 vs 30 rows)"
 
   # ===========================================================================
   # JSONB VALIDATION (Q24-Q26)
@@ -361,9 +348,6 @@ queries:
       P2:
         status: DEGRADED
         reason: "CTE exploration, not guaranteed shortest"
-      O2:
-        status: IMPOSSIBLE
-        reason: "No shortest path in SPARQL"
 
   Q28:
     question: "Quels locataires sont impactés par la coupure de ce sous-compteur?"
@@ -378,9 +362,6 @@ queries:
       P2:
         status: DEGRADED
         reason: "Multiple JOINs required"
-      O2:
-        status: DEGRADED
-        reason: "Complex SPARQL path queries"
 
   Q29:
     question: "Quels sont tous les chemins électriques vers les équipements critiques?"
@@ -397,9 +378,6 @@ queries:
       P2:
         status: DEGRADED
         reason: "CTE with ARRAY accumulation"
-      O2:
-        status: IMPOSSIBLE
-        reason: "No allPaths in SPARQL"
 
   Q30:
     question: "Quels espaces et équipements sont impactés par cette panne?"
@@ -414,9 +392,6 @@ queries:
       P2:
         status: DEGRADED
         reason: "Recursive CTE required"
-      O2:
-        status: DEGRADED
-        reason: "Complex SPARQL path queries"
 
   # ===========================================================================
   # SQL-NATIVE (Q31-Q34)
@@ -450,9 +425,6 @@ queries:
       M2:
         status: DEGRADED
         reason: "Schema validation via application code"
-      O2:
-        status: DEGRADED
-        reason: "Schema validation via application code"
 
   Q33:
     question: "Quelle est la dernière valeur par espace et type de mesure?"
@@ -481,9 +453,6 @@ queries:
       M2:
         status: DEGRADED
         reason: "Uses TimescaleDB continuous aggregates"
-      O2:
-        status: DEGRADED
-        reason: "Manual aggregation required"
 
   # ===========================================================================
   # VALIDATION QUERIES (Q35-Q41) - Validate QW write operations
@@ -497,10 +466,6 @@ queries:
     notes: |
       Validates QW1 (Space Reservation).
       After QW1 creates OCCUPIES edge, Q35 should return the tenant.
-    paradigm_status:
-      O2:
-        status: IMPOSSIBLE
-        reason: "O2 write not implemented"
 
   Q36:
     question: "Les métadonnées ont-elles été mises à jour (valide QW2)?"

@@ -35,16 +35,6 @@ impossible:
     Q33: "LATERAL JOIN pattern impossible in Cypher without correlated subqueries"
     Q34: "Materialized views not supported in Memgraph"
 
-  O2:
-    Q21: "SPARQL has no allShortestPaths equivalent"
-    Q23: "Combinatorial explosion with SPARQL property paths (5322 vs 30 rows)"
-    Q27: "Weighted shortest path requires graph database features"
-    Q28: "Multi-hop variable-length traversal not efficient in SPARQL"
-    Q29: "Path enumeration impossible with SPARQL property paths"
-    Q30: "Cycle detection requires graph algorithms"
-    Q33: "LATERAL JOIN pattern not available in SPARQL"
-    Q34: "Materialized views not supported in triplestore"
-
 # Queries DEGRADED par paradigme
 # Ces queries fonctionnent mais avec des résultats partiellement différents
 degraded:
@@ -59,11 +49,6 @@ degraded:
 
   M2:
     Q13: "Hybrid architecture returns per-point aggregates; space context lost in graph→SQL handoff"
-
-  O2:
-    Q6: "SPARQL has no native time_bucket aggregation"
-    Q15: "Date arithmetic approximation (365/30 days)"
-    Q20: "Manual path enumeration (1-2 hops only)"
 
   # SQL paradigms (P1, P2) - Graph algorithm limitations
   # Q20 (Shortest Path) and Q21 (Electrical Paths/SPOF) are graph-native queries.
@@ -144,12 +129,6 @@ notes:
     M1 stores timeseries as TimeseriesChunk arrays instead of
     individual points in TimescaleDB. This causes approximate
     aggregations when bucket boundaries don't align with chunks.
-
-  O2_path_limitations: |
-    SPARQL property paths (*) don't support depth limiting or
-    collecting intermediate nodes like Cypher's variable-length
-    patterns. Complex path queries are either impossible or
-    require manual enumeration.
 
   graph_native_queries_Q27_Q30: |
     Q27-Q30 are graph-native queries designed to show where graph

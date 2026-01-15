@@ -61,7 +61,23 @@ class PostgresRunner(BaseRunner):
 
     def _get_connection(self) -> psycopg.Connection:
         """Get or create database connection with schema-specific search_path."""
-        if self._conn is None or self._conn.closed:
+        need_new_connection = self._conn is None or self._conn.closed
+
+        # Also check if connection is actually usable (handles container restarts)
+        if not need_new_connection and self._conn is not None:
+            try:
+                # Quick ping to verify connection is alive
+                self._conn.execute("SELECT 1")
+            except Exception:
+                # Connection lost (e.g., container restarted)
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+                need_new_connection = True
+
+        if need_new_connection:
             self._conn = psycopg.connect(
                 self.config.dsn,
                 row_factory=dict_row,

@@ -1,0 +1,14 @@
+{
+  "query_id": "Q14",
+  "ram_limit_mb": 1024,
+  "p50_ms": 0.0,
+  "p95_ms": 0.0,
+  "avg_ms": 0.0,
+  "min_ms": 0.0,
+  "max_ms": 0.0,
+  "stddev_ms": 0.0,
+  "success_rate": 0.0,
+  "memory_peak_mb": 0.0,
+  "run_count": 1,
+  "row_count": 0
+}

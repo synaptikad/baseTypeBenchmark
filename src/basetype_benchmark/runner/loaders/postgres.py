@@ -701,7 +701,7 @@ class PostgresLoader(BaseLoader):
         """Create ts schema and timeseries hypertable if they don't exist.
 
         This sets up the shared timeseries infrastructure for Option A.
-        All paradigms (P1, P2, M2, O2) share this ts.timeseries table.
+        All paradigms (P1, P2, M1, M2) share this ts.timeseries table.
 
         Returns:
             True if successful

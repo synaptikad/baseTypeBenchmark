@@ -2,12 +2,11 @@
 
 Sprint 3 - Benchmark BaseType V3
 
-Provides query execution for all 5 paradigms:
+Provides query execution for all 4 paradigms:
 - P1: PostgreSQL relational (PostgresRunner)
 - P2: PostgreSQL JSONB (PostgresRunner)
 - M1: Memgraph standalone (MemgraphRunner)
 - M2: Memgraph + TimescaleDB (HybridRunner)
-- O2: Oxigraph + TimescaleDB (HybridRunner)
 
 Example:
     ```python
@@ -30,7 +29,6 @@ from typing import Union
 from ..config import (
     PostgresConfig,
     MemgraphConfig,
-    OxigraphConfig,
 )
 from .base import (
     QueryRunner,
@@ -44,11 +42,9 @@ from .base import (
 )
 from .postgres import PostgresRunner
 from .memgraph import MemgraphRunner
-from .oxigraph import OxigraphRunner
 from .hybrid import (
     HybridRunner,
     M2HybridRunner,
-    O2HybridRunner,
 )
 
 __all__ = [
@@ -63,10 +59,8 @@ __all__ = [
     # Runners
     "PostgresRunner",
     "MemgraphRunner",
-    "OxigraphRunner",
     "HybridRunner",
     "M2HybridRunner",
-    "O2HybridRunner",
     # Factory
     "get_runner",
     "get_hybrid_runner",
@@ -77,19 +71,19 @@ __all__ = [
 
 
 # Type alias for configs
-ConfigType = Union[PostgresConfig, MemgraphConfig, OxigraphConfig]
+ConfigType = Union[PostgresConfig, MemgraphConfig]
 
 
 def get_runner(
     paradigm: str,
     config: ConfigType,
-) -> Union[PostgresRunner, MemgraphRunner, OxigraphRunner]:
+) -> Union[PostgresRunner, MemgraphRunner]:
     """Factory to get the appropriate runner for a paradigm.
 
-    For hybrid paradigms (M2, O2), use get_hybrid_runner() instead.
+    For hybrid paradigm (M2), use get_hybrid_runner() instead.
 
     Args:
-        paradigm: P1, P2, M1, M2, or O2
+        paradigm: P1, P2, M1, or M2
         config: Appropriate config for the paradigm
 
     Returns:
@@ -118,31 +112,26 @@ def get_runner(
             raise TypeError(f"MemgraphConfig required for {paradigm}")
         return MemgraphRunner(config, paradigm=paradigm)
 
-    elif paradigm == "O2":
-        if not isinstance(config, OxigraphConfig):
-            raise TypeError("OxigraphConfig required for O2")
-        return OxigraphRunner(config, paradigm=paradigm)
-
     else:
         raise ValueError(
             f"Unknown paradigm: {paradigm}. "
-            f"Valid options: P1, P2, M1, M2, O2"
+            f"Valid options: P1, P2, M1, M2"
         )
 
 
 def get_hybrid_runner(
     paradigm: str,
-    graph_config: Union[MemgraphConfig, OxigraphConfig],
+    graph_config: MemgraphConfig,
     ts_config: PostgresConfig,
 ) -> HybridRunner:
-    """Factory to get a hybrid runner for M2 or O2.
+    """Factory to get a hybrid runner for M2.
 
     Hybrid runners orchestrate two-phase execution:
-    1. Graph phase (Cypher/SPARQL)
+    1. Graph phase (Cypher)
     2. Timeseries phase (SQL)
 
     Args:
-        paradigm: M2 or O2
+        paradigm: M2
         graph_config: Config for graph database
         ts_config: Config for TimescaleDB
 
@@ -150,7 +139,7 @@ def get_hybrid_runner(
         HybridRunner instance
 
     Raises:
-        ValueError: If paradigm is not M2 or O2
+        ValueError: If paradigm is not M2
         TypeError: If config types don't match paradigm
 
     Example:
@@ -174,13 +163,8 @@ def get_hybrid_runner(
             raise TypeError("MemgraphConfig required for M2 graph")
         return M2HybridRunner(graph_config, ts_config)
 
-    elif paradigm == "O2":
-        if not isinstance(graph_config, OxigraphConfig):
-            raise TypeError("OxigraphConfig required for O2 graph")
-        return O2HybridRunner(graph_config, ts_config)
-
     else:
         raise ValueError(
             f"Hybrid runner not available for {paradigm}. "
-            f"Valid options: M2, O2"
+            f"Valid options: M2"
         )

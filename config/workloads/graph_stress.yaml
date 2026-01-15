@@ -6,7 +6,6 @@ paradigms:
   - P1
   - M1
   - M2
-  - O2
 
 sequence:
   # Basic traversals

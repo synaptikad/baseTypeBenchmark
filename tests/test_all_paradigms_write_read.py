@@ -1,5 +1,5 @@
 """
-Test E2E: Write → Read Cycle for All Paradigms (P2, M1, M2, O2)
+Test E2E: Write → Read Cycle for All Paradigms (P2, M1, M2)
 Validates QW4-QW8 writes and Q24-Q26 reads across all engines.
 
 Usage:
@@ -42,22 +42,6 @@ def m1_cursor():
         conn.close()
     except Exception:
         pytest.skip("Memgraph not available")
-
-
-@pytest.fixture(scope="module")
-def o2_session():
-    """Oxigraph O2 session (requests-based)."""
-    import requests
-    session = requests.Session()
-    session.headers['Accept'] = 'application/sparql-results+json'
-    # Check if Oxigraph is available
-    try:
-        response = session.get("http://localhost:7878/query", params={"query": "SELECT * WHERE { ?s ?p ?o } LIMIT 1"})
-        if response.status_code != 200:
-            pytest.skip("Oxigraph not available")
-    except Exception:
-        pytest.skip("Oxigraph not available")
-    yield session
 
 
 # ============================================================================
@@ -159,65 +143,13 @@ class TestM1WriteRead:
 
 
 # ============================================================================
-# O2 TESTS (SPARQL)
-# ============================================================================
-
-class TestO2WriteRead:
-    """O2 Oxigraph SPARQL tests."""
-
-    def test_q26_capability_distribution(self, o2_session):
-        """Q26: Capability distribution via SPARQL."""
-        query = """
-        PREFIX btb: <http://basetype.benchmark/ontology#>
-        SELECT ?equipmentType (COUNT(DISTINCT ?eq) AS ?equipment_count)
-        WHERE {
-            ?eq a btb:Equipment .
-            ?eq btb:domain "HVAC" .
-            ?eq btb:equipmentType ?equipmentType .
-        }
-        GROUP BY ?equipmentType
-        ORDER BY DESC(?equipment_count)
-        """
-        response = o2_session.post(
-            "http://localhost:7878/query",
-            data={"query": query}
-        )
-        assert response.status_code == 200
-        results = response.json()
-        bindings = results.get("results", {}).get("bindings", [])
-        assert len(bindings) > 0
-
-    def test_q24_maintenance_history(self, o2_session):
-        """Q24: Maintenance history query."""
-        query = """
-        PREFIX btb: <http://basetype.benchmark/ontology#>
-        SELECT ?equipmentId ?name (COUNT(?event) AS ?event_count)
-        WHERE {
-            ?eq btb:id "ahu_1" .
-            ?eq btb:name ?name .
-            BIND("ahu_1" AS ?equipmentId)
-            OPTIONAL { ?eq btb:hasMaintenanceEvent ?event }
-        }
-        GROUP BY ?equipmentId ?name
-        """
-        response = o2_session.post(
-            "http://localhost:7878/query",
-            data={"query": query}
-        )
-        assert response.status_code == 200
-        results = response.json()
-        bindings = results.get("results", {}).get("bindings", [])
-        assert len(bindings) >= 0  # May be 0 or more
-
-
-# ============================================================================
 # CROSS-PARADIGM COMPARISON
 # ============================================================================
 
 class TestCrossParadigmComparison:
     """Compare results across paradigms."""
 
-    def test_hvac_equipment_count_consistency(self, p2_cursor, m1_cursor, o2_session):
+    def test_hvac_equipment_count_consistency(self, p2_cursor, m1_cursor):
         """All paradigms should report same HVAC equipment counts."""
         # P2
         p2_cursor.execute("""
@@ -235,31 +167,17 @@ class TestCrossParadigmComparison:
         """)
         m1_counts = {r[0]: r[1] for r in m1_cursor.fetchall()}
 
-        # O2
-        query = """
-        PREFIX btb: <http://basetype.benchmark/ontology#>
-        SELECT ?type (COUNT(?eq) AS ?cnt)
-        WHERE { ?eq a btb:Equipment ; btb:domain "HVAC" ; btb:equipmentType ?type }
-        GROUP BY ?type ORDER BY ?type
-        """
-        response = o2_session.post("http://localhost:7878/query", data={"query": query})
-        o2_counts = {
-            b["type"]["value"]: int(b["cnt"]["value"])
-            for b in response.json().get("results", {}).get("bindings", [])
-        }
-
         # Compare
         print(f"\nP2: {p2_counts}")
         print(f"M1: {m1_counts}")
-        print(f"O2: {o2_counts}")
 
         # All should have same keys and values
-        assert set(p2_counts.keys()) == set(m1_counts.keys()) == set(o2_counts.keys()), \
-            f"Equipment types differ: P2={set(p2_counts.keys())}, M1={set(m1_counts.keys())}, O2={set(o2_counts.keys())}"
+        assert set(p2_counts.keys()) == set(m1_counts.keys()), \
+            f"Equipment types differ: P2={set(p2_counts.keys())}, M1={set(m1_counts.keys())}"
 
         for eq_type in p2_counts:
-            assert p2_counts[eq_type] == m1_counts[eq_type] == o2_counts[eq_type], \
-                f"Counts differ for {eq_type}: P2={p2_counts[eq_type]}, M1={m1_counts[eq_type]}, O2={o2_counts[eq_type]}"
+            assert p2_counts[eq_type] == m1_counts[eq_type], \
+                f"Counts differ for {eq_type}: P2={p2_counts[eq_type]}, M1={m1_counts[eq_type]}"
 
 
 if __name__ == "__main__":

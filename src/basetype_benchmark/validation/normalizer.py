@@ -109,7 +109,7 @@ class FullResultNormalizer:
         Args:
             rows: All result rows from paradigm
             query_id: Query ID (Q1, Q2, etc.)
-            paradigm: Paradigm name (P1, M1, O2)
+            paradigm: Paradigm name (P1, P2, M1, M2)
             parameters: Query parameters used
 
         Returns:

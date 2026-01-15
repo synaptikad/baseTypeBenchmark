@@ -29,7 +29,7 @@ from ..config import (
     EngineType,
     PostgresConfig,
     MemgraphConfig,
-    OxigraphConfig,
+    TIMESCALE_PARADIGMS,
 )
 from ..loaders import get_loader
 from ..loaders.progress import LoadProgressDisplay, ExportProgressDisplay
@@ -57,7 +57,7 @@ console = Console()
 @dataclass
 class ScenarioConfig:
     """Configuration for benchmark scenario."""
-    paradigms: list[str] = field(default_factory=lambda: ["P1", "P2", "M1", "M2", "O2"])
+    paradigms: list[str] = field(default_factory=lambda: ["P1", "P2", "M1", "M2"])
     queries: list[str] | None = None  # None = all queries
     data_profile: str = "small"
     ram_levels_mb: list[int] = field(default_factory=lambda: [131072, 65536, 32768, 16384, 8192])
@@ -135,7 +135,6 @@ class BenchmarkOrchestrator:
         "P2": "src.basetype_benchmark.exporters.p2_extractor",
         "M1": "src.basetype_benchmark.exporters.m1m2_extractor",
         "M2": "src.basetype_benchmark.exporters.m1m2_extractor",
-        "O2": "src.basetype_benchmark.exporters.o2_extractor",
     }
 
     def __init__(
@@ -398,11 +397,17 @@ class BenchmarkOrchestrator:
 
             finally:
                 # 5. Stop containers (unless next paradigm shares TimescaleDB)
+                # Force remove Memgraph if M1/M2 transition (they can't share data)
+                force_remove_memgraph = self._needs_memgraph_cleanup(paradigm, scenario.paradigms)
                 if self._should_keep_containers_running(paradigm, scenario.paradigms):
                     console.print(f"  [dim]Keeping containers running for Option A...[/dim]")
+                    # Still need to clean Memgraph volume if M1->M2 transition
+                    if force_remove_memgraph:
+                        console.print(f"  [dim]Cleaning Memgraph volume (M1/M2 incompatible)...[/dim]")
+                        self.isolation._clean_memgraph_volume()
                 else:
                     console.print(f"  [dim]Stopping containers...[/dim]")
-                    self.isolation.stop_paradigm(paradigm)
+                    self.isolation.stop_paradigm(paradigm, force_remove=force_remove_memgraph)
 
         finally:
             # 6. Cleanup exports (disk optimization)
@@ -429,13 +434,13 @@ class BenchmarkOrchestrator:
         """Check if TimescaleDB container should stay running for later paradigms.
 
         Returns True if:
-        - Current paradigm uses TimescaleDB (P1, P2, M2, O2)
+        - Current paradigm uses TimescaleDB (P1, P2, M2)
         - ANY remaining paradigm in queue also uses TimescaleDB
         - This enables Option A (shared TimescaleDB across paradigms)
 
         Note: We check ALL remaining paradigms, not just the next one.
-        This is critical for sequences like P1→P2→M1→M2→O2 where M1 doesn't
-        use TimescaleDB but M2 and O2 do. We must keep TimescaleDB running
+        This is critical for sequences like P1->P2->M1->M2 where M1 doesn't
+        use TimescaleDB but M2 does. We must keep TimescaleDB running
         across the M1 gap to preserve the shared timeseries data.
 
         Args:
@@ -446,12 +451,11 @@ class BenchmarkOrchestrator:
             True if TimescaleDB container should stay running, False otherwise
         """
         # TimescaleDB paradigms that can share state via Option A
-        # WITH schema isolation: P1, P2, M2, O2 can all share ts.timeseries
+        # WITH schema isolation: P1, P2, M2 can all share ts.timeseries
         # P1 and P2 use separate structural schemas (p1/p2) to avoid conflicts
-        timescale_paradigms = {"P1", "P2", "M2", "O2"}
 
         # Only relevant if current paradigm uses TimescaleDB
-        if current_paradigm not in timescale_paradigms:
+        if current_paradigm not in TIMESCALE_PARADIGMS:
             return False
 
         # Check if there's a next paradigm
@@ -463,15 +467,57 @@ class BenchmarkOrchestrator:
         if current_idx >= len(all_paradigms) - 1:
             return False  # Last paradigm, safe to stop
 
-        # FIX: Check if ANY remaining paradigm uses TimescaleDB (not just next)
+        # Check if ANY remaining paradigm uses TimescaleDB (not just next)
+        # This keeps TS running across M1 gap for sequences like P1->P2->M1->M2
         remaining_paradigms = all_paradigms[current_idx + 1:]
-        return any(p in timescale_paradigms for p in remaining_paradigms)
+        return any(p in TIMESCALE_PARADIGMS for p in remaining_paradigms)
+
+    def _needs_memgraph_cleanup(
+        self,
+        current_paradigm: str,
+        all_paradigms: list[str]
+    ) -> bool:
+        """Check if Memgraph volume needs cleanup after current paradigm.
+
+        M1 and M2 CANNOT share Memgraph data because:
+        - M1 stores timeseries IN Memgraph (TimeseriesChunk nodes)
+        - M2 stores timeseries in TimescaleDB
+
+        Returns True if current is M1/M2 AND next Memgraph paradigm is different.
+
+        Args:
+            current_paradigm: Current paradigm that just finished
+            all_paradigms: Full list of paradigms in execution order
+
+        Returns:
+            True if Memgraph volume must be cleaned, False otherwise
+        """
+        memgraph_paradigms = {"M1", "M2"}
+
+        # Only relevant if current paradigm uses Memgraph
+        if current_paradigm not in memgraph_paradigms:
+            return False
+
+        # Find next Memgraph paradigm in queue
+        try:
+            current_idx = all_paradigms.index(current_paradigm)
+        except ValueError:
+            return False
+
+        remaining_paradigms = all_paradigms[current_idx + 1:]
+        for next_paradigm in remaining_paradigms:
+            if next_paradigm in memgraph_paradigms:
+                # Next Memgraph paradigm found - cleanup needed if different
+                return next_paradigm != current_paradigm
+
+        # No more Memgraph paradigms - cleanup for cleanliness
+        return True
 
     def _get_extractor(self, paradigm: str, output_dir: Path, input_dir: Path):
         """Get extractor instance for a paradigm.
 
         Args:
-            paradigm: Paradigm ID (P1, P2, M1, M2, O2)
+            paradigm: Paradigm ID (P1, P2, M1, M2)
             output_dir: Output directory for exported files
             input_dir: Input directory with Parquet files
 
@@ -489,9 +535,6 @@ class BenchmarkOrchestrator:
         elif paradigm_upper in ("M1", "M2"):
             from basetype_benchmark.exporters.m1m2_extractor import M1M2Extractor
             return M1M2Extractor(output_dir=output_dir, input_dir=input_dir)
-        elif paradigm_upper == "O2":
-            from basetype_benchmark.exporters.o2_extractor import O2Extractor
-            return O2Extractor(output_dir=output_dir, input_dir=input_dir)
         else:
             raise ValueError(f"Unknown paradigm: {paradigm}")
 
@@ -504,7 +547,7 @@ class BenchmarkOrchestrator:
         """Export a paradigm from Parquet source files.
 
         Args:
-            paradigm: Paradigm ID (P1, P2, M1, M2, O2)
+            paradigm: Paradigm ID (P1, P2, M1, M2)
             source_dir: Directory with Parquet files
             export_base_dir: Base directory for exports
 
@@ -566,7 +609,8 @@ class BenchmarkOrchestrator:
     def _should_keep_timeseries(self, paradigm: str) -> bool:
         """Determine if timeseries should be kept during clear.
 
-        Option A: Keep timeseries if already loaded by previous paradigm.
+        Keep timeseries if already loaded by previous paradigm.
+        Checks both in-memory flag AND database state (for cross-process scenarios).
 
         Args:
             paradigm: Current paradigm being loaded
@@ -574,8 +618,29 @@ class BenchmarkOrchestrator:
         Returns:
             True if timeseries should be preserved
         """
-        uses_timescale = paradigm in ("P1", "P2", "M2", "O2")
-        return self._timeseries_loaded and uses_timescale
+        if paradigm not in TIMESCALE_PARADIGMS:
+            return False
+
+        # Check in-memory flag first (same process)
+        if self._timeseries_loaded:
+            return True
+
+        # Check database state (cross-process: e.g., P1 loaded in separate btb-runner call)
+        # This handles calibration mode where each paradigm runs in a separate process
+        try:
+            from ..loaders import get_loader
+            config = self._get_config(paradigm)
+            ts_config = self._get_timescale_config(paradigm)
+            loader = get_loader(paradigm, config, ts_config)
+
+            if hasattr(loader, '_is_timeseries_populated') and loader._is_timeseries_populated():
+                # Timeseries exist in DB from previous run
+                self._timeseries_loaded = True  # Update flag for future calls
+                return True
+        except Exception:
+            pass
+
+        return False
 
     def _run_gradient(
         self,
@@ -748,16 +813,12 @@ class BenchmarkOrchestrator:
             for key, cfg in self.configs.items():
                 if isinstance(cfg, MemgraphConfig):
                     return cfg
-        elif paradigm == "O2":
-            for key, cfg in self.configs.items():
-                if isinstance(cfg, OxigraphConfig):
-                    return cfg
 
         raise ValueError(f"No config found for {paradigm}")
 
     def _get_timescale_config(self, paradigm: str) -> PostgresConfig | None:
         """Get TimescaleDB config for hybrid paradigms."""
-        if paradigm not in ("M2", "O2"):
+        if paradigm != "M2":
             return None
 
         # Look for timescale config
