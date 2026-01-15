@@ -134,6 +134,19 @@ def dir_size(path: Path) -> str:
     return f"{total:.1f} TB"
 
 
+def get_available_ram_gb() -> int:
+    """Get available RAM in GB."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    mem_kb = int(line.split()[1])
+                    return mem_kb // (1024 * 1024)
+    except Exception:
+        pass
+    return 16  # Fallback to 16GB
+
+
 def show_help():
     """Display detailed help using Rich formatting."""
     header("Help")
@@ -370,6 +383,189 @@ def delete_dataset():
 # RAM levels available for selection
 RAM_LEVELS = [128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2, 1, 0.5]
 
+# Results directory
+RESULTS_DIR = Path("data/results/runs")
+
+
+def get_calibration_status(dataset_path: Path, paradigms: list[str]) -> dict[str, int | None]:
+    """Check RAM calibration cache for a dataset.
+
+    Returns dict mapping paradigm -> minimum_viable_mb (or None if not calibrated).
+    """
+    calibration_file = dataset_path / "ram_calibration.json"
+
+    if not calibration_file.exists():
+        return {p: None for p in paradigms}
+
+    try:
+        with open(calibration_file) as f:
+            data = json.load(f)
+
+        result = {}
+        for p in paradigms:
+            p_upper = p.upper()
+            if p_upper in data.get("paradigms", {}):
+                result[p] = data["paradigms"][p_upper].get("ram_minimum_viable_mb")
+            else:
+                result[p] = None
+        return result
+    except Exception:
+        return {p: None for p in paradigms}
+
+
+def run_calibration(source_dir: Path, paradigms: list[str], max_mb: int, min_mb: int) -> bool:
+    """Run RAM calibration for all paradigms and save to cache.
+
+    This executes the calibration protocol:
+    1. Reset Docker state (clean containers/volumes)
+    2. For each paradigm: export data, start container, load data
+    3. Descend RAM levels from max to min until OOM
+    4. Save minimum viable RAM to ram_calibration.json
+
+    Args:
+        source_dir: Dataset directory (with Parquet files)
+        paradigms: List of paradigms to calibrate
+        max_mb: Maximum RAM in MB
+        min_mb: Minimum RAM in MB
+
+    Returns:
+        True if calibration succeeded for all paradigms
+    """
+    import tempfile
+    from datetime import datetime
+
+    # Generate descending RAM levels
+    levels_mb = []
+    level = max_mb
+    while level >= min_mb:
+        levels_mb.append(level)
+        level //= 2
+
+    console.print(f"[bold]Calibration RAM: {max_mb}MB → {min_mb}MB[/bold]")
+    console.print(f"[dim]Niveaux: {', '.join(f'{l}MB' for l in levels_mb)}[/dim]")
+    console.print()
+
+    # Step 0: Reset Docker state for clean calibration
+    console.print("[yellow]Reset Docker state...[/yellow]")
+    docker_prune_all()
+    console.print()
+
+    # Prepare calibration data
+    calibration_data = {
+        "dataset": source_dir.name,
+        "calibrated_at": datetime.utcnow().isoformat() + "Z",
+        "paradigms": {}
+    }
+
+    success = True
+
+    with tempfile.TemporaryDirectory(prefix="btb_calib_") as tmp_export:
+        tmp_export_path = Path(tmp_export)
+
+        for paradigm in paradigms:
+            console.print(f"\n[cyan]===== Calibration {paradigm} =====[/cyan]")
+
+            try:
+                # Use btb-runner with --calibration-only to run ONLY calibration
+                # This handles: export, container start, load, calibration (no benchmark)
+                # Show output in real-time (no capture_output)
+                returncode = subprocess.call(
+                    [
+                        str(VENV_BTB), "benchmark",
+                        "-s", str(source_dir),
+                        "-e", str(tmp_export_path),
+                        "-p", paradigm,
+                        "--calibration-only",  # IMPORTANT: only calibration, no benchmark
+                        "--calibration-max", str(max_mb),
+                        "--calibration-min", str(min_mb),
+                        "--cleanup",
+                    ],
+                    timeout=600,  # 10 minutes max per paradigm
+                )
+
+                if returncode != 0:
+                    console.print(f"[red]Calibration {paradigm} échouée (code {returncode})[/red]")
+                    success = False
+                    continue
+
+                # Read calibration result from cache (btb-runner saves it)
+                calibration_file = source_dir / "ram_calibration.json"
+                if calibration_file.exists():
+                    with open(calibration_file) as f:
+                        saved_data = json.load(f)
+                    if paradigm in saved_data.get("paradigms", {}):
+                        calibration_data["paradigms"][paradigm] = saved_data["paradigms"][paradigm]
+                        min_viable = saved_data["paradigms"][paradigm].get("ram_minimum_viable_mb")
+                        console.print(f"[green]{paradigm}: minimum viable = {min_viable}MB[/green]")
+
+            except subprocess.TimeoutExpired:
+                console.print(f"[red]Calibration {paradigm} timeout (>10min)[/red]")
+                success = False
+            except Exception as e:
+                console.print(f"[red]Calibration {paradigm} erreur: {e}[/red]")
+                success = False
+
+    # Save final calibration file (merge all results)
+    calibration_file = source_dir / "ram_calibration.json"
+    calibration_data["calibrated_at"] = datetime.utcnow().isoformat() + "Z"
+    with open(calibration_file, "w") as f:
+        json.dump(calibration_data, f, indent=2)
+
+    console.print(f"\n[green]Calibration sauvegardée: {calibration_file}[/green]")
+
+    return success
+
+
+def validate_existing_results():
+    """Validate existing benchmark results against expected answers."""
+    header("Validate Results")
+
+    # Find result files
+    result_files = []
+
+    # Check runs directory
+    if RESULTS_DIR.exists():
+        for run_dir in sorted(RESULTS_DIR.iterdir(), reverse=True):
+            if run_dir.is_dir():
+                summary = run_dir / "benchmark_summary.json"
+                if summary.exists():
+                    result_files.append(summary)
+
+    # Also check for loose JSON files in data/results
+    results_root = Path("data/results")
+    if results_root.exists():
+        for f in results_root.glob("*.json"):
+            if f.name.startswith("simple_") or f.name.startswith("scenario_"):
+                result_files.append(f)
+
+    if not result_files:
+        console.print("[yellow]No benchmark results found.[/yellow]")
+        console.print("[dim]Run a benchmark first, or place results in data/results/runs/[/dim]")
+        return
+
+    console.print("[bold]Select results to validate:[/bold]\n")
+    for i, f in enumerate(result_files[:10], 1):  # Show max 10
+        # Get info from path
+        if f.parent.name != "results":
+            label = f.parent.name  # Run directory name (e.g., 2026-01-14_124315)
+        else:
+            label = f.stem  # Filename without extension
+        console.print(f"  [cyan]{i}[/cyan]. {label}")
+
+    console.print()
+    choice = Prompt.ask("Select", default="1")
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(result_files):
+            result_file = result_files[idx]
+            console.print(f"\n[dim]Validating: {result_file}[/dim]\n")
+            btb("validate", str(result_file), "--cross-matrix", "--verbose")
+        else:
+            console.print("[red]Invalid selection[/red]")
+    except ValueError:
+        console.print("[red]Invalid input[/red]")
+
 
 def menu_benchmark():
     while True:
@@ -388,12 +584,13 @@ def menu_benchmark():
         console.print("[cyan]1[/cyan]. Run benchmark   [dim]Simple or Scenario, Single RAM or Gradient[/dim]")
         console.print()
         console.print("[cyan]d[/cyan]. Debug query     [dim]Run single query[/dim]")
-        console.print("[cyan]v[/cyan]. Validate        [dim]Check query matrix[/dim]")
+        console.print("[cyan]v[/cyan]. Validate        [dim]Validate existing results vs expected answers[/dim]")
+        console.print("[cyan]m[/cyan]. Matrix          [dim]Show query compatibility matrix (dry-run)[/dim]")
         console.print()
         console.print("[cyan]b[/cyan]. Back")
         console.print()
 
-        choice = Prompt.ask("", choices=["1", "d", "v", "b"], default="1", show_choices=False)
+        choice = Prompt.ask("", choices=["1", "d", "v", "m", "b"], default="1", show_choices=False)
 
         if choice == "b":
             return
@@ -411,6 +608,9 @@ def menu_benchmark():
         elif choice == "d":
             debug_query()
         elif choice == "v":
+            validate_existing_results()
+            wait()
+        elif choice == "m":
             btb("dry-run", "--matrix")
             wait()
 
@@ -439,6 +639,97 @@ def run_benchmark_wizard(datasets: list[Path]):
     if idx is None:
         return
     source = datasets[idx]
+
+    # 1b. Check calibration status (MANDATORY before benchmark)
+    console.print("\n[bold]1b. RAM Calibration Check[/bold]")
+    calibration_file = source / "ram_calibration.json"
+    calibration_exists = calibration_file.exists()
+
+    force_calibration = False
+    skip_calibration = False
+    calibration_max = None
+    calibration_min = None
+
+    if calibration_exists:
+        # Show cached values
+        calibration_status = get_calibration_status(source, PARADIGMS)
+        console.print("[green]Calibration trouvée:[/green]")
+        for p, ram_mb in calibration_status.items():
+            if ram_mb:
+                ram_display = f"{ram_mb}MB" if ram_mb < 1024 else f"{ram_mb // 1024}GB"
+                console.print(f"  {p}: minimum viable = [green]{ram_display}[/green]")
+            else:
+                console.print(f"  {p}: [dim]non calibré[/dim]")
+        console.print()
+        console.print("  [cyan]1[/cyan]. Continuer avec cache")
+        console.print("  [cyan]2[/cyan]. Re-calibrer (force)")
+        console.print()
+        calib_choice = Prompt.ask("Select", choices=["1", "2"], default="1")
+        if calib_choice == "2":
+            force_calibration = True
+            available_ram_gb = get_available_ram_gb()
+            console.print("\n[bold]Calibration Range[/bold]")
+            console.print(f"[dim]RAM dispo: {available_ram_gb}GB[/dim]")
+            calibration_max_gb = float(Prompt.ask("Max RAM (GB)", default=str(available_ram_gb)))
+            calibration_min_gb = float(Prompt.ask("Min RAM (GB)", default="0.5"))
+            calibration_max = int(calibration_max_gb * 1024)
+            calibration_min = int(calibration_min_gb * 1024)
+
+            # LANCER LA RE-CALIBRATION MAINTENANT
+            console.print()
+            console.print("[bold yellow]Lancement de la re-calibration...[/bold yellow]")
+            console.print(f"[dim]Niveaux: {calibration_max}MB → {calibration_min}MB[/dim]")
+            console.print()
+
+            # Run calibration for all paradigms
+            if not run_calibration(source, PARADIGMS, calibration_max, calibration_min):
+                console.print("[red]Re-calibration échouée.[/red]")
+                wait()
+                return
+
+            # Calibration done
+            force_calibration = False  # Already done
+            console.print("[green]Re-calibration terminée et sauvegardée![/green]")
+            wait()
+    else:
+        # NO calibration - MUST calibrate first
+        console.print("[red]Aucune calibration trouvée![/red]")
+        console.print("[yellow]La calibration est OBLIGATOIRE avant le benchmark.[/yellow]")
+        console.print()
+        console.print("[dim]La calibration trouve la RAM minimum viable pour chaque paradigme.[/dim]")
+        console.print("[dim]Elle est sauvegardée dans le dossier du dataset pour réutilisation.[/dim]")
+        console.print()
+
+        if not Confirm.ask("[yellow]Lancer la calibration maintenant?[/yellow]", default=True):
+            console.print("[red]Benchmark annulé. Calibration requise.[/red]")
+            wait()
+            return
+
+        available_ram_gb = get_available_ram_gb()
+        console.print("\n[bold]Calibration Range[/bold]")
+        console.print(f"[dim]RAM dispo: {available_ram_gb}GB[/dim]")
+        calibration_max_gb = float(Prompt.ask("Max RAM (GB)", default=str(available_ram_gb)))
+        calibration_min_gb = float(Prompt.ask("Min RAM (GB)", default="0.5"))
+        calibration_max = int(calibration_max_gb * 1024)
+        calibration_min = int(calibration_min_gb * 1024)
+
+        # LANCER LA CALIBRATION MAINTENANT
+        console.print()
+        console.print("[bold yellow]Lancement de la calibration...[/bold yellow]")
+        console.print(f"[dim]Niveaux: {calibration_max}MB → {calibration_min}MB[/dim]")
+        console.print()
+
+        # Run calibration for all paradigms
+        if not run_calibration(source, PARADIGMS, calibration_max, calibration_min):
+            console.print("[red]Calibration échouée.[/red]")
+            wait()
+            return
+
+        # Reload calibration status
+        calibration_exists = True
+        force_calibration = False  # Already done
+        console.print("[green]Calibration terminée et sauvegardée![/green]")
+        wait()
 
     # 2. Select type
     console.print("\n[bold]2. Type[/bold]")
@@ -531,6 +822,16 @@ def run_benchmark_wizard(datasets: list[Path]):
 
     # Summary
     queries_display = "ALL (46)" if not queries_arg else f"{len(queries_arg.split(','))} queries"
+    if force_calibration:
+        max_gb = calibration_max / 1024
+        min_gb = calibration_min / 1024
+        max_str = f"{int(max_gb)}GB" if max_gb == int(max_gb) else f"{max_gb}GB"
+        min_str = f"{int(min_gb)}GB" if min_gb == int(min_gb) else f"{min_gb}GB"
+        calib_display = f"à faire [{max_str} → {min_str}]"
+    elif calibration_exists:
+        calib_display = "cache utilisé"
+    else:
+        calib_display = "?"
     console.print()
     console.print(Panel.fit(
         f"[bold]Configuration[/bold]\n\n"
@@ -541,7 +842,8 @@ def run_benchmark_wizard(datasets: list[Path]):
         f"Paradigms: {paradigms}\n"
         f"Queries:   {queries_display}\n"
         f"RAM:       {ram} GB\n"
-        f"Runs:      {n_runs}",
+        f"Runs:      {n_runs}\n"
+        f"Calibration: {calib_display}",
         border_style="blue"
     ))
 
@@ -576,6 +878,13 @@ def run_benchmark_wizard(datasets: list[Path]):
             cmd_args = ["benchmark", "-s", str(source), "-e", str(tmp_export_path), "-o", str(output),
                 "-p", paradigms, "--ram", ram, "--runs", str(n_runs), "--variants", "1", "--cleanup",
                 "--archive", str(ARCHIVE_DIR)]
+            if force_calibration:
+                cmd_args.append("--force-calibration")
+            if skip_calibration:
+                cmd_args.append("--skip-calibration")
+            if calibration_max and calibration_min:
+                cmd_args.extend(["--calibration-max", str(calibration_max)])
+                cmd_args.extend(["--calibration-min", str(calibration_min)])
             if queries_arg:
                 cmd_args.extend(["-q", queries_arg])
             btb(*cmd_args)

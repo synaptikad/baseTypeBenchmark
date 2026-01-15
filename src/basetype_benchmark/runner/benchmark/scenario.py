@@ -34,6 +34,13 @@ from ..config import (
 from ..loaders import get_loader
 from ..loaders.progress import LoadProgressDisplay, ExportProgressDisplay
 from ..ram import IsolationManager, RAMGradientExecutor, GradientResult
+from ...dataset.calibration import (
+    load_calibration,
+    save_calibration,
+    get_or_create_calibration,
+    needs_calibration,
+    RAMCalibration,
+)
 from .results import (
     BenchmarkResults,
     BenchmarkConfig,
@@ -58,6 +65,11 @@ class ScenarioConfig:
     n_runs: int = 10
     n_variants: int = 3
     timeout_seconds: float = 300.0
+    # RAM calibration options (2-phase protocol)
+    force_calibration: bool = False  # Re-run calibration even if cached
+    skip_calibration: bool = False  # Skip calibration entirely (use full ram_levels_mb)
+    calibration_max_mb: int = 16384  # Calibration max RAM in MB
+    calibration_min_mb: int = 512    # Calibration min RAM in MB
 
     def to_benchmark_config(self, actual_queries: list[str] | None = None) -> BenchmarkConfig:
         """Convert to BenchmarkConfig for results.
@@ -573,13 +585,17 @@ class BenchmarkOrchestrator:
         source_dir: Path | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> GradientResult:
-        """Run RAM gradient for a paradigm.
+        """Run RAM gradient for a paradigm with 2-phase calibration protocol.
+
+        Protocol (from PLAN.md):
+        1. Phase 1 (Calibration): Find minimum viable RAM by descending
+        2. Phase 2 (Gradient): Run performance gradient from minimum to plateau
 
         Args:
             paradigm: Paradigm ID
             queries: Query IDs
             scenario: Scenario config
-            source_dir: Source data directory (for queries_params.yaml)
+            source_dir: Source data directory (for queries_params.yaml and calibration cache)
             on_progress: Progress callback
 
         Returns:
@@ -604,11 +620,117 @@ class BenchmarkOrchestrator:
             if on_progress:
                 on_progress(paradigm, msg, current / total)
 
+        # Determine RAM levels to use
+        ram_levels_mb = scenario.ram_levels_mb
+
+        # Phase 1: RAM Calibration (unless skipped)
+        if not scenario.skip_calibration and source_dir:
+            minimum_viable_mb = self._get_or_calibrate_minimum_viable(
+                executor=executor,
+                paradigm=paradigm,
+                source_dir=source_dir,
+                force=scenario.force_calibration,
+                max_mb=scenario.calibration_max_mb,
+                min_mb=scenario.calibration_min_mb,
+            )
+
+            if minimum_viable_mb:
+                # Phase 2: Build ascending gradient from minimum viable to plateau
+                # Filter ram_levels to start from minimum viable (ascending order)
+                ram_levels_mb = [
+                    level for level in sorted(scenario.ram_levels_mb)
+                    if level >= minimum_viable_mb
+                ]
+                if not ram_levels_mb:
+                    # All levels below minimum viable - use only minimum
+                    ram_levels_mb = [minimum_viable_mb]
+
+                console.print(
+                    f"    [dim]Gradient from {ram_levels_mb[0]}MB to {ram_levels_mb[-1]}MB "
+                    f"(calibrated minimum: {minimum_viable_mb}MB)[/dim]"
+                )
+
         return executor.run_gradient(
             queries=queries,
-            levels_mb=scenario.ram_levels_mb,
+            levels_mb=ram_levels_mb,
             on_progress=progress_wrapper,
         )
+
+    def _get_or_calibrate_minimum_viable(
+        self,
+        executor: RAMGradientExecutor,
+        paradigm: str,
+        source_dir: Path,
+        force: bool = False,
+        max_mb: int = 16384,
+        min_mb: int = 512,
+    ) -> int | None:
+        """Get cached or run new RAM calibration for a paradigm.
+
+        Args:
+            executor: RAMGradientExecutor instance
+            paradigm: Paradigm ID
+            source_dir: Dataset directory (for calibration cache)
+            force: Force re-calibration even if cached
+            max_mb: Max RAM for calibration in MB
+            min_mb: Min RAM for calibration in MB
+
+        Returns:
+            Minimum viable RAM in MB, or None if calibration skipped/failed
+        """
+        from ..ram.gradient import generate_calibration_levels
+
+        paradigm = paradigm.upper()
+
+        # Check if calibration is needed
+        paradigms_needing_calibration = needs_calibration(
+            source_dir, [paradigm], force=force
+        )
+
+        if not paradigms_needing_calibration:
+            # Use cached value
+            calibration = load_calibration(source_dir)
+            if calibration:
+                minimum_mb = calibration.get_minimum_viable(paradigm)
+                if minimum_mb:
+                    console.print(
+                        f"    [dim]Using cached calibration: {minimum_mb}MB minimum viable[/dim]"
+                    )
+                    return minimum_mb
+
+        # Generate calibration levels from max to min
+        levels_tested = generate_calibration_levels(max_mb, min_mb)
+
+        # Run calibration
+        console.print(f"    [bold]Running RAM calibration for {paradigm} ({max_mb}MB → {min_mb}MB)...[/bold]")
+        try:
+            minimum_viable_mb = executor.calibrate_minimum_viable(
+                levels_mb=levels_tested,
+                test_query="Q1",
+            )
+
+            # Determine crash level (first level below minimum viable in tested levels)
+            crash_level_mb = None
+            for i, level in enumerate(levels_tested):
+                if level < minimum_viable_mb:
+                    crash_level_mb = level
+                    break
+
+            # Save to cache
+            calibration = get_or_create_calibration(source_dir)
+            calibration.set_calibration(
+                paradigm=paradigm,
+                minimum_viable_mb=minimum_viable_mb,
+                levels_tested=levels_tested,
+                crash_level_mb=crash_level_mb,
+            )
+            save_calibration(source_dir, calibration)
+
+            return minimum_viable_mb
+
+        except Exception as e:
+            console.print(f"    [yellow]Calibration failed: {e}[/yellow]")
+            return None
 
     def _get_config(self, paradigm: str):
         """Get primary config for paradigm."""

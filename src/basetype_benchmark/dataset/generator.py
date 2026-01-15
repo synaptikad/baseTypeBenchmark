@@ -2084,31 +2084,94 @@ class DatasetGenerator:
         # =====================================================================
         # TENANT WRITE QUERY PARAMETERS (QW9-QW12)
         # =====================================================================
+        # Execution order: QW9 → Q39 → QW10 → Q40 → QW11 → QW12 → Q41
+        # CRITICAL: QW10 deletes ALL relations for tenant_id
+        # Therefore QW11/QW12 MUST use DIFFERENT tenants than QW10!
+        #
+        # Strategy with 3+ tenants:
+        #   - tenant_id (tenant_1): used by QW9/QW10 - will be emptied by QW10
+        #   - old_tenant_id (tenant_2): used by QW11 - has spaces to reassign
+        #   - source_tenant_id (tenant_3): used by QW12 - has relations to merge
+        #   - new_tenant_id/target_tenant_id: receives the transfers
+        # =====================================================================
 
         # Get all tenants for QW9-QW12
         tenant_ids = [n.id for n in self.nodes if n.type == "Tenant"]
-        if len(tenant_ids) >= 2:
-            # Use first two different tenants
-            params["tenant_id_alt"] = tenant_ids[1]  # Second tenant for QW11/QW12
-            params["old_tenant_id"] = tenant_ids[0]
-            params["new_tenant_id"] = tenant_ids[1]
-            params["source_tenant_id"] = tenant_ids[0]
-            params["target_tenant_id"] = tenant_ids[1]
+
+        if len(tenant_ids) >= 3:
+            # Best case: 3+ tenants - use different tenants for each operation
+            # tenant_id (from earlier) is used for QW9/QW10
+            # Use tenant_2 for QW11 (old_tenant), tenant_3 for QW12 (source_tenant)
+            params["old_tenant_id"] = tenant_ids[1]      # QW11: reassign FROM this tenant
+            params["new_tenant_id"] = tenant_ids[2]      # QW11: reassign TO this tenant
+            params["source_tenant_id"] = tenant_ids[1]   # QW12: merge FROM this tenant
+            params["target_tenant_id"] = tenant_ids[2]   # QW12: merge TO this tenant
+            params["tenant_id_alt"] = tenant_ids[1]
+        elif len(tenant_ids) >= 2:
+            # Fallback: 2 tenants - share, but QW11/QW12 use different tenant than QW10
+            # tenant_id is tenant with METERS_TENANT (found earlier)
+            # Use the OTHER tenant for QW11/QW12
+            other_tenant = tenant_ids[1] if params.get("tenant_id") == tenant_ids[0] else tenant_ids[0]
+            params["old_tenant_id"] = other_tenant       # QW11: reassign FROM this tenant
+            params["new_tenant_id"] = params.get("tenant_id", tenant_ids[0])  # QW11: TO
+            params["source_tenant_id"] = other_tenant    # QW12: merge FROM this tenant
+            params["target_tenant_id"] = params.get("tenant_id", tenant_ids[0])  # QW12: TO
+            params["tenant_id_alt"] = other_tenant
         elif len(tenant_ids) == 1:
-            # Fallback: use same tenant (will still test syntax)
+            # Worst case: 1 tenant - all queries use same tenant (syntax test only)
             params["tenant_id_alt"] = tenant_ids[0]
             params["old_tenant_id"] = tenant_ids[0]
             params["new_tenant_id"] = tenant_ids[0]
             params["source_tenant_id"] = tenant_ids[0]
             params["target_tenant_id"] = tenant_ids[0]
 
-        # Space for tenant operations (QW9, QW10, QW11)
-        # Find a space occupied by the first tenant
-        if params.get("tenant_id"):
+        # Space for QW11 - find a space occupied by old_tenant_id
+        # QW11 needs: space_id, old_tenant_id, new_tenant_id
+        if params.get("old_tenant_id"):
             for edge in self.edges:
-                if edge.rel_type == "OCCUPIES" and edge.source_id == params["tenant_id"]:
+                if edge.rel_type == "OCCUPIES" and edge.source_id == params["old_tenant_id"]:
                     params["qw_space_id"] = edge.target_id
+                    params["space_id"] = edge.target_id  # Alias for QW11
                     break
+
+        # QW9: Tenant Move-In - space_ids and meter_ids to assign
+        # Find spaces NOT currently occupied by tenant_id (to add via QW9)
+        if params.get("tenant_id"):
+            tenant_id = params["tenant_id"]
+
+            # Get currently occupied spaces by this tenant
+            current_spaces = set()
+            for edge in self.edges:
+                if edge.rel_type == "OCCUPIES" and edge.source_id == tenant_id:
+                    current_spaces.add(edge.target_id)
+
+            # Find available spaces (not occupied by this tenant)
+            all_spaces = [n.id for n in self.nodes if n.type == "Space"]
+            available_spaces = [s for s in all_spaces if s not in current_spaces]
+
+            # Select 2 new spaces to assign via QW9
+            if len(available_spaces) >= 2:
+                params["space_ids"] = self.rng.sample(available_spaces, 2)
+            elif available_spaces:
+                params["space_ids"] = available_spaces[:1]
+            else:
+                params["space_ids"] = []
+
+            # Get currently associated meters
+            current_meters = set()
+            for edge in self.edges:
+                if edge.rel_type == "METERS_TENANT" and edge.target_id == tenant_id:
+                    current_meters.add(edge.source_id)
+
+            # Find available meters (SubMeters not associated with this tenant)
+            all_meters = [n.id for n in self.nodes if n.type == "Equipment" and "submeter" in n.id.lower()]
+            available_meters = [m for m in all_meters if m not in current_meters]
+
+            # Select 1 new meter to assign via QW9
+            if available_meters:
+                params["meter_ids"] = [self.rng.choice(available_meters)]
+            else:
+                params["meter_ids"] = []
 
         return params
 

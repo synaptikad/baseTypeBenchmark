@@ -44,6 +44,27 @@ class GradientError(Exception):
     pass
 
 
+def generate_calibration_levels(max_mb: int, min_mb: int) -> list[int]:
+    """Generate descending RAM levels for calibration.
+
+    Uses power-of-2 levels between max and min (inclusive).
+    E.g., max=16384, min=512 → [16384, 8192, 4096, 2048, 1024, 512]
+
+    Args:
+        max_mb: Maximum RAM in MB (start)
+        min_mb: Minimum RAM in MB (end)
+
+    Returns:
+        List of RAM levels in MB, descending order
+    """
+    levels = []
+    level = max_mb
+    while level >= min_mb:
+        levels.append(level)
+        level //= 2
+    return levels
+
+
 @dataclass
 class QueryRunResult:
     """Result of a single query run."""
@@ -302,6 +323,10 @@ class RAMGradientExecutor:
     # Default RAM levels (MB) - descending to detect OOM early
     DEFAULT_LEVELS_MB = [131072, 65536, 32768, 16384, 8192]  # 128, 64, 32, 16, 8 GB
 
+    # Default calibration range (MB) - user can override with min/max
+    DEFAULT_CALIBRATION_MAX_MB = 16384  # 16GB
+    DEFAULT_CALIBRATION_MIN_MB = 512    # 512MB
+
     # Execution parameters
     DEFAULT_WARMUP_RUNS = 0  # Warmup disabled by default (middleware benchmark)
     DEFAULT_TIMED_RUNS = 10
@@ -354,6 +379,160 @@ class RAMGradientExecutor:
         """Set the data directory path for loading queries_params.yaml."""
         self._data_path = Path(data_path)
 
+    def calibrate_minimum_viable(
+        self,
+        levels_mb: list[int] | None = None,
+        test_query: str = "Q1",
+        on_progress: ProgressCallback | None = None,
+    ) -> int:
+        """Find minimum viable RAM by descending until OOM.
+
+        This implements Protocol 1 from PLAN.md: descending calibration
+        to find the smallest RAM level where the paradigm can function.
+
+        For PostgreSQL (P1/P2): requires container restart at each level
+        because shared_buffers is configured at startup.
+
+        For Memgraph (M1): can use docker update --memory at runtime
+        because it's fully in-memory and adapts dynamically.
+
+        Args:
+            levels_mb: RAM levels in MB (descending: high → low). If None, uses
+                       default range from DEFAULT_CALIBRATION_MAX_MB to DEFAULT_CALIBRATION_MIN_MB
+            test_query: Simple query to test viability (default: Q1)
+            on_progress: Optional progress callback
+
+        Returns:
+            RAM level in MB that is the minimum viable
+        """
+        if levels_mb is None:
+            levels_mb = generate_calibration_levels(
+                self.DEFAULT_CALIBRATION_MAX_MB,
+                self.DEFAULT_CALIBRATION_MIN_MB
+            )
+        last_working = levels_mb[0]  # Start with highest level
+
+        # PostgreSQL needs container restart for RAM changes (shared_buffers)
+        # Memgraph (M1 only) can use docker update at runtime
+        # M2 is hybrid (Memgraph + TimescaleDB) so needs restart for TS part
+        needs_restart = self.paradigm in ("P1", "P2", "M2", "O2")
+
+        # Ensure containers are running
+        if not self.isolation.is_paradigm_running(self.paradigm):
+            self.isolation.start_paradigm(self.paradigm)
+
+        # Initialize param sampler (needed for test query)
+        if not hasattr(self, "_sampled_params"):
+            self._init_param_sampler()
+
+        if self.verbose:
+            self._console.print(
+                f"\n[bold]Calibrating minimum viable RAM for {self.paradigm}...[/bold]"
+            )
+            if needs_restart:
+                self._console.print(
+                    f"  [dim](PostgreSQL: restart container at each level)[/dim]"
+                )
+
+        for i, limit_mb in enumerate(levels_mb):
+            if on_progress:
+                on_progress(f"Calibrate {limit_mb}MB", i + 1, len(levels_mb))
+
+            if self.verbose:
+                self._console.print(f"  Testing {limit_mb}MB... ", end="")
+
+            try:
+                if needs_restart:
+                    # PostgreSQL: restart container with new memory limit
+                    self._restart_with_memory_limit(limit_mb)
+                else:
+                    # Memgraph: apply limit at runtime (faster)
+                    self.isolation.set_memory_limit(self.paradigm, limit_mb)
+
+                # Drop caches for clean state
+                self.isolation.drop_caches()
+
+                # Run simple test query
+                runner = self._get_runner()
+                query_files = self._load_query_files(test_query)
+                params = self._get_variant_params(test_query, 0)
+
+                result = runner.execute(
+                    query_files.get("query", ""),
+                    params,
+                    float(self.timeout),
+                )
+
+                if result.status == RunStatus.SUCCESS:
+                    last_working = limit_mb
+                    if self.verbose:
+                        self._console.print("[green]OK[/green]")
+                elif result.status == RunStatus.OOM:
+                    if self.verbose:
+                        self._console.print("[red]OOM[/red]")
+                    # Check if we need to restart
+                    if self._detect_oom_and_restart():
+                        if self.verbose:
+                            self._console.print("    [yellow]Container restarted[/yellow]")
+                    break
+                else:
+                    if self.verbose:
+                        self._console.print(f"[yellow]FAILED: {result.error_message}[/yellow]")
+                    break
+
+            except Exception as e:
+                if self.verbose:
+                    self._console.print(f"[red]CRASH: {e}[/red]")
+                # Container likely crashed (OOM kill)
+                if self._detect_oom_and_restart():
+                    if self.verbose:
+                        self._console.print("    [yellow]Container restarted[/yellow]")
+                break
+
+        if self.verbose:
+            self._console.print(
+                f"[bold green]Minimum viable RAM: {last_working}MB[/bold green]\n"
+            )
+
+        return last_working
+
+    def _restart_with_memory_limit(self, limit_mb: int) -> None:
+        """Restart container with a specific memory limit.
+
+        Used for PostgreSQL calibration where shared_buffers is set at startup.
+
+        Args:
+            limit_mb: Memory limit in MB
+        """
+        import time
+
+        # Stop container
+        self.isolation.stop_paradigm(self.paradigm)
+        time.sleep(2)  # Wait for clean shutdown
+
+        # Set memory limit before starting
+        # This uses docker update on the stopped container
+        self.isolation.set_memory_limit(self.paradigm, limit_mb)
+
+        # Start container with new limit
+        self.isolation.start_paradigm(self.paradigm, clean_volumes=False)
+
+        # Wait for healthy
+        time.sleep(3)  # Give PostgreSQL time to initialize
+
+    def _detect_oom_and_restart(self) -> bool:
+        """Check if container crashed and restart if needed.
+
+        Returns:
+            True if container was restarted
+        """
+        if not self.isolation.is_paradigm_running(self.paradigm):
+            # Container crashed (likely OOM kill)
+            logger.warning(f"Container for {self.paradigm} crashed, restarting...")
+            self.isolation.start_paradigm(self.paradigm, clean_volumes=False)
+            return True
+        return False
+
     def run_gradient(
         self,
         queries: list[str],
@@ -397,15 +576,6 @@ class RAMGradientExecutor:
         for i, limit_mb in enumerate(levels_mb):
             if on_progress:
                 on_progress(f"RAM {limit_mb}MB", i + 1, len(levels_mb))
-
-            # Skip if limit is below baseline (guaranteed OOM)
-            if limit_mb < result.baseline_peak_mb * 0.8:
-                result.levels.append(GradientLevel(
-                    limit_mb=limit_mb,
-                    status="oom",
-                    error_message="Skipped: limit below baseline",
-                ))
-                continue
 
             level_result = self._run_level(limit_mb, queries)
             result.levels.append(level_result)
@@ -452,9 +622,17 @@ class RAMGradientExecutor:
         """
         start_time = time.perf_counter()
 
+        # PostgreSQL needs restart to reconfigure shared_buffers with new RAM limit
+        # This is important for gradient (ascending) to properly measure RAM impact
+        needs_restart = self.paradigm in ("P1", "P2", "M2", "O2")
+
         try:
-            # Apply memory limit
-            self.isolation.set_memory_limit(self.paradigm, limit_mb)
+            if needs_restart:
+                # Restart container with new memory limit so PostgreSQL reconfigures
+                self._restart_with_memory_limit(limit_mb)
+            else:
+                # Memgraph: apply limit at runtime (faster, adapts dynamically)
+                self.isolation.set_memory_limit(self.paradigm, limit_mb)
 
             # Drop caches for clean state
             self.isolation.drop_caches()

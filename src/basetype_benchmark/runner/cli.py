@@ -548,13 +548,36 @@ def benchmark(
         Optional[Path],
         typer.Option("--archive", "-a", help="Archive raw results to directory for replay")
     ] = None,
+    force_calibration: Annotated[
+        bool,
+        typer.Option("--force-calibration", help="Re-run RAM calibration even if cached")
+    ] = False,
+    skip_calibration: Annotated[
+        bool,
+        typer.Option("--skip-calibration", help="Skip RAM calibration (use full ram_levels_mb)")
+    ] = False,
+    calibration_max: Annotated[
+        int,
+        typer.Option("--calibration-max", help="Calibration max RAM in MB (default: 16384)")
+    ] = 16384,
+    calibration_min: Annotated[
+        int,
+        typer.Option("--calibration-min", help="Calibration min RAM in MB (default: 512)")
+    ] = 512,
+    calibration_only: Annotated[
+        bool,
+        typer.Option("--calibration-only", help="Only run calibration, skip benchmark")
+    ] = False,
 ) -> None:
     """Execute full benchmark with RAM gradient and disk optimization.
 
-    The benchmark exports, loads, and benchmarks each paradigm sequentially,
-    optionally cleaning up exports after each paradigm to save disk space.
+    The benchmark uses a 2-phase protocol:
+    1. RAM Calibration: Find minimum viable RAM (descending from high to low)
+    2. RAM Gradient: Test performance from minimum viable to plateau (ascending)
 
-    With --archive, saves raw query results for later validation replay.
+    Calibration results are cached per dataset in ram_calibration.json.
+    Use --force-calibration to re-run even if cached.
+    Use --skip-calibration to bypass calibration and use full RAM levels.
 
     Examples:
         btb-runner benchmark -s data/generated/small-1w -o results.json
@@ -563,6 +586,7 @@ def benchmark(
         btb-runner benchmark -s data/generated/small-1w -p P1,M1 --ram "32,16,8"
         btb-runner benchmark -s data/generated/small-1w --no-cleanup  # Keep exports
         btb-runner benchmark -s data/generated/small-1w --archive data/results/runs  # Save raw results
+        btb-runner benchmark -s data/generated/small-1w --force-calibration  # Re-calibrate RAM
     """
     from .benchmark import BenchmarkOrchestrator, ScenarioConfig
     from .scenarios import get_scenario, load_scenario_from_yaml
@@ -646,9 +670,96 @@ def benchmark(
         ram_levels_mb=ram_levels_mb,
         n_runs=runs,
         n_variants=variants,
+        force_calibration=force_calibration,
+        skip_calibration=skip_calibration,
+        calibration_max_mb=calibration_max,
+        calibration_min_mb=calibration_min,
     )
 
     disk_mode = "optimisé (cleanup)" if cleanup else "persistant"
+    calib_mode = "forcé" if force_calibration else ("désactivé" if skip_calibration else "auto (cache)")
+    if not skip_calibration:
+        calib_mode += f" [{calibration_max}MB → {calibration_min}MB]"
+
+    if calibration_only:
+        # Calibration only mode - run calibration for each paradigm then exit
+        console.print(Panel.fit(
+            f"[bold blue]Calibration Only Mode[/bold blue]\n\n"
+            f"Source: {source_dir}\n"
+            f"Paradigms: {', '.join(paradigm_list)}\n"
+            f"Calibration: {calibration_max}MB → {calibration_min}MB",
+            border_style="blue"
+        ))
+
+        from .benchmark import BenchmarkOrchestrator
+        from .ram import IsolationManager, RAMGradientExecutor
+        from .ram.gradient import generate_calibration_levels
+        from ..dataset.calibration import get_or_create_calibration, save_calibration
+
+        try:
+            orchestrator = BenchmarkOrchestrator(configs=configs)
+
+            for paradigm in paradigm_list:
+                console.print(f"\n[cyan]===== Calibration {paradigm} =====[/cyan]")
+
+                # Export data for this paradigm
+                console.print(f"  [dim]Exporting {paradigm}...[/dim]")
+                paradigm_export_dir = orchestrator._export_paradigm(paradigm, source_dir, export_dir)
+
+                # Start containers
+                console.print(f"  [dim]Starting containers...[/dim]")
+                orchestrator.isolation.start_paradigm(paradigm)
+
+                # Load data
+                console.print(f"  [dim]Loading data...[/dim]")
+                orchestrator._load_data(paradigm, paradigm_export_dir)
+
+                # Run calibration only
+                executor = RAMGradientExecutor(
+                    paradigm=paradigm,
+                    isolation=orchestrator.isolation,
+                    configs=configs,
+                    n_warmup=0,
+                    n_runs=1,
+                    n_variants=1,
+                )
+                executor.set_data_path(source_dir)
+
+                levels_mb = generate_calibration_levels(calibration_max, calibration_min)
+                minimum_viable = executor.calibrate_minimum_viable(levels_mb=levels_mb)
+
+                # Save to cache
+                calibration = get_or_create_calibration(source_dir)
+                crash_level = None
+                for i, level in enumerate(levels_mb):
+                    if level < minimum_viable:
+                        crash_level = level
+                        break
+                calibration.set_calibration(
+                    paradigm=paradigm,
+                    minimum_viable_mb=minimum_viable,
+                    levels_tested=levels_mb,
+                    crash_level_mb=crash_level,
+                )
+                save_calibration(source_dir, calibration)
+
+                console.print(f"  [green]{paradigm}: minimum viable = {minimum_viable}MB[/green]")
+
+                # Stop containers
+                orchestrator.isolation.stop_paradigm(paradigm)
+
+                # Cleanup exports
+                if cleanup and paradigm_export_dir.exists():
+                    import shutil
+                    shutil.rmtree(paradigm_export_dir)
+
+            console.print(f"\n[green]Calibration complete! Results saved to {source_dir}/ram_calibration.json[/green]")
+            return
+
+        except Exception as e:
+            console.print(f"[red]Calibration failed: {e}[/red]")
+            raise typer.Exit(1)
+
     console.print(Panel.fit(
         f"[bold blue]Benchmark Configuration[/bold blue]\n\n"
         f"Source: {source_dir}\n"
@@ -656,6 +767,7 @@ def benchmark(
         f"Queries: {len(query_list) if query_list else 'all'}\n"
         f"RAM levels: {', '.join(f'{r}GB' for r in [r//1024 for r in ram_levels_mb])}\n"
         f"Runs: {runs}, Variants: {variants}\n"
+        f"Calibration: {calib_mode}\n"
         f"Disk mode: {disk_mode}\n"
         f"Output: {output}",
         border_style="blue"
@@ -1540,7 +1652,7 @@ def validate_cmd(
                 for base in [Path("data/generated"), Path(__file__).parent.parent.parent.parent / "data" / "generated"]:
                     expected_dir = base / results.config.data_profile / "expected_answers"
                     if expected_dir.exists():
-                        from ...validation import ExpectedAnswerStore
+                        from ..validation import ExpectedAnswerStore
                         expected_store = ExpectedAnswerStore(base / results.config.data_profile)
                         expected_store.load()
                         console.print(f"[dim]Expected Answers loaded: {len(expected_store)} queries[/dim]")

@@ -2247,28 +2247,37 @@ class ExpectedAnswerGenerator:
     # =========================================================================
 
     def _gen_q39(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q39: Verify Tenant Spaces - validates QW9/QW10/QW11 writes.
+        """Q39: Verify Tenant Spaces - validates QW9 (Move-In).
 
         Lists all spaces occupied by a tenant via OCCUPIES relationship.
+        AFTER QW9 executes, the tenant will have:
+        - Initial spaces (from dataset)
+        - Plus space_ids (added by QW9)
         """
         tenant_id = params.get("tenant_id")
         if not tenant_id:
             return None
 
-        # Find all spaces this tenant occupies
+        # Find all spaces this tenant currently occupies (initial state)
         occupied_spaces = set()
-        full_rows = []
-
         for edge in self.edges_by_source.get(tenant_id, []):
             if edge.rel_type == "OCCUPIES":
-                space_id = edge.target_id
-                occupied_spaces.add(space_id)
-                space = self.nodes_by_id.get(space_id)
-                full_rows.append({
-                    "space_id": space_id,
-                    "space_name": space.name if space else "",
-                    "space_type": space.type if space else "",
-                })
+                occupied_spaces.add(edge.target_id)
+
+        # Add spaces that will be assigned by QW9 (Move-In)
+        space_ids = params.get("space_ids", [])
+        for space_id in space_ids:
+            occupied_spaces.add(space_id)
+
+        # Build full_rows
+        full_rows = []
+        for space_id in occupied_spaces:
+            space = self.nodes_by_id.get(space_id)
+            full_rows.append({
+                "space_id": space_id,
+                "space_name": space.name if space else "",
+                "space_type": space.type if space else "",
+            })
 
         full_rows.sort(key=lambda x: x["space_id"])
 
@@ -2283,38 +2292,30 @@ class ExpectedAnswerGenerator:
         )
 
     def _gen_q40(self, params: dict[str, Any]) -> ExpectedAnswer:
-        """Q40: Verify Tenant Meters - validates QW9 meter association.
+        """Q40: Verify Tenant Meters - validates QW10 (Move-Out).
 
         Lists all meters associated with a tenant via METERS_TENANT relationship.
+        AFTER QW10 executes (Move-Out), ALL meters are dissociated from tenant.
+
+        Q40 validates that QW10 successfully removed all meter associations.
+        Expected result: 0 meters (empty set).
         Note: METERS_TENANT goes (meter)-[:METERS_TENANT]->(tenant)
         """
         tenant_id = params.get("tenant_id")
         if not tenant_id:
             return None
 
-        # Find all meters pointing to this tenant
+        # After QW10 (Move-Out), tenant should have NO meters
+        # QW10 dissociates ALL meters from the tenant
         associated_meters = set()
         full_rows = []
-
-        for edge in self.edges_by_target.get(tenant_id, []):
-            if edge.rel_type == "METERS_TENANT":
-                meter_id = edge.source_id
-                associated_meters.add(meter_id)
-                meter = self.nodes_by_id.get(meter_id)
-                full_rows.append({
-                    "meter_id": meter_id,
-                    "meter_name": meter.name if meter else "",
-                    "meter_type": meter.type if meter else "",
-                })
-
-        full_rows.sort(key=lambda x: x["meter_id"])
 
         return ExpectedAnswer(
             query_id="Q40",
             parameters={"tenant_id": tenant_id},
             answer_type="set",
             semantic_content=associated_meters,
-            row_count=len(associated_meters),
+            row_count=0,
             content_hash=_compute_hash(associated_meters),
             full_rows=full_rows,
         )
