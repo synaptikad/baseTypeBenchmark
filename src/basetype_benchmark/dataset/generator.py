@@ -1851,18 +1851,20 @@ class DatasetGenerator:
                     break
 
         # 3. Space with SERVES relationship (for Q3 - equipment serving a space)
-        # Prioritize SERVES since Q3 specifically queries SERVES relationships
+        # Q3 specifically queries SERVES relationships - MUST find a space with SERVES
+        # Do NOT fall back to spaces without SERVES (would cause 0-row results)
         space_with_serves = None
-        space_with_any = None
         for edge in self.edges:
-            target = self._get_node(edge.target_id)
-            if target and target.type == "Space":
-                if edge.rel_type == "SERVES":
+            if edge.rel_type == "SERVES":
+                target = self._get_node(edge.target_id)
+                if target and target.type == "Space":
                     space_with_serves = edge.target_id
                     break
-                elif space_with_any is None and edge.rel_type in {"MONITORS", "LOCATED_IN"}:
-                    space_with_any = edge.target_id
-        params["space_id"] = space_with_serves or space_with_any
+        if space_with_serves:
+            params["space_id"] = space_with_serves
+        else:
+            # Fallback: should not happen if generator creates SERVES edges
+            print("WARNING: No space with SERVES found - Q3 will return 0 rows")
 
         # 4. Equipment in FEEDS chain (prefer middle of chain)
         # Q22 (Equipment Siblings) needs equipment that has a FEEDS parent

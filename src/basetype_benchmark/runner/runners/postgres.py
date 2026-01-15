@@ -315,14 +315,17 @@ class PostgresRunner(BaseRunner):
             return query, params
 
         # If query uses %(name)s style, serialize dict values to JSON for JSONB params
+        # Also convert keys to lowercase to match SQL placeholder convention
         if "%(" in query:
             serialized_params = {}
             for key, value in params.items():
+                # Convert key to lowercase (SQL uses %(lowercase_name)s)
+                lower_key = key.lower()
                 if isinstance(value, dict):
                     # psycopg3 cannot adapt dict directly - serialize to JSON string
-                    serialized_params[key] = json.dumps(value)
+                    serialized_params[lower_key] = json.dumps(value)
                 else:
-                    serialized_params[key] = value
+                    serialized_params[lower_key] = value
             return query, serialized_params
 
         # If query uses $1, $2 style (PostgreSQL native), convert to psycopg format
